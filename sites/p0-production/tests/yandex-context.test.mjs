@@ -36,7 +36,9 @@ test("verifies the exact Direct advertiser login through the official clients AP
   assert.equal(requests[0].input, "https://api.direct.yandex.com/json/v501/clients");
   assert.equal(requests[0].init.method, "POST");
   assert.equal(requests[0].init.headers["Client-Login"], "owner-account");
-  assert.deepEqual(JSON.parse(requests[0].init.body).params.FieldNames, [
+  const requestParams = JSON.parse(requests[0].init.body).params;
+  assert.equal(Object.hasOwn(requestParams, "SelectionCriteria"), false);
+  assert.deepEqual(requestParams.FieldNames, [
     "Login",
     "ClientId",
     "Archived",

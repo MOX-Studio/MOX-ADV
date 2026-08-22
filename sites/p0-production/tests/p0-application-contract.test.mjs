@@ -3332,9 +3332,9 @@ test("authoritative application owns the agent objective, typed tool schema, per
   const initial = await value.application.agentContract("owner", "ASSESS_ANALYTICS_READINESS");
   assert.equal(initial.schema_version, "p0-agent-application-contract-v1");
   assert.equal(initial.objective.kind, "ASSESS_ANALYTICS_READINESS");
-  assert.deepEqual(initial.policy.allowed_tools, ["p0_read_application", "p0_record_readiness_assessment"]);
-  assert.deepEqual(initial.policy.allowed_permissions, ["P0_APPLICATION_READ", "P0_OBSERVATION_RECORD"]);
-  assert.deepEqual(initial.tools.map((tool) => tool.name), ["p0_read_application", "p0_record_readiness_assessment"]);
+  assert.deepEqual(initial.policy.allowed_tools, ["p0_read_application", "p0_audit_direct_account", "p0_record_readiness_assessment"]);
+  assert.deepEqual(initial.policy.allowed_permissions, ["P0_APPLICATION_READ", "P0_PROVIDER_READ", "P0_OBSERVATION_RECORD"]);
+  assert.deepEqual(initial.tools.map((tool) => tool.name), ["p0_read_application", "p0_audit_direct_account", "p0_record_readiness_assessment"]);
   assert.ok(initial.tools.every((tool) => tool.input_schema.additionalProperties === false));
   assert.equal(initial.authority.application_revision, 0);
   assert.match(initial.authority.authority_digest, /^sha256:[a-f0-9]{64}$/u);

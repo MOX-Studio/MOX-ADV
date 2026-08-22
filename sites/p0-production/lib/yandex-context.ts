@@ -81,7 +81,6 @@ export async function verifyDirectAccountBinding(
       body: JSON.stringify({
         method: "get",
         params: {
-          SelectionCriteria: { Logins: [expectedAccount] },
           FieldNames: ["Login", "ClientId", "Archived", "Currency", "Grants", "AvailableCampaignTypes", "Restrictions"],
         },
       }),

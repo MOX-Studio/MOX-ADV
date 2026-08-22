@@ -37,6 +37,16 @@ import {
   D1P0AgentRunStore,
   ensureP0AgentTables,
 } from "./p0-agent-d1-store.ts";
+import {
+  buildDirectAuditReportDefinitions,
+  DirectAccountAuditor,
+  type DirectAuditBinding,
+  type DirectAuditSummary,
+} from "./direct-audit.ts";
+import {
+  D1DirectAuditStore,
+  ensureP0DirectAuditTables,
+} from "./p0-direct-audit-d1-store.ts";
 import { OpenAIResponsesModelAdapter } from "./openai-responses-model.ts";
 import { researchPublicFirstPartySite } from "./site-research.ts";
 import { cleanText } from "./text.ts";
@@ -52,6 +62,7 @@ import {
   verifyDirectAccountBinding,
   verifyMetrikaCounterBinding,
 } from "./yandex-context.ts";
+import { YandexDirectReadApi } from "./yandex-direct-audit.ts";
 
 type ExecutionRow = {
   execution_id: string;
@@ -301,57 +312,67 @@ async function readCurrencyLimits() {
   return { minimum_weekly_budget_rub: minimumWeeklyBudgetRub(payload.result.Currencies) };
 }
 
-async function readCampaignCatalog() {
-  const runtime = runtimeEnv();
-  const token = runtime.YANDEX_DIRECT_OAUTH_TOKEN;
-  const account = runtime.YANDEX_DIRECT_CLIENT_LOGIN;
-  if (!token || !account) throw new Error("Direct read credentials не настроены в Sites.");
-  const response = await fetch("https://api.direct.yandex.com/json/v501/campaigns", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Client-Login": account,
-      Accept: "application/json",
-      "Accept-Language": "ru",
-      "Content-Type": "application/json; charset=utf-8",
-    },
-    body: JSON.stringify({
-      method: "get",
-      params: {
-        SelectionCriteria: {},
-        FieldNames: ["Id", "Name", "Type", "Status", "State", "StartDate", "EndDate"],
-        Page: { Limit: 1000, Offset: 0 },
-      },
-    }),
-  });
-  if (!response.ok) throw new Error(`Яндекс Директ вернул HTTP ${response.status}.`);
-  const payload = (await response.json()) as {
-    error?: unknown;
-    result?: { Campaigns?: Array<Record<string, unknown>>; LimitedBy?: number };
-  };
-  if (payload.error || !Array.isArray(payload.result?.Campaigns)) {
-    throw new Error("Ответ Яндекс Директа не соответствует read-only контракту.");
-  }
-  if (payload.result.LimitedBy !== undefined) {
-    throw new Error("Direct campaign inventory preflight частичен: API ограничил результат.");
-  }
-  const campaigns = payload.result.Campaigns;
+type VerifiedDirectBinding = Awaited<ReturnType<typeof readDirectBinding>>;
+
+function directAuditBinding(value: VerifiedDirectBinding): DirectAuditBinding {
   return {
-    account,
-    observed_at: now(),
-    total: campaigns.length,
+    expected_account: value.binding.expected_account,
+    api_account: value.binding.api_account,
+    client_id: value.client_id,
+    matched: value.binding.matched,
+    restrictions: value.capability_snapshot.restrictions,
+    observed_at: value.observed_at,
+  };
+}
+
+async function readDirectAudit(ownerKey: string, binding: DirectAuditBinding): Promise<DirectAuditSummary> {
+  const runtime = runtimeEnv();
+  const token = runtime.YANDEX_DIRECT_OAUTH_TOKEN ?? "";
+  const account = runtime.YANDEX_DIRECT_CLIENT_LOGIN ?? "";
+  if (!token || !account) throw new Error("Direct read credentials не настроены в Sites.");
+  if (account !== binding.api_account || !binding.matched) {
+    throw new Error("Direct audit account не совпадает с exact advertiser binding.");
+  }
+  const auditId = `direct-audit:${crypto.randomUUID()}`;
+  return new DirectAccountAuditor({
+    ownerKey,
+    binding,
+    provider: new YandexDirectReadApi({ token, account, fetcher: fetch, now }),
+    store: new D1DirectAuditStore(runtime.DB),
+    now,
+    auditId: () => auditId,
+    maxAgeMs: 5 * 60_000,
+    reportDefinitions: buildDirectAuditReportDefinitions({
+      auditId,
+      dateFrom: isoDateDaysAgo(93),
+      dateTo: isoDateDaysAgo(3),
+    }),
+  }).run();
+}
+
+async function readCompleteCampaignCatalog(binding: VerifiedDirectBinding) {
+  const ownerKey = "p0-context";
+  const store = new D1DirectAuditStore(runtimeEnv().DB);
+  const summary = await readDirectAudit(ownerKey, directAuditBinding(binding));
+  if (!["COMPLETE", "PARTIAL"].includes(summary.status) || summary.methods_not_read.includes("Campaigns.get")) {
+    throw new Error(`Direct campaign audit is ${summary.status}; duplicate preflight cannot continue.`);
+  }
+  const state = await store.loadCurrent(ownerKey, binding.account);
+  if (!state || state.audit_id !== summary.audit_id) {
+    throw new Error("Durable Direct campaign audit checkpoint отсутствует.");
+  }
+  const campaigns: Array<Record<string, unknown>> = [];
+  for (const reference of state.collections.campaigns.artifact_references) {
+    const value = record(await store.getArtifact(reference.artifact_id));
+    for (const item of Array.isArray(value.objects) ? value.objects : []) {
+      if (item && typeof item === "object" && !Array.isArray(item)) campaigns.push(item as Record<string, unknown>);
+    }
+  }
+  return {
+    account: summary.account_binding.api_account,
     names: campaigns
       .filter((item) => item.State !== "ARCHIVED")
       .map((item) => cleanText(String(item.Name ?? ""), 255)),
-    active: campaigns
-      .filter((item) => item.State !== "ARCHIVED")
-      .slice(0, 20)
-      .map((item) => ({
-        campaign_id: String(item.Id ?? ""),
-        name: cleanText(String(item.Name ?? ""), 255),
-        state: String(item.State ?? "UNKNOWN"),
-        status: String(item.Status ?? "UNKNOWN"),
-      })),
   };
 }
 
@@ -544,56 +565,72 @@ async function readMarketEvidence({
   };
 }
 
-async function readContext(): Promise<P0Context> {
-  const [directBindingResult, directResult, limitsResult, metrikaBindingResult, metrikaResult] = await Promise.allSettled([
-    readDirectBinding(),
-    readCampaignCatalog(),
+async function readContext(ownerKey = "p0-context"): Promise<P0Context> {
+  const directBindingPromise = readDirectBinding();
+  const directAuditPromise = directBindingPromise.then((value) => readDirectAudit(ownerKey, directAuditBinding(value)));
+  const [directBindingResult, directAuditResult, limitsResult, metrikaBindingResult, metrikaResult] = await Promise.allSettled([
+    directBindingPromise,
+    directAuditPromise,
     readCurrencyLimits(),
     readMetrikaBinding(),
     readMetrika(),
   ]);
+  const directAuditTerminal = directAuditResult.status === "fulfilled"
+    && ["COMPLETE", "PARTIAL"].includes(directAuditResult.value.status);
+  const campaignInventoryReady = directAuditResult.status === "fulfilled"
+    && !directAuditResult.value.methods_not_read.includes("Campaigns.get");
   const directReady = directBindingResult.status === "fulfilled"
-    && directResult.status === "fulfilled"
+    && directAuditTerminal
     && limitsResult.status === "fulfilled"
-    && directBindingResult.value.account === directResult.value.account;
+    && directBindingResult.value.account === directAuditResult.value.account_binding.api_account;
   const direct = directReady
     ? {
         ready: true,
-        inventory_ready: true,
+        inventory_ready: campaignInventoryReady,
         ...directBindingResult.value,
-        campaigns_total: directResult.value.total,
+        observed_at: directAuditResult.value.observed_at,
+        campaigns_total: directAuditResult.value.object_counts.campaigns,
         minimum_weekly_budget_rub: limitsResult.value.minimum_weekly_budget_rub,
+        audit: directAuditResult.value,
         read_limitations: {
-          inventory_complete: true,
+          inventory_complete: directAuditResult.value.graph_complete,
           limited_by: null,
-          methods_read: ["Campaigns.get"],
-          methods_not_read: ["AdGroups.get", "Keywords.get", "Ads.get", "SEARCH_QUERY_PERFORMANCE_REPORT"],
+          methods_read: directAuditResult.value.methods_read,
+          methods_not_read: directAuditResult.value.methods_not_read,
+          provider_limitations: directAuditResult.value.limitations,
           statistics_provisional_days: 3,
         },
       }
     : {
         ready: false,
-        inventory_ready: directResult.status === "fulfilled",
+        inventory_ready: campaignInventoryReady,
         authority: directBindingResult.status === "fulfilled" ? directBindingResult.value.authority : "UNVERIFIED",
         access: "YANDEX_DIRECT_API_V501",
         ...(directBindingResult.status === "fulfilled" ? directBindingResult.value : {}),
-        ...(directResult.status === "fulfilled" ? {
-          campaigns_total: directResult.value.total,
+        ...(directAuditResult.status === "fulfilled" ? {
+          observed_at: directAuditResult.value.observed_at,
+          campaigns_total: directAuditResult.value.object_counts.campaigns,
+          audit: directAuditResult.value,
           read_limitations: {
-            inventory_complete: true,
+            inventory_complete: directAuditResult.value.graph_complete,
             limited_by: null,
-            methods_read: ["Campaigns.get"],
-            methods_not_read: ["AdGroups.get", "Keywords.get", "Ads.get", "SEARCH_QUERY_PERFORMANCE_REPORT"],
+            methods_read: directAuditResult.value.methods_read,
+            methods_not_read: directAuditResult.value.methods_not_read,
+            provider_limitations: directAuditResult.value.limitations,
             statistics_provisional_days: 3,
           },
         } : {}),
+        ...(limitsResult.status === "fulfilled" ? limitsResult.value : {}),
         blockers: [
           ...(directBindingResult.status === "rejected" ? [errorMessage(directBindingResult.reason)] : []),
-          ...(directResult.status === "rejected" ? [errorMessage(directResult.reason)] : []),
+          ...(directAuditResult.status === "rejected" ? [errorMessage(directAuditResult.reason)] : []),
+          ...(directAuditResult.status === "fulfilled" && !directAuditTerminal
+            ? [`Direct audit ${directAuditResult.value.status}; next retry ${directAuditResult.value.next_retry_at ?? "not scheduled"}.`]
+            : []),
           ...(limitsResult.status === "rejected" ? [errorMessage(limitsResult.reason)] : []),
-          ...(directBindingResult.status === "fulfilled" && directResult.status === "fulfilled"
-            && directBindingResult.value.account !== directResult.value.account
-            ? ["Direct advertiser account binding не совпадает с campaign inventory"]
+          ...(directBindingResult.status === "fulfilled" && directAuditResult.status === "fulfilled"
+            && directBindingResult.value.account !== directAuditResult.value.account_binding.api_account
+            ? ["Direct advertiser account binding не совпадает с durable audit"]
             : []),
         ],
       };
@@ -616,8 +653,11 @@ async function readContext(): Promise<P0Context> {
     direct,
     metrika,
     campaign_catalog:
-      directResult.status === "fulfilled"
-        ? { total: directResult.value.total, active: directResult.value.active }
+      directAuditResult.status === "fulfilled"
+        ? {
+            total: directAuditResult.value.object_counts.campaigns,
+            active: directAuditResult.value.campaign_summaries,
+          }
         : null,
     performance:
       metrikaResult.status === "fulfilled"
@@ -688,6 +728,7 @@ async function ensureTables() {
     "CREATE TABLE IF NOT EXISTS p0_account_locks (account_key TEXT PRIMARY KEY, execution_id TEXT NOT NULL, owner_key TEXT NOT NULL, expires_at TEXT NOT NULL)",
   ).run();
   await ensureP0AgentTables(db);
+  await ensureP0DirectAuditTables(db);
 }
 
 export class D1P0ApplicationStore implements P0ApplicationStore {
@@ -768,9 +809,10 @@ async function createPackageItemOutcome({
   if (!state.strategy || !state.context_state || !state.recommendation_set) {
     throw new Error("Exact package execution lineage отсутствует.");
   }
+  const bindingPromise = readDirectBinding();
   const [binding, catalog, limits] = await Promise.all([
-    readDirectBinding(),
-    readCampaignCatalog(),
+    bindingPromise,
+    bindingPromise.then((value) => readCompleteCampaignCatalog(value)),
     readCurrencyLimits(),
   ]);
   if (binding.account !== config.account || catalog.account !== binding.account) {
@@ -1085,9 +1127,10 @@ async function createExternalOutcome({
 }) {
   const config = directWriteConfig();
   if (!config.token || !config.account) throw new Error("Direct production credentials не настроены.");
+  const bindingPromise = readDirectBinding();
   const [binding, catalog, limits] = await Promise.all([
-    readDirectBinding(),
-    readCampaignCatalog(),
+    bindingPromise,
+    bindingPromise.then((value) => readCompleteCampaignCatalog(value)),
     readCurrencyLimits(),
   ]);
   if (binding.account !== config.account || catalog.account !== binding.account) {
@@ -1136,6 +1179,10 @@ const application = new P0Application({
   adapters: {
     now,
     readContext,
+    async readDirectAudit() {
+      const binding = await readDirectBinding();
+      return readDirectAudit("p0-context", directAuditBinding(binding));
+    },
     researchSite,
     readCurrencyLimits,
     readMarketEvidence,

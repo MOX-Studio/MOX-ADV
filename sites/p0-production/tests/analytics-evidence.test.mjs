@@ -383,6 +383,67 @@ test("attaches exact Direct read scope and treats unavailable current inventory 
   assert.ok(unavailable.gaps.some((item) => item.code === "CURRENT_DIRECT_INVENTORY_UNAVAILABLE" && item.material));
 });
 
+test("links the complete exact-account Direct graph and reports audit through bounded artifact references", async () => {
+  const input = fixture();
+  input.context.direct.read_limitations = {
+    inventory_complete: true,
+    limited_by: null,
+    methods_read: [
+      "Campaigns.get", "AdGroups.get", "AudienceTargets.get", "Keywords.get", "Ads.get",
+      "Sitelinks.get", "AdImages.get", "Creatives.get", "AdExtensions.get",
+      "Reports.CAMPAIGN_PERFORMANCE_REPORT", "Reports.SEARCH_QUERY_PERFORMANCE_REPORT",
+    ],
+    methods_not_read: [],
+    provider_limitations: [],
+    statistics_provisional_days: 3,
+  };
+  input.context.direct.audit = {
+    schema_version: "direct-read-audit-summary-v1",
+    audit_id: "direct-audit-evidence",
+    status: "COMPLETE",
+    graph_complete: true,
+    observed_at: "2026-08-21T10:02:00.000Z",
+    completed_at: "2026-08-21T10:02:30.000Z",
+    account_binding: { expected_account: "owner-login", api_account: "owner-login", client_id: "9007199254740993", matched: true },
+    provider_restrictions: [{ element: "CAMPAIGNS_TOTAL_PER_CLIENT", value: 3000 }],
+    object_counts: { campaigns: 7, adgroups: 12, audiencetargets: 2, keywords: 43, ads: 18, sitelinks: 3, adimages: 7, vcards: 0, creatives: 2, adextensions: 4, autotargetings: 5 },
+    campaign_summaries: input.context.campaign_catalog.active,
+    report_summaries: [
+      { report_key: "campaign-performance", report_type: "CAMPAIGN_PERFORMANCE_REPORT", status: "COMPLETE", next_retry_at: null, artifact_reference: null },
+      { report_key: "search-query-performance", report_type: "SEARCH_QUERY_PERFORMANCE_REPORT", status: "COMPLETE", next_retry_at: null, artifact_reference: null },
+    ],
+    methods_read: input.context.direct.read_limitations.methods_read,
+    methods_not_read: [],
+    limitations: [],
+    next_retry_at: null,
+    artifact_references: [{
+      artifact_id: "direct-audit-evidence:campaigns:0",
+      audit_id: "direct-audit-evidence",
+      kind: "DIRECT_CAMPAIGNS_PAGE",
+      digest: `sha256:${"a".repeat(64)}`,
+      byte_length: 2048,
+      object_count: 7,
+      observed_at: "2026-08-21T10:02:00.000Z",
+    }],
+    browser_cabinet_used: false,
+    provider_write_methods_reachable: false,
+  };
+
+  const result = await buildAnalyticsEvidence(input);
+  const directSource = result.sources.find((item) => item.source_id === "direct");
+  const directClaim = result.claims.find((item) => item.predicate === "complete_account_audit");
+  const directRecord = result.evidence.find((item) => item.source_kind === "direct_management_api");
+
+  assert.equal(directSource?.status, "VERIFIED");
+  assert.ok(directSource?.facts.some((item) => item.includes("12 groups")));
+  assert.equal(directClaim?.confidence.coverage, "complete_for_scope");
+  assert.equal(directRecord?.provider_metadata.direct_read.audit_id, "direct-audit-evidence");
+  assert.equal(directRecord?.provider_metadata.direct_read.artifact_references[0].artifact_id, "direct-audit-evidence:campaigns:0");
+  assert.equal(directRecord?.collection_policy.browser_cabinet_allowed, false);
+  assert.equal(directRecord?.collection_policy.provider_write_methods_reachable, false);
+  assert.equal(await verifyAnalyticsEvidenceSnapshot(result), true);
+});
+
 test("rejects non-official Metrika report provenance instead of relabeling metrics as API evidence", async () => {
   const input = fixture();
   input.context.performance.provenance.source_kind = "OWNER_SPREADSHEET";

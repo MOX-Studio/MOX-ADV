@@ -1,4 +1,4 @@
-import { integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const p0States = sqliteTable("p0_state", {
   userKey: text("user_key").primaryKey(),
@@ -82,3 +82,32 @@ export const p0AgentBudgetEvents = sqliteTable("p0_agent_budget_events", {
   remainingJson: text("remaining_json").notNull(),
   recordedAt: text("recorded_at").notNull(),
 }, (table) => [primaryKey({ columns: [table.runId, table.checkpointSequence] })]);
+
+export const p0DirectAudits = sqliteTable("p0_direct_audits", {
+  ownerKey: text("owner_key").notNull(),
+  accountKey: text("account_key").notNull(),
+  auditId: text("audit_id").notNull(),
+  version: integer("version").notNull().default(0),
+  status: text("status").notNull(),
+  nextRetryAt: text("next_retry_at"),
+  stateJson: text("state_json").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+  completedAt: text("completed_at"),
+}, (table) => [
+  primaryKey({ columns: [table.ownerKey, table.accountKey] }),
+  uniqueIndex("p0_direct_audits_audit_id_unique").on(table.auditId),
+]);
+
+export const p0DirectAuditArtifacts = sqliteTable("p0_direct_audit_artifacts", {
+  artifactId: text("artifact_id").primaryKey(),
+  auditId: text("audit_id").notNull(),
+  ownerKey: text("owner_key").notNull(),
+  accountKey: text("account_key").notNull(),
+  kind: text("kind").notNull(),
+  digest: text("digest").notNull(),
+  byteLength: integer("byte_length").notNull(),
+  objectCount: integer("object_count").notNull(),
+  valueJson: text("value_json").notNull(),
+  createdAt: text("created_at").notNull(),
+}, (table) => [index("p0_direct_audit_artifacts_audit_id_idx").on(table.auditId)]);

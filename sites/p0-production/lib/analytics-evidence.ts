@@ -587,6 +587,9 @@ export async function buildAnalyticsEvidence({
   const direct = record(context.direct);
   const directBinding = record(direct.binding);
   const directReadLimitations = record(direct.read_limitations);
+  const directAudit = record(direct.audit);
+  const directAuditBinding = record(directAudit.account_binding);
+  const directAuditCounts = record(directAudit.object_counts);
   const metrika = record(context.metrika);
   const performance = record(context.performance);
   const performanceProvenance = record(performance.provenance);
@@ -809,6 +812,14 @@ export async function buildAnalyticsEvidence({
 
   const directOfficial = officialDirectScope(direct);
   const directInventoryReady = direct.inventory_ready === true && directOfficial;
+  const directAuditReady = directAudit.schema_version === "direct-read-audit-summary-v1"
+    && ["COMPLETE", "PARTIAL"].includes(text(directAudit.status))
+    && directAuditBinding.matched === true
+    && text(directAuditBinding.expected_account) === directAccount
+    && text(directAuditBinding.api_account) === directAccount
+    && text(directAuditBinding.client_id) === directClientId
+    && directAudit.browser_cabinet_used === false
+    && directAudit.provider_write_methods_reachable === false;
   if (directInventoryReady) {
     const activeCampaigns = list(campaignCatalog.active).map((item) => {
       const campaign = record(item);
@@ -819,24 +830,61 @@ export async function buildAnalyticsEvidence({
         status: text(campaign.status),
       };
     });
+    const methodsRead = list(directReadLimitations.methods_read).map(text).filter(Boolean);
+    const methodsNotRead = list(directReadLimitations.methods_not_read).map(text).filter(Boolean);
+    const providerLimitations = [...new Set([
+      ...list(directReadLimitations.provider_limitations).map(text).filter(Boolean),
+      ...list(directAudit.limitations).map(text).filter(Boolean),
+    ])];
+    const artifactReferences = directAuditReady
+      ? list(directAudit.artifact_references).map((item) => {
+          const reference = record(item);
+          return {
+            artifact_id: text(reference.artifact_id),
+            kind: text(reference.kind),
+            digest: text(reference.digest),
+            byte_length: numberOr(reference.byte_length),
+            object_count: numberOr(reference.object_count),
+            observed_at: text(reference.observed_at),
+          };
+        })
+      : [];
     const normalized = {
       account: directAccount,
       client_id: directClientId,
       campaigns_total: numberOr(direct.campaigns_total),
       campaign_summaries: activeCampaigns,
+      ...(directAuditReady ? {
+        complete_read_audit: {
+          audit_id: text(directAudit.audit_id),
+          status: text(directAudit.status),
+          graph_complete: directAudit.graph_complete === true,
+          object_counts: safeValue(directAuditCounts),
+          report_summaries: safeValue(directAudit.report_summaries),
+          artifact_references: artifactReferences,
+          browser_cabinet_used: false,
+          provider_write_methods_reachable: false,
+        },
+      } : {}),
     };
+    const predicate = directAuditReady ? "complete_account_audit" : "campaign_inventory";
     const claimIdentity = await contentHash({
       subject: "current_direct_account",
-      predicate: "campaign_inventory",
+      predicate,
       normalized: { value: normalized, datatype: "object" },
     });
     const claimId = `urn:mox:claim:${claimIdentity.slice("sha256:".length)}`;
-    const methodsNotRead = list(directReadLimitations.methods_not_read).map(text).filter(Boolean);
     const directRecord = await makeEvidenceRecord({
       sourceId: "direct",
       claimId,
       sourceKind: "direct_management_api",
-      sourceLocator: {
+      sourceLocator: directAuditReady ? {
+        service: "Direct object graph and Reports",
+        method: "read-only get/reports",
+        endpoint_host: "api.direct.yandex.com",
+        client_login: directAccount,
+        response_locator: `direct-audit:${text(directAudit.audit_id)}`,
+      } : {
         service: "Campaigns",
         method: "get",
         endpoint: "https://api.direct.yandex.com/json/v501/campaigns",
@@ -846,7 +894,14 @@ export async function buildAnalyticsEvidence({
       fetchedAt: directObservedAt ?? generated,
       observedAt: directObservedAt ?? generated,
       scope: { access: "owner_authorized", client_login: directAccount, client_id: directClientId },
-      collectionPolicy: {
+      collectionPolicy: directAuditReady ? {
+        policy_id: "official-yandex-direct-read-only",
+        version: "v501-object-graph-and-reports-v1",
+        allowed_host: "api.direct.yandex.com",
+        allowed_operation: methodsRead,
+        browser_cabinet_allowed: false,
+        provider_write_methods_reachable: false,
+      } : {
         policy_id: "official-yandex-direct-read-only",
         version: "v501",
         allowed_host: "api.direct.yandex.com",
@@ -855,9 +910,14 @@ export async function buildAnalyticsEvidence({
       },
       extraction: {
         method: "api_parser",
-        version: "direct-v501-campaign-inventory-v2",
-        selector_or_jsonpath: "$.result.Campaigns",
-        request_digest: await contentHash({
+        version: directAuditReady ? "direct-v501-complete-audit-v1" : "direct-v501-campaign-inventory-v2",
+        selector_or_jsonpath: directAuditReady ? `direct-audit:${text(directAudit.audit_id)}` : "$.result.Campaigns",
+        request_digest: await contentHash(directAuditReady ? {
+          audit_id: text(directAudit.audit_id),
+          client_login: directAccount,
+          methods_read: methodsRead,
+          artifact_digests: artifactReferences.map((reference) => reference.digest),
+        } : {
           method: "get",
           client_login: directAccount,
           field_names: ["Id", "Name", "Type", "Status", "State", "StartDate", "EndDate"],
@@ -865,14 +925,25 @@ export async function buildAnalyticsEvidence({
       },
       rawValue: normalized,
       normalized,
-      limitations: methodsNotRead.map((method) => `${method} не прочитан в этом snapshot.`),
+      limitations: [
+        ...methodsNotRead.map((method) => `${method} не прочитан в этом snapshot.`),
+        ...providerLimitations,
+      ],
       qualityFlags: ["DIRECT_LAST_3_DAYS_PROVISIONAL"],
       providerMetadata: {
         direct_read: {
+          ...(directAuditReady ? {
+            audit_id: text(directAudit.audit_id),
+            audit_status: text(directAudit.status),
+          } : {}),
           inventory_complete: directReadLimitations.inventory_complete === true,
           limited_by: directReadLimitations.limited_by ?? null,
-          methods_read: list(directReadLimitations.methods_read).map(text).filter(Boolean),
+          methods_read: methodsRead,
           methods_not_read: methodsNotRead,
+          ...(directAuditReady ? {
+            report_summaries: safeValue(directAudit.report_summaries),
+            artifact_references: artifactReferences,
+          } : {}),
           statistics_provisional_days: numberOr(directReadLimitations.statistics_provisional_days, 3),
         },
         account_binding: {
@@ -881,14 +952,14 @@ export async function buildAnalyticsEvidence({
           matched: directBinding.matched === true,
         },
       },
-      freshnessPolicy: "direct-inventory/5m-v1",
+      freshnessPolicy: directAuditReady ? "direct-audit/5m-v1" : "direct-inventory/5m-v1",
       asOf,
     });
     evidence.push(directRecord);
     sourceEvidence.direct.push(directRecord.evidence_id);
     claims.push(await makeClaim({
       subject: "current_direct_account",
-      predicate: "campaign_inventory",
+      predicate,
       value: normalized,
       normalized: { value: normalized, datatype: "object" },
       classification: "documented_api_fact",
@@ -897,9 +968,15 @@ export async function buildAnalyticsEvidence({
         quality: "A",
         freshness: claimFreshness(directObservedAt, asOf),
         consistency: "single",
-        coverage: methodsNotRead.length ? "partial" : "complete_for_scope",
-        uncertainty: methodsNotRead.length ? ["Direct child object graph and search-query coverage are not read in this snapshot."] : [],
-        tier: methodsNotRead.length ? "TIER_3_INDICATIVE" : "TIER_1_VERIFIED",
+        coverage: methodsNotRead.length || text(directAudit.status) === "PARTIAL" ? "partial" : "complete_for_scope",
+        uncertainty: directAuditReady
+          ? methodsNotRead.length || text(directAudit.status) === "PARTIAL"
+            ? ["Direct audit preserves provider limitations and unavailable methods for this exact account scope."]
+            : []
+          : methodsNotRead.length
+            ? ["Direct child object graph and search-query coverage are not read in this snapshot."]
+            : [],
+        tier: methodsNotRead.length || text(directAudit.status) === "PARTIAL" ? "TIER_3_INDICATIVE" : "TIER_1_VERIFIED",
       }),
     }));
   }
@@ -1411,7 +1488,12 @@ export async function buildAnalyticsEvidence({
       ? "PARTIAL"
       : "UNAVAILABLE";
   const ownerStatus: EvidenceSourceStatus = sourceEvidence["owner-confirmed"].length ? "VERIFIED" : "UNAVAILABLE";
-  const directStatus: EvidenceSourceStatus = directInventoryReady ? "PARTIAL" : "UNAVAILABLE";
+  const directAuditComplete = directAuditReady
+    && text(directAudit.status) === "COMPLETE"
+    && list(directReadLimitations.methods_not_read).length === 0;
+  const directStatus: EvidenceSourceStatus = directInventoryReady
+    ? directAuditComplete ? "VERIFIED" : "PARTIAL"
+    : "UNAVAILABLE";
   const metrikaStatus: EvidenceSourceStatus = metrikaReportReady
     ? metrikaPartial ? "PARTIAL" : "VERIFIED"
     : metrikaManagementReady ? "PARTIAL" : "UNAVAILABLE";
@@ -1465,11 +1547,38 @@ export async function buildAnalyticsEvidence({
       generated_at: generated,
       scope: { client_login: directAccount, client_id: directClientId },
       access: directOfficial ? "owner_authorized" : "unavailable",
-      collection_policy: { policy_id: "official-yandex-direct-read-only", version: "v501", allowed_host: "api.direct.yandex.com", browser_cabinet_allowed: false },
-      versions: { schema: ANALYTICS_EVIDENCE_SCHEMA, extractor: "direct-v501-campaign-inventory-v2", policy: "official-yandex-direct-read-only/v501" },
-      facts: directInventoryReady ? [`${numberOr(direct.campaigns_total)} current campaign objects read through Campaigns.get`] : [],
+      collection_policy: directAuditReady ? {
+        policy_id: "official-yandex-direct-read-only",
+        version: "v501-object-graph-and-reports-v1",
+        allowed_host: "api.direct.yandex.com",
+        browser_cabinet_allowed: false,
+        provider_write_methods_reachable: false,
+      } : {
+        policy_id: "official-yandex-direct-read-only",
+        version: "v501",
+        allowed_host: "api.direct.yandex.com",
+        browser_cabinet_allowed: false,
+      },
+      versions: {
+        schema: ANALYTICS_EVIDENCE_SCHEMA,
+        extractor: directAuditReady ? "direct-v501-complete-audit-v1" : "direct-v501-campaign-inventory-v2",
+        policy: directAuditReady ? "official-yandex-direct-read-only/v501-object-graph-and-reports-v1" : "official-yandex-direct-read-only/v501",
+      },
+      facts: directInventoryReady ? directAuditReady
+        ? [
+            `${numberOr(directAuditCounts.campaigns)} campaigns, ${numberOr(directAuditCounts.adgroups)} groups, ${numberOr(directAuditCounts.keywords)} keywords/autotargetings and ${numberOr(directAuditCounts.ads)} ads are linked to durable audit artifacts.`,
+            `${list(directAudit.report_summaries).filter((item) => text(record(item).status) === "COMPLETE").length} Direct Reports artifacts completed for the exact account.`,
+          ]
+        : [`${numberOr(direct.campaigns_total)} current campaign objects read through Campaigns.get`]
+        : [],
       limitations: directInventoryReady
-        ? ["AdGroups.get, Keywords.get, Ads.get and Search Query reports are not part of this snapshot.", "Direct statistics for the last three days remain provisional."]
+        ? directAuditReady
+          ? [
+              ...list(directAudit.limitations).map(text).filter(Boolean),
+              ...list(directReadLimitations.methods_not_read).map((method) => `${text(method)} не прочитан в этом snapshot.`),
+              "Direct statistics for the last three days remain provisional.",
+            ]
+          : ["AdGroups.get, Keywords.get, Ads.get and Search Query reports are not part of this snapshot.", "Direct statistics for the last three days remain provisional."]
         : ["Current Direct inventory unavailable; activity is unknown, not zero.", ...list(direct.blockers).map(text).filter(Boolean)],
       evidence_ids: sourceEvidence.direct,
     }),

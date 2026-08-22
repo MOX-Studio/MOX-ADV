@@ -10,6 +10,7 @@ export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue
 export type P0AgentObjectiveKind = "ASSESS_ANALYTICS_READINESS";
 export type P0AgentToolPermission =
   | "P0_APPLICATION_READ"
+  | "P0_PROVIDER_READ"
   | "P0_OBSERVATION_RECORD";
 
 export type P0AgentStopReasonCode =
@@ -224,6 +225,7 @@ const DEFAULT_BUDGETS: P0AgentBudgetLimits = {
 
 const TOOL_PERMISSIONS = new Set<P0AgentToolPermission>([
   "P0_APPLICATION_READ",
+  "P0_PROVIDER_READ",
   "P0_OBSERVATION_RECORD",
 ]);
 
