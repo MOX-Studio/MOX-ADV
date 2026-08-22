@@ -9,5 +9,7 @@ declare namespace Cloudflare {
     YANDEX_METRICA_COUNTER_ID?: string;
     YANDEX_METRICA_GOAL_ID?: string;
     P0_E2E_FIXTURE_SCENARIO?: string;
+    OPENAI_API_KEY?: string;
+    P0_AGENT_MODEL?: string;
   }
 }

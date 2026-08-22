@@ -197,7 +197,7 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 ).click()
                 page.get_by_role(
                     "heading",
-                    name="Агент уже собрал модель бизнеса",
+                    name="Собрана базовая модель бизнеса",
                     exact=True,
                 ).wait_for()
                 self.assertTrue(
@@ -218,7 +218,7 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 capture_visible_copy()
                 page.get_by_role(
                     "button",
-                    name="Подтвердить вывод агента",
+                    name="Подтвердить модель бизнеса",
                     exact=True,
                 ).click()
                 page.get_by_role(

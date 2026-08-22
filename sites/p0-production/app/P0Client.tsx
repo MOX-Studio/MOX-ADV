@@ -389,7 +389,7 @@ function ModelStep({ payload, apply, back }: { payload: Payload; apply: (action:
     void apply("save_business_model", Object.fromEntries(["product", "audience", "value", "qualified_result", "exclusions"].map((name) => [name, fieldValue(form, name)])));
   }
   return <>
-    <ArtifactHead eyebrow="Шаг 2 · агентное исследование" title="Агент уже собрал модель бизнеса" copy="Сначала — краткая сводка, затем раскрываемые доказательства. Исправьте только неверную гипотезу или факт, которого действительно нет в разрешённых источниках." badge="ИССЛЕДОВАНИЕ АГЕНТА" />
+    <ArtifactHead eyebrow="Шаг 2 · проверяемая модель данных" title="Собрана базовая модель бизнеса" copy="Это проверяемая сводка из разрешённых источников, а не нейросетевой вывод. Исправьте только неверный факт." badge="ИЗВЛЕЧЁННЫЕ ДАННЫЕ" />
     <BusinessModelSummary model={model} />
     <LandingAdvisoryPanel run={payload.state.landing_advisory_run || null} />
     {analyticsEvidence && <AnalyticsEvidencePanel evidence={analyticsEvidence} />}
@@ -402,7 +402,7 @@ function ModelStep({ payload, apply, back }: { payload: Payload; apply: (action:
       <Field label="Ценность для покупателя" name="value" value={model.value}><Evidence model={model} field="value" /></Field>
       <Field label="Квалифицированный результат" name="qualified_result" value={model.qualified_result}><Evidence model={model} field="qualified_result" /></Field>
       <Field label="Исключения из результата" name="exclusions" value={model.exclusions}><Evidence model={model} field="exclusions" /></Field>
-      <div className="wide"><Actions revision={payload.revision} label="Подтвердить вывод агента" back={back} submit /></div>
+      <div className="wide"><Actions revision={payload.revision} label="Подтвердить модель бизнеса" back={back} submit /></div>
     </form>
   </>;
 }

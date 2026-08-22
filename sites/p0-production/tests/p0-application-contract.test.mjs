@@ -3213,3 +3213,125 @@ test("every editable Direct field round-trips into a material immutable Draft re
     assert.deepEqual(result.state.shortlist.selections, []);
   }
 });
+
+test("authoritative application owns the agent objective, typed tool schema, permissions, and final truth", async (t) => {
+  const value = await fixture();
+  t.after(() => rm(value.directory, { recursive: true, force: true }));
+
+  const initial = await value.application.agentContract("owner", "ASSESS_ANALYTICS_READINESS");
+  assert.equal(initial.schema_version, "p0-agent-application-contract-v1");
+  assert.equal(initial.objective.kind, "ASSESS_ANALYTICS_READINESS");
+  assert.deepEqual(initial.policy.allowed_tools, ["p0_read_application", "p0_record_readiness_assessment"]);
+  assert.deepEqual(initial.policy.allowed_permissions, ["P0_APPLICATION_READ", "P0_OBSERVATION_RECORD"]);
+  assert.deepEqual(initial.tools.map((tool) => tool.name), ["p0_read_application", "p0_record_readiness_assessment"]);
+  assert.ok(initial.tools.every((tool) => tool.input_schema.additionalProperties === false));
+  assert.equal(initial.authority.application_revision, 0);
+  assert.match(initial.authority.authority_digest, /^sha256:[a-f0-9]{64}$/u);
+  assert.match(initial.authority.prior_outcomes_digest, /^sha256:[a-f0-9]{64}$/u);
+
+  const read = await value.application.executeAgentTool({
+    owner_key: "owner",
+    run_id: "agent-run-1",
+    objective: initial.objective,
+    authority: initial.authority,
+    call: {
+      id: "call-1",
+      name: "p0_read_application",
+      arguments: { expected_revision: 0 },
+    },
+    observation_sequence: 1,
+  });
+  assert.equal(read.observation.trust, "TRUSTED_APPLICATION");
+  assert.equal(read.observation.application_revision, 0);
+  assert.equal(read.observation.facts.analytics_evidence_status, "MISSING");
+  assert.deepEqual(read.contract.policy, initial.policy);
+  assert.deepEqual(
+    await value.application.evaluateAgentObjective({
+      owner_key: "owner",
+      run_id: "agent-run-1",
+      objective: initial.objective,
+      authority: initial.authority,
+      observation_count: 1,
+      last_observation: read.observation,
+    }),
+    { status: "CONTINUE", stop_reason: null },
+  );
+
+  const assessment = await value.application.executeAgentTool({
+    owner_key: "owner",
+    run_id: "agent-run-1",
+    objective: initial.objective,
+    authority: initial.authority,
+    call: {
+      id: "call-2",
+      name: "p0_record_readiness_assessment",
+      arguments: {
+        expected_revision: 0,
+        analytics_evidence_status: "MISSING",
+        material_decision_required: false,
+        summary: "Analytics evidence is missing; the next safe action must be prepared by a later evidence tool slice.",
+      },
+    },
+    observation_sequence: 2,
+  });
+  assert.equal(assessment.observation.facts.assessment_status, "ACCEPTED");
+  const assessed = await value.application.evaluateAgentObjective({
+    owner_key: "owner",
+    run_id: "agent-run-1",
+    objective: initial.objective,
+    authority: initial.authority,
+    observation_count: 2,
+    last_observation: assessment.observation,
+  });
+  assert.equal(assessed.status, "STOP");
+  assert.equal(assessed.stop_reason.code, "COMPLETED");
+
+  await assert.rejects(
+    value.application.executeAgentTool({
+      owner_key: "owner",
+      run_id: "agent-run-1",
+      objective: initial.objective,
+      authority: initial.authority,
+      call: { id: "hidden", name: "shell", arguments: { command: "env" } },
+      observation_sequence: 3,
+    }),
+    (error) => error instanceof P0ApplicationError && error.code === "P0_AGENT_TOOL_DENIED",
+  );
+
+  let result = await value.application.command("owner", {
+    action: "analyze_site",
+    expected_revision: 0,
+    url: "https://owner.example/",
+  });
+  const decisionContract = await value.application.agentContract("owner", "ASSESS_ANALYTICS_READINESS");
+  const decision = await value.application.evaluateAgentObjective({
+    owner_key: "owner",
+    run_id: "agent-run-1",
+    objective: decisionContract.objective,
+    authority: decisionContract.authority,
+    observation_count: 0,
+    last_observation: null,
+  });
+  assert.equal(decision.status, "STOP");
+  assert.equal(decision.stop_reason.code, "MATERIAL_DECISION_REQUIRED");
+
+  result = await value.application.command("owner", {
+    action: "confirm_context_goal",
+    expected_revision: result.revision,
+    confirmation: "CONFIRM_CONTEXT_GOAL",
+    goal: result.state.context_state.provisional_business_goal.value,
+  });
+  assert.equal(result.state.business_model.research.agent, "DETERMINISTIC_EVIDENCE_EXTRACTOR_V3");
+  const completedContract = await value.application.agentContract("owner", "ASSESS_ANALYTICS_READINESS");
+  assert.equal(completedContract.authority.application_revision, result.revision);
+  const completed = await value.application.evaluateAgentObjective({
+    owner_key: "owner",
+    run_id: "agent-run-1",
+    objective: completedContract.objective,
+    authority: completedContract.authority,
+    observation_count: 0,
+    last_observation: null,
+  });
+  assert.equal(completed.status, "STOP");
+  assert.equal(completed.stop_reason.code, "COMPLETED");
+});

@@ -29,6 +29,15 @@ import {
   type P0Document,
   type P0StoredRow,
 } from "./p0-application.ts";
+import {
+  P0AgentRuntime,
+  type P0AgentObjectiveKind,
+} from "./p0-agent-runtime.ts";
+import {
+  D1P0AgentRunStore,
+  ensureP0AgentTables,
+} from "./p0-agent-d1-store.ts";
+import { OpenAIResponsesModelAdapter } from "./openai-responses-model.ts";
 import { researchPublicFirstPartySite } from "./site-research.ts";
 import { cleanText } from "./text.ts";
 import {
@@ -678,6 +687,7 @@ async function ensureTables() {
   await db.prepare(
     "CREATE TABLE IF NOT EXISTS p0_account_locks (account_key TEXT PRIMARY KEY, execution_id TEXT NOT NULL, owner_key TEXT NOT NULL, expires_at TEXT NOT NULL)",
   ).run();
+  await ensureP0AgentTables(db);
 }
 
 export class D1P0ApplicationStore implements P0ApplicationStore {
@@ -1150,4 +1160,47 @@ export async function overview(key: string) {
 
 export async function applyAction(key: string, payload: Record<string, unknown>) {
   return application.command(key, payload as P0Command);
+}
+
+const P0_AGENT_BUDGETS = {
+  max_model_calls: 8,
+  max_tool_calls: 12,
+  max_input_tokens: 80_000,
+  max_output_tokens: 16_000,
+  max_elapsed_ms: 120_000,
+} as const;
+
+function productionAgentRuntime() {
+  const runtime = runtimeEnv();
+  return new P0AgentRuntime({
+    application: {
+      contract: (ownerKey, objectiveKind) => application.agentContract(ownerKey, objectiveKind),
+      executeTool: (input) => application.executeAgentTool(input),
+      evaluate: (input) => application.evaluateAgentObjective(input),
+    },
+    model: new OpenAIResponsesModelAdapter({
+      apiKey: runtime.OPENAI_API_KEY ?? "",
+      model: runtime.P0_AGENT_MODEL ?? "gpt-5-mini",
+      fetcher: fetch,
+    }),
+    store: new D1P0AgentRunStore(runtime.DB),
+    now,
+  });
+}
+
+export async function runAgent(key: string, payload: Record<string, unknown>) {
+  const runtime = productionAgentRuntime();
+  const runId = cleanText(String(payload.run_id ?? ""), 500);
+  if (runId) {
+    return runtime.resume({
+      owner_key: key,
+      run_id: runId,
+      compact: payload.compact === true,
+    });
+  }
+  return runtime.start({
+    owner_key: key,
+    objective_kind: String(payload.objective_kind ?? "ASSESS_ANALYTICS_READINESS") as P0AgentObjectiveKind,
+    budgets: P0_AGENT_BUDGETS,
+  });
 }

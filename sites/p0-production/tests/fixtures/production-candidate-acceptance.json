@@ -1,7 +1,7 @@
 {
   "fixture": {
     "application": {
-      "analytics_evidence_snapshot_id": "sha256:055bb84649d3c6f44bd17fb96406bb002cd161110a0674fbfeb06179220a69a3",
+      "analytics_evidence_snapshot_id": "sha256:9b1ad7c7bd593bb022ee61e0707499b075d3683721ea26d57a9b12316f369efb",
       "corrections": [
         {
           "campaign_states": [
@@ -9,12 +9,12 @@
           ],
           "corrected_draft_revision_id": "draft-b36db1388dfcd72b2621-r2",
           "corrected_publish_fingerprint": "sha256:66b369405a09a1828985876810037f2cb5d96ee3c8c51567e008cd8829237b34",
-          "correction_id": "sha256:269656a03fb4867495faba4971821b78c317a6fdfbb4fa0198cda5cabae745c7",
+          "correction_id": "sha256:517472cfed9da80d9b15473c0af7bab00132a3f8b7a5ee7e10fcb17089d4930f",
           "item_statuses": [
             "DIRECT_ACCEPTED"
           ],
           "source_initial_package_verdict": "PASS_WITH_PLATFORM_REJECTIONS",
-          "source_item_execution_id": "sha256:cc36a33d66148de4d57dbeea16212a31cb9f2addb8d7da3cc7e3a3f297958671",
+          "source_item_execution_id": "sha256:25d3c71a0c660cd96f2b4de98c1d109998bbff3c226b4656825243730d42cfdc",
           "status": "PASS_AFTER_CORRECTION",
           "terminal_outcome": "PASS_AFTER_CORRECTION"
         }
@@ -32,7 +32,7 @@
         }
       },
       "package": {
-        "gate_id": "sha256:d73a4883e68328a030695a27b510c1df7eb305db90f287da26c35f1d2d366caa",
+        "gate_id": "sha256:e260b48c6827babd9c283b5c7274628882d5e282ef3a3be061e5faebd0db37e5",
         "items": [
           {
             "account_lock": "RELEASED",
@@ -40,7 +40,7 @@
             "containment": "CONFIRMED_SUSPENDED",
             "direct_accepted": true,
             "draft_revision_id": "draft-61a2a2a36c1546fa889a-r2",
-            "item_execution_id": "sha256:95cb8f785db7b6b46aa520adc0fbd3287b7d421135d11fcea02ef18b298ef892",
+            "item_execution_id": "sha256:1c57bcc7a0e6c0cc29ffe19a7a6a2d11e280b9104e122d14d45aafb90b030e47",
             "ownership": "PROVIDER",
             "provider_ids": {
               "ad_group_id": "7102",
@@ -65,7 +65,7 @@
             "containment": "CONFIRMED_SUSPENDED",
             "direct_accepted": false,
             "draft_revision_id": "draft-b36db1388dfcd72b2621-r1",
-            "item_execution_id": "sha256:cc36a33d66148de4d57dbeea16212a31cb9f2addb8d7da3cc7e3a3f297958671",
+            "item_execution_id": "sha256:25d3c71a0c660cd96f2b4de98c1d109998bbff3c226b4656825243730d42cfdc",
             "ownership": "PROVIDER",
             "provider_ids": {
               "ad_group_id": "7202",
@@ -85,12 +85,12 @@
             "status": "REJECTED_NEEDS_EDIT"
           }
         ],
-        "package_id": "sha256:f46681c57e1bf4055898ecced7b298e150a7d4c6fe2545f6d9d59fb2fb732707",
-        "package_review_id": "sha256:b476dec8f69bc26cd2aa27239e9b1bea40eda53fecc609d6816e9df6f9f9b7ef",
+        "package_id": "sha256:a6c69748fa6e4d0969ee12f7888be80ab70f6ce9a5c34c36def36ef9320856b5",
+        "package_review_id": "sha256:8c9cffeb58c6c2e06221dcbf9eb2a7b08f81a2b6e5358a9b0a25738c08859c29",
         "status": "PASS_WITH_PLATFORM_REJECTIONS",
         "verdict": "PASS_WITH_PLATFORM_REJECTIONS"
       },
-      "recommendation_set_id": "recommendation-set-revision:f70bf2ab5a05ad2f2f403b29",
+      "recommendation_set_id": "recommendation-set-revision:ba6ba9b748c0d986528478c0",
       "selected_drafts": [
         {
           "capability_profile_id": "direct-v501-unified-search-explicit-text",
@@ -98,7 +98,7 @@
           "draft_id": "draft-61a2a2a36c1546fa889a",
           "draft_revision_id": "draft-61a2a2a36c1546fa889a-r2",
           "publish_fingerprint": "sha256:11ed410bf4fdb201e8d3b998d36bb822d415385687dc25e7e0255e90d8346b3b",
-          "recommendation_set_id": "recommendation-set-revision:f70bf2ab5a05ad2f2f403b29",
+          "recommendation_set_id": "recommendation-set-revision:ba6ba9b748c0d986528478c0",
           "strategy_revision_id": "campaign-strategy-r5"
         },
         {
@@ -107,7 +107,7 @@
           "draft_id": "draft-b36db1388dfcd72b2621",
           "draft_revision_id": "draft-b36db1388dfcd72b2621-r1",
           "publish_fingerprint": "sha256:36bb8f2a50ee3991341fe6e6029491db84819b650bfeadb127e9d3946499b0c6",
-          "recommendation_set_id": "recommendation-set-revision:f70bf2ab5a05ad2f2f403b29",
+          "recommendation_set_id": "recommendation-set-revision:ba6ba9b748c0d986528478c0",
           "strategy_revision_id": "campaign-strategy-r5"
         }
       ],
