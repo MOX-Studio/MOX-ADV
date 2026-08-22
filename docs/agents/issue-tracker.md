@@ -62,7 +62,7 @@ When a map has no open in-scope decisions or fog:
 
 1. Run `to-spec` on the map issue to publish one implementation-ready spec.
 2. Run `to-tickets` on the accepted spec to publish approved vertical implementation slices with native blockers and `ready-for-agent`.
-3. Run `implement` for one frontier ticket per fresh session.
-4. Verify acceptance criteria and close the ticket manually after implementation so blocked tickets can enter the frontier.
+3. Run `/ready` and select one frontier ticket per fresh session.
+4. Ready executes the ticket directly, verifies acceptance criteria, commits with the exact issue reference, and closes it automatically so blocked tickets can enter the frontier.
 
 Implementation tickets reference the spec, not the Wayfinder map, and never carry `wayfinder:*` labels. Do not put execution overrides in Wayfinder map Notes. See `docs/agents/delivery-workflow.md` for the complete stage boundaries and short paths.

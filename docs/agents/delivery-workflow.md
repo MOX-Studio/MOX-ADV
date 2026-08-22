@@ -8,14 +8,13 @@ This repository uses the classic planning and delivery sequence from the enginee
 For a large effort whose route is still unclear:
 
 ```text
-Wayfinder → to-spec → to-tickets → implement → code-review
+Wayfinder → to-spec → to-tickets → /ready
 ```
 
 1. **Wayfinder** resolves product, research, prototype, and prerequisite decisions until the map is clear.
 2. **to-spec** collapses the cleared map into one implementation-ready spec issue.
 3. **to-tickets** turns the accepted spec into approved tracer-bullet implementation tickets with native blocking edges.
-4. **implement** builds one frontier ticket in one fresh session, drives TDD at the agreed seams, validates the result, runs code review, and commits to the current branch.
-5. After acceptance criteria are verified and the exact ticket commit succeeds, `/ready` takeover closes the implemented ticket automatically so its dependants enter the frontier. A direct `implement` run outside `/ready` still requires explicit closure.
+4. **/ready** selects and claims one frontier ticket, executes it directly in the current session, runs focused and final validation, self-reviews the diff, commits to the current branch, and closes the exact ticket automatically.
 
 Run `to-spec` and `to-tickets` in the same context window when practical so a large spec does not need to be fetched again.
 
@@ -47,17 +46,17 @@ Invoke `to-tickets` only after the spec is accepted. Review and approve the prop
 
 Implementation tickets reference the spec as their parent. They are not children of the Wayfinder map and do not carry `wayfinder:*` labels. Native blockers define the frontier. Once child tickets are published, remove `ready-for-agent` from the parent spec if an automated runner might otherwise implement the entire spec directly.
 
-### implement: one ticket per session
+### /ready: one ticket per session
 
-Invoke `implement` for one unblocked implementation ticket in a fresh session. It consumes decisions; it does not reopen product discovery or reslice the backlog. If the ticket is too large for one context window, return it to `to-tickets` for a smaller vertical breakdown.
+Invoke `/ready` and select one unblocked implementation ticket in a fresh session. Ready consumes accepted decisions and executes the ticket directly; it does not reopen product discovery or reslice the backlog. If the ticket is too large for one context window, leave it open and return it to `to-tickets` for a smaller vertical breakdown.
 
-`implement` works on the current branch. In this repository that is `main` unless the user explicitly requests a branch. After tests, review, and an exact-reference commit, `/ready` takeover reconciles and closes the ticket automatically; a direct `implement` invocation closes it explicitly after the same checks.
+Ready works on the current branch. In this repository that is `main` unless the user explicitly requests a branch. It owns claim, focused implementation, tests, final validation, self-review, exact-reference commit, and fail-closed automatic issue closure without an intermediate execution command.
 
 ## Short paths
 
-- **Small and already decided:** `implement` directly; skip Wayfinder, spec, and tickets.
-- **Decided but multi-session:** `to-spec → to-tickets → implement`.
-- **Large with unresolved fog:** `Wayfinder → to-spec → to-tickets → implement`.
-- **Incoming external issue:** use `triage`; it joins the flow at an agent-ready implementation ticket.
+- **Small and already decided:** execute directly in the current session; skip Wayfinder, spec, and tickets.
+- **Decided but multi-session:** `to-spec → to-tickets → /ready`.
+- **Large with unresolved fog:** `Wayfinder → to-spec → to-tickets → /ready`.
+- **Incoming external issue:** use `triage`; it joins the agent-ready frontier and is selected through `/ready`.
 
 One artifact owns each stage. Never let a Wayfinder map and `to-tickets` create competing implementation backlogs for the same scope.

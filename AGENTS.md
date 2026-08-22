@@ -17,7 +17,7 @@ See `docs/agents/domain.md`.
 
 ### Delivery workflow
 
-Use the planning-only sequence `Wayfinder → to-spec → to-tickets → implement`, with one implementation ticket per fresh session.
+Use the planning-only sequence `Wayfinder → to-spec → to-tickets → /ready`; Ready executes one frontier ticket directly per fresh session.
 See `docs/agents/delivery-workflow.md`.
 
 ### Integration interaction boundaries
