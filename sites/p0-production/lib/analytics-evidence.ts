@@ -1,12 +1,19 @@
 import { normalizePublicHttpsUrl } from "./site-url.ts";
 import {
+  buildProductFocusArtifacts,
+  type FocusOpportunitySet,
+  type OfferCandidateInput,
+  type OfferCatalog,
+} from "./business-model.ts";
+import {
   buildMarketEvidence,
   unavailableWordstatBatch,
   type MarketEvidenceInput,
 } from "./market-evidence.ts";
 
-export const ANALYTICS_EVIDENCE_SCHEMA = "p0-analytics-evidence-v2";
-export const ANALYTICS_EVIDENCE_CONTRACT_VERSION = "2.0.0";
+export const ANALYTICS_EVIDENCE_SCHEMA = "p0-analytics-evidence-v3";
+export const ANALYTICS_EVIDENCE_CONTRACT_VERSION = "3.0.0";
+const LEGACY_ANALYTICS_EVIDENCE_SCHEMAS = new Set(["p0-analytics-evidence-v1", "p0-analytics-evidence-v2"]);
 const CANONICALIZATION_VERSION = "mox-canonical-json-v1";
 const NORMALIZER_VERSION = "mox-evidence-normalizer-v2";
 const REDACTION_VERSION = "mox-artifact-redaction-v1";
@@ -167,6 +174,8 @@ export type AnalyticsEvidenceBundle = {
   conflicts: EvidenceConflict[];
   gaps: EvidenceGap[];
   material_uncertainties: string[];
+  product_catalog: OfferCatalog;
+  focus_opportunities: FocusOpportunitySet;
   market_evidence: Awaited<ReturnType<typeof buildMarketEvidence>>;
   prelaunch_cost: Awaited<ReturnType<typeof buildMarketEvidence>>["cost"];
   versions: {
@@ -188,6 +197,8 @@ export type AnalyticsEvidenceBundle = {
     evidence_sha256: string;
     conflicts_sha256: string;
     gaps_sha256: string;
+    product_catalog_sha256: string;
+    focus_opportunities_sha256: string;
     market_evidence_sha256: string;
   };
   contract_path: string;
@@ -605,6 +616,28 @@ export async function buildAnalyticsEvidence({
         cost_observations: [],
       };
   const marketEvidence = await buildMarketEvidence(marketInput);
+  const fallbackProductEvidence = record(fieldEvidence.product);
+  const offerCandidates = list(model.offer_candidates).length
+    ? list(model.offer_candidates).map((candidate) => safeValue(candidate) as OfferCandidateInput)
+    : [safeValue({
+        label: model.product,
+        offer: model.product,
+        audience: model.audience,
+        value: model.value,
+        qualified_outcome: model.qualified_result,
+        economics: model.economics,
+        destination: site.url,
+        current_promotion: "UNKNOWN",
+        unresolved_facts: list(model.missing_questions),
+        evidence_refs: text(fallbackProductEvidence.quote) && text(fallbackProductEvidence.source_url)
+          ? [{ source_url: fallbackProductEvidence.source_url, quote: fallbackProductEvidence.quote, field: "offer" }]
+          : [],
+      } satisfies OfferCandidateInput) as OfferCandidateInput];
+  const productFocus = await buildProductFocusArtifacts({
+    candidates: offerCandidates,
+    marketEvidence,
+    generatedAt: generated,
+  });
   const companyHost = urlHost(site.url) || urlHost(record(list(site.pages)[0]).url);
   const directAccount = text(direct.account);
   const directClientId = text(direct.client_id);
@@ -711,6 +744,67 @@ export async function buildAnalyticsEvidence({
       }),
     });
     claims.push(claim);
+  }
+
+  for (const offer of productFocus.catalog.offers) {
+    if (!offer.evidence_refs.length) continue;
+    const normalizedOffer = {
+      offer_id: offer.offer_id,
+      material_axes: offer.material_axes,
+      value_proposition: offer.value_proposition,
+      current_promotion: offer.current_promotion,
+      unresolved_facts: offer.unresolved_facts,
+    };
+    const identityHash = await contentHash({
+      subject: `offer:${offer.offer_id}`,
+      predicate: "material_offer",
+      normalized: { value: normalizedOffer, datatype: "object" },
+    });
+    const claimId = `urn:mox:claim:${identityHash.slice("sha256:".length)}`;
+    const recordIds: string[] = [];
+    for (const reference of offer.evidence_refs) {
+      const catalogRecord = await makeEvidenceRecord({
+        sourceId: "first-party-web",
+        claimId,
+        sourceKind: "first_party_offer_catalog",
+        sourceLocator: { url: reference.source_url, field: reference.field, offer_id: offer.offer_id },
+        fetchedAt: siteObservedAt ?? generated,
+        observedAt: siteObservedAt ?? generated,
+        scope: { access: "public", company_host: companyHost, catalog_id: productFocus.catalog.catalog_id },
+        collectionPolicy: { policy_id: "first-party-public-https", version: "1.0.0", no_auth: true },
+        extraction: {
+          method: "material_offer_inventory",
+          version: text(modelResearch.agent) || "GPT_SITES_EVIDENCE_RESEARCH_V3",
+          selector_or_jsonpath: `product_catalog.${offer.offer_id}`,
+          request_digest: await contentHash({ url: reference.source_url, offer_id: offer.offer_id }),
+        },
+        rawValue: reference.quote,
+        rawQuote: reference.quote,
+        normalized: normalizedOffer,
+        limitations: offer.unresolved_facts,
+        qualityFlags: ["MATERIAL_AXES_SEPARATED", "NO_SKU_ONLY_SPLIT"],
+        asOf,
+      });
+      evidence.push(catalogRecord);
+      recordIds.push(catalogRecord.evidence_id);
+      sourceEvidence["first-party-web"].push(catalogRecord.evidence_id);
+    }
+    claims.push(await makeClaim({
+      subject: `offer:${offer.offer_id}`,
+      predicate: "material_offer",
+      value: normalizedOffer,
+      normalized: { value: normalizedOffer, datatype: "object" },
+      classification: "observed",
+      evidence_ids: recordIds,
+      confidence: confidenceForClaim({
+        quality: "B",
+        freshness: claimFreshness(siteObservedAt, asOf),
+        consistency: recordIds.length > 1 ? "corroborated" : "single",
+        coverage: offer.unresolved_facts.length ? "partial" : "complete_for_scope",
+        uncertainty: offer.unresolved_facts,
+        tier: offer.unresolved_facts.length ? "TIER_3_INDICATIVE" : "TIER_2_CORROBORATED",
+      }),
+    }));
   }
 
   const directOfficial = officialDirectScope(direct);
@@ -1501,12 +1595,27 @@ export async function buildAnalyticsEvidence({
     competitor_policy: "public-competitor-pages-v1",
   };
   const hashes = {
-    input_root_sha256: await contentHash({ scope, generated_at: generated, as_of: asOf, versions, sources, claims, evidence, conflicts, gaps, market_evidence: marketEvidence }),
+    input_root_sha256: await contentHash({
+      scope,
+      generated_at: generated,
+      as_of: asOf,
+      versions,
+      sources,
+      claims,
+      evidence,
+      conflicts,
+      gaps,
+      product_catalog: productFocus.catalog,
+      focus_opportunities: productFocus.focus_opportunities,
+      market_evidence: marketEvidence,
+    }),
     sources_sha256: await contentHash(sources),
     claims_sha256: await contentHash(claims),
     evidence_sha256: await contentHash(evidence),
     conflicts_sha256: await contentHash(conflicts),
     gaps_sha256: await contentHash(gaps),
+    product_catalog_sha256: await contentHash(productFocus.catalog),
+    focus_opportunities_sha256: await contentHash(productFocus.focus_opportunities),
     market_evidence_sha256: await contentHash(marketEvidence),
   };
   const unsigned: Omit<AnalyticsEvidenceBundle, "snapshot_id"> = {
@@ -1536,6 +1645,8 @@ export async function buildAnalyticsEvidence({
     conflicts,
     gaps,
     material_uncertainties: materialUncertainties,
+    product_catalog: productFocus.catalog,
+    focus_opportunities: productFocus.focus_opportunities,
     market_evidence: marketEvidence,
     prelaunch_cost: marketEvidence.cost,
     versions,
@@ -1560,7 +1671,7 @@ export async function verifyAnalyticsEvidenceSnapshot(snapshot: AnalyticsEvidenc
       delete unsigned.snapshot_id;
       return snapshotId === await contentHash(unsigned);
     }
-    if (candidate.schema_version !== ANALYTICS_EVIDENCE_SCHEMA) return false;
+    if (candidate.schema_version !== ANALYTICS_EVIDENCE_SCHEMA && !LEGACY_ANALYTICS_EVIDENCE_SCHEMAS.has(String(candidate.schema_version))) return false;
     const current = candidate as unknown as AnalyticsEvidenceBundle;
     for (const source of current.sources) {
       const { manifest_hash: manifestHash, ...body } = source;
@@ -1597,6 +1708,20 @@ export async function verifyAnalyticsEvidenceSnapshot(snapshot: AnalyticsEvidenc
     if (current.hashes.gaps_sha256 !== await contentHash(current.gaps)) return false;
     const hasMarketEvidence = Boolean((current as unknown as Record<string, unknown>).market_evidence);
     if (hasMarketEvidence && current.hashes.market_evidence_sha256 !== await contentHash(current.market_evidence)) return false;
+    const hasProductFocus = Boolean(
+      (current as unknown as Record<string, unknown>).product_catalog
+      && (current as unknown as Record<string, unknown>).focus_opportunities,
+    );
+    if (candidate.schema_version === ANALYTICS_EVIDENCE_SCHEMA && !hasProductFocus) return false;
+    if (hasProductFocus) {
+      const { catalog_id: catalogId, ...catalogBody } = current.product_catalog;
+      if (catalogId !== await contentHash(catalogBody)) return false;
+      const { recommendation_id: recommendationId, ...recommendationBody } = current.focus_opportunities;
+      if (recommendationId !== await contentHash(recommendationBody)) return false;
+      if (current.focus_opportunities.catalog_id !== catalogId) return false;
+      if (current.hashes.product_catalog_sha256 !== await contentHash(current.product_catalog)) return false;
+      if (current.hashes.focus_opportunities_sha256 !== await contentHash(current.focus_opportunities)) return false;
+    }
     const inputRoot = {
       scope: current.scope,
       generated_at: current.generated_at,
@@ -1607,6 +1732,10 @@ export async function verifyAnalyticsEvidenceSnapshot(snapshot: AnalyticsEvidenc
       evidence: current.evidence,
       conflicts: current.conflicts,
       gaps: current.gaps,
+      ...(hasProductFocus ? {
+        product_catalog: current.product_catalog,
+        focus_opportunities: current.focus_opportunities,
+      } : {}),
       ...(hasMarketEvidence ? { market_evidence: current.market_evidence } : {}),
     };
     if (current.hashes.input_root_sha256 !== await contentHash(inputRoot)) return false;

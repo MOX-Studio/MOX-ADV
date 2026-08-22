@@ -6,10 +6,17 @@ import {
   type AnalyticsEvidenceBundle,
 } from "./analytics-evidence.ts";
 import {
+  buildProductFocusArtifacts,
+  createProductFocusState,
   inferDecisionMakers,
   inferOffer,
   isUnprocessedAudience,
   isUnprocessedOffer,
+  reviseProductFocusState,
+  verifyProductFocusState,
+  type OfferCandidateInput,
+  type ProductFocusArtifacts,
+  type ProductFocusState,
 } from "./business-model.ts";
 import type { CuratedPlaybookRelease } from "./campaign-playbook.ts";
 import {
@@ -123,9 +130,9 @@ import {
 } from "./landing-advisory.ts";
 
 export const P0_APPLICATION_CONTRACT = "mox-adv.p0.application";
-export const P0_APPLICATION_CONTRACT_VERSION = "1.11.0";
-export const P0_DOCUMENT_SCHEMA = "p0-application-document-v9";
-const P0_LEGACY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4", "p0-application-document-v5", "p0-application-document-v6", "p0-application-document-v7", "p0-application-document-v8"]);
+export const P0_APPLICATION_CONTRACT_VERSION = "1.12.0";
+export const P0_DOCUMENT_SCHEMA = "p0-application-document-v10";
+const P0_LEGACY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4", "p0-application-document-v5", "p0-application-document-v6", "p0-application-document-v7", "p0-application-document-v8", "p0-application-document-v9"]);
 const P0_PRE_PACKAGE_AUTHORITY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4"]);
 export const P0_CONTEXT_SCHEMA = "p0-context-v2";
 const P0_LEGACY_CONTEXT_SCHEMA = "p0-context-v1";
@@ -228,6 +235,7 @@ export type P0Document = {
   context_state: P0ContextState | null;
   site_analysis: SiteAnalysis | null;
   business_model: BusinessModel | null;
+  product_focus: ProductFocusState | null;
   analytics_evidence_snapshot: AnalyticsEvidenceBundle | null;
   strategy_questionnaire: StrategyQuestionnaire | null;
   strategy: CampaignStrategyRevision | Record<string, unknown> | null;
@@ -391,6 +399,7 @@ export type BusinessModel = {
     sources: string[];
     completed_fields: string[];
   };
+  offer_candidates: OfferCandidateInput[];
   field_evidence: Record<
     string,
     {
@@ -432,10 +441,15 @@ export const P0_COMMAND_TRUTH_TABLE = {
     state.context_state && state.site_analysis && packageNotDispatched(state),
   ),
   save_business_model: (state: P0Document) => Boolean(
-    state.site_analysis && state.business_model && packageNotDispatched(state),
+    state.site_analysis && state.business_model && state.product_focus && packageNotDispatched(state),
+  ),
+  select_focus: (state: P0Document) => Boolean(
+    state.site_analysis && state.business_model && state.product_focus && packageNotDispatched(state),
   ),
   approve_strategy: (state: P0Document) => (
     state.business_model?.source === "REAL_SITE_RESEARCH_PLUS_OWNER_CONFIRMATION"
+    && state.product_focus?.decision_status === "OWNER_SELECTED"
+    && Boolean(state.product_focus.selected_offer_id)
     && state.strategy_questionnaire?.schema_version === STRATEGY_QUESTIONNAIRE_SCHEMA
     && packageNotDispatched(state)
   ),
@@ -517,6 +531,7 @@ function emptyDocument(): P0Document {
     context_state: null,
     site_analysis: null,
     business_model: null,
+    product_focus: null,
     analytics_evidence_snapshot: null,
     strategy_questionnaire: null,
     strategy: null,
@@ -1030,6 +1045,91 @@ function bestOfferEvidence(rows: Array<{ text: string; url: string }>) {
   return bestEvidence(rows, ["участ", "выстав", "стенд", "экспонент", "participant", "exhibitor", "exhibition", "booth"]);
 }
 
+function pageQualifiedOutcome(page: PageEvidence) {
+  const evidence = cleanText(`${page.description} ${page.headings.join(" ")} ${page.text_excerpt}`, 8_000);
+  if (/участ|participant/iu.test(evidence) && /заяв|форм|application|submit/iu.test(evidence)) return "Отправленная заявка на участие через форму сайта";
+  if (/партн[её]р|partner/iu.test(evidence) && /заяв|форм|application|submit/iu.test(evidence)) return "Отправленная заявка на партнёрство";
+  if (/регистра|register/iu.test(evidence)) return "Завершённая регистрация на сайте";
+  if (/консультац|consult/iu.test(evidence)) return "Забронированная консультация";
+  return page.forms_detected > 0 ? "Отправленная квалифицированная заявка через сайт" : "";
+}
+
+function pageEconomics(page: PageEvidence) {
+  const evidence = cleanText(`${page.description} ${page.headings.join(" ")} ${page.text_excerpt}`, 8_000);
+  const match = evidence.match(/(?:от\s*)?\d[\d\s.,]{1,18}\s*(?:₽|руб(?:л(?:ей|я)?)?|rub|usd|eur|€|\$)|(?:тариф|пакет|стоимост|цена)[^.!?]{0,100}/iu);
+  return cleanText(match?.[0] ?? "", 200);
+}
+
+function normalizedTerms(value: unknown) {
+  return new Set(cleanText(String(value ?? ""), 2_000)
+    .normalize("NFKC")
+    .toLocaleLowerCase("ru-RU")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .split(" ")
+    .filter((item) => item.length >= 5));
+}
+
+function termsOverlap(left: unknown, right: unknown) {
+  const leftTerms = normalizedTerms(left);
+  const rightTerms = normalizedTerms(right);
+  for (const term of leftTerms) if (rightTerms.has(term)) return true;
+  return false;
+}
+
+function offerCandidatesFromSite(site: SiteAnalysis, context: P0Context, brand: string): OfferCandidateInput[] {
+  const catalog = record(context.campaign_catalog);
+  const activeCampaignNames = Array.isArray(catalog.active)
+    ? catalog.active.map((item) => cleanText(String(record(item).name ?? ""), 255)).filter(Boolean)
+    : [];
+  const direct = record(context.direct);
+  const directReadLimitations = record(direct.read_limitations);
+  const inventoryKnown = direct.inventory_ready === true
+    && directReadLimitations.inventory_complete === true
+    && Array.isArray(directReadLimitations.methods_not_read)
+    && directReadLimitations.methods_not_read.length === 0;
+  return site.pages.map((page, index) => {
+    const evidence = cleanText(`${page.description} ${page.headings.join(" ")} ${page.text_excerpt}`, 8_000);
+    const qualifiedOutcome = pageQualifiedOutcome(page);
+    const offer = inferOffer(brand, evidence, qualifiedOutcome)
+      || cleanText(page.headings[0] || page.title || page.description, 500);
+    const audience = inferDecisionMakers(evidence);
+    const economics = pageEconomics(page);
+    const currentPromotion = activeCampaignNames.some((name) => termsOverlap(name, offer))
+      ? "OBSERVED" as const
+      : inventoryKnown ? "NOT_OBSERVED" as const : "UNKNOWN" as const;
+    const unresolvedFacts = [
+      ...(!audience ? ["Аудитория предложения не подтверждена"] : []),
+      ...(!qualifiedOutcome ? ["Квалифицированный результат предложения не подтверждён"] : []),
+      ...(!economics ? ["Экономика предложения не подтверждена"] : []),
+      ...(currentPromotion === "UNKNOWN" ? ["Текущий рекламный охват предложения не подтверждён"] : []),
+    ];
+    const demandClusterIds = index === 0
+      ? ["demand-cluster-primary", "cluster-participation"]
+      : /партн[её]р|partner/iu.test(evidence) ? ["cluster-partnership"] : [];
+    return {
+      label: cleanText(page.title || page.headings[0] || offer, 500),
+      offer,
+      audience,
+      value: cleanText(page.description, 1_000),
+      qualified_outcome: qualifiedOutcome,
+      economics,
+      destination: page.url,
+      destination_status: "AVAILABLE",
+      current_promotion: currentPromotion,
+      unresolved_facts: unresolvedFacts,
+      evidence_refs: offer ? [{ source_url: page.url, quote: cleanText(page.headings[0] || page.description || page.text_excerpt, 1_000), field: "offer" }] : [],
+      demand_cluster_ids: demandClusterIds,
+    } satisfies OfferCandidateInput;
+  }).filter((candidate) => Boolean(cleanText(String(candidate.offer ?? ""), 500)));
+}
+
+function productFocusArtifacts(snapshot: AnalyticsEvidenceBundle): ProductFocusArtifacts {
+  return {
+    catalog: snapshot.product_catalog,
+    focus_opportunities: snapshot.focus_opportunities,
+  };
+}
+
 function brandFromSite(site: SiteAnalysis) {
   return cleanText(site.title.split(/\s[|—–-]\s/)[0] || "", 200);
 }
@@ -1296,6 +1396,7 @@ function persistedDecisionContext(state: P0Document): P0Context {
 }
 
 function invalidateContextDownstream(state: P0Document) {
+  state.product_focus = null;
   state.strategy_questionnaire = null;
   state.strategy = null;
   state.landing_advisory_run = null;
@@ -1504,9 +1605,15 @@ async function inferModel(site: SiteAnalysis, context: P0Context): Promise<Busin
     "become a participant", "submit an application", "register",
   ]);
   const visitorEvidence = bestEvidence(rows, ["посетител", "visitor", "билет", "free ticket"]);
-  const audience = inferDecisionMakers(audienceEvidence?.text ?? "");
-  const value = cleanText(valueEvidence?.text ?? site.description, 1_000);
-  const qualified = resultEvidence
+  const offerCandidates = offerCandidatesFromSite(site, context, brand);
+  const primaryCandidate = offerCandidates[0];
+  const primaryReference = primaryCandidate?.evidence_refs?.[0];
+  const primaryEvidence = primaryReference
+    ? { text: cleanText(String(primaryReference.quote ?? ""), 1_000), url: cleanText(String(primaryReference.source_url ?? ""), 1_000) }
+    : undefined;
+  const extractedAudience = inferDecisionMakers(audienceEvidence?.text ?? "");
+  const extractedValue = cleanText(valueEvidence?.text ?? site.description, 1_000);
+  const extractedQualified = resultEvidence
     ? /участ|participant/i.test(resultEvidence.text)
       ? "Отправленная заявка на участие через форму сайта"
       : /регистра|register/i.test(resultEvidence.text)
@@ -1515,17 +1622,21 @@ async function inferModel(site: SiteAnalysis, context: P0Context): Promise<Busin
     : site.forms_detected
       ? "Отправленная форма с контактными данными"
       : "";
+  const product = cleanText(String(primaryCandidate?.offer ?? ""), 1_000)
+    || inferOffer(brand, productEvidence?.text ?? site.text_excerpt, extractedQualified);
+  const audience = cleanText(String(primaryCandidate?.audience ?? ""), 1_000) || extractedAudience;
+  const value = cleanText(String(primaryCandidate?.value ?? ""), 1_000) || extractedValue;
+  const qualified = cleanText(String(primaryCandidate?.qualified_outcome ?? ""), 1_000) || extractedQualified;
   const exclusions = visitorEvidence
     ? "Посетители без намерения оставить коммерческую заявку"
     : qualified
       ? "Информационные обращения без намерения выполнить целевое действие"
       : "";
-  const product = inferOffer(brand, productEvidence?.text ?? site.text_excerpt, qualified);
   const facts: Record<string, { value: string; evidence?: { text: string; url: string }; confidence: string }> = {
-    product: { value: product, evidence: productEvidence, confidence: product ? "MEDIUM" : "LOW" },
-    audience: { value: audience, evidence: audienceEvidence, confidence: audience ? "MEDIUM" : "LOW" },
-    value: { value, evidence: valueEvidence, confidence: value ? "MEDIUM" : "LOW" },
-    qualified_result: { value: qualified, evidence: resultEvidence, confidence: qualified ? "HIGH" : "LOW" },
+    product: { value: product, evidence: primaryEvidence ?? productEvidence, confidence: product ? "MEDIUM" : "LOW" },
+    audience: { value: audience, evidence: audienceEvidence ?? primaryEvidence, confidence: audience ? "MEDIUM" : "LOW" },
+    value: { value, evidence: valueEvidence ?? primaryEvidence, confidence: value ? "MEDIUM" : "LOW" },
+    qualified_result: { value: qualified, evidence: resultEvidence ?? primaryEvidence, confidence: qualified ? "HIGH" : "LOW" },
     exclusions: { value: exclusions, evidence: visitorEvidence, confidence: exclusions ? "MEDIUM" : "LOW" },
   };
   const questions: Record<string, string> = {
@@ -1552,11 +1663,12 @@ async function inferModel(site: SiteAnalysis, context: P0Context): Promise<Busin
       .filter(([, fact]) => !fact.value)
       .map(([name]) => questions[name]),
     research: {
-      agent: "DETERMINISTIC_EVIDENCE_EXTRACTOR_V3",
+      agent: "DETERMINISTIC_EVIDENCE_EXTRACTOR_V4",
       pages_analyzed: site.pages.length,
       sources,
       completed_fields: Object.entries(facts).filter(([, fact]) => fact.value).map(([name]) => name),
     },
+    offer_candidates: offerCandidates,
     field_evidence: Object.fromEntries(
       Object.entries(facts).map(([name, fact]) => [
         name,
@@ -1663,7 +1775,7 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
     })));
     changed = true;
   }
-  for (const key of ["context_state", "site_analysis", "business_model", "analytics_evidence_snapshot", "strategy_questionnaire", "strategy", "landing_advisory_run", "recommendation_set", "draft", "shortlist", "package_review", "human_decision_gate", "package_execution", "last_decision_invalidation", "external_write_intent", "campaign", "recommendation_recalculation", "last_cascade"] as const) {
+  for (const key of ["context_state", "site_analysis", "business_model", "product_focus", "analytics_evidence_snapshot", "strategy_questionnaire", "strategy", "landing_advisory_run", "recommendation_set", "draft", "shortlist", "package_review", "human_decision_gate", "package_execution", "last_decision_invalidation", "external_write_intent", "campaign", "recommendation_recalculation", "last_cascade"] as const) {
     if (!(key in state)) {
       if (!legacyDocument) lineageError(`same-schema document field ${key} отсутствует.`);
       state[key] = null as never;
@@ -1679,6 +1791,64 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
   }
   if (state.analytics_evidence_snapshot && !await verifyAnalyticsEvidenceSnapshot(state.analytics_evidence_snapshot)) {
     lineageError("Analytics Evidence Snapshot hash verification failed.");
+  }
+  if (state.business_model && !Array.isArray(state.business_model.offer_candidates)) {
+    if (!legacyDocument) lineageError("same-schema Model field offer_candidates отсутствует.");
+    state.business_model.offer_candidates = [{
+      label: state.business_model.product,
+      offer: state.business_model.product,
+      audience: state.business_model.audience,
+      value: state.business_model.value,
+      qualified_outcome: state.business_model.qualified_result,
+      economics: "",
+      destination: state.site_analysis?.url ?? "",
+      destination_status: state.site_analysis ? "AVAILABLE" : "UNAVAILABLE",
+      current_promotion: "UNKNOWN",
+      unresolved_facts: [],
+      evidence_refs: state.business_model.field_evidence?.product?.quote && state.business_model.field_evidence?.product?.source_url
+        ? [{
+            source_url: state.business_model.field_evidence.product.source_url,
+            quote: state.business_model.field_evidence.product.quote,
+            field: "offer",
+          }]
+        : [],
+      demand_cluster_ids: ["demand-cluster-primary", "cluster-participation"],
+    }];
+    changed = true;
+  }
+  if (!state.product_focus && state.business_model && state.analytics_evidence_snapshot) {
+    if (!legacyDocument) lineageError("same-schema Product Focus revision отсутствует при persisted Model и evidence.");
+    const snapshotRecord = state.analytics_evidence_snapshot as unknown as Record<string, unknown>;
+    const artifacts = snapshotRecord.product_catalog && snapshotRecord.focus_opportunities
+      ? productFocusArtifacts(state.analytics_evidence_snapshot)
+      : await buildProductFocusArtifacts({
+          candidates: state.business_model.offer_candidates,
+          marketEvidence: snapshotRecord.market_evidence,
+          generatedAt: state.analytics_evidence_snapshot.generated_at || updatedAt,
+        });
+    state.product_focus = await createProductFocusState({
+      artifacts,
+      analyticsEvidenceSnapshotId: state.analytics_evidence_snapshot.snapshot_id,
+      selectedAt: updatedAt,
+      ownerConfirmed: state.business_model.source === "REAL_SITE_RESEARCH_PLUS_OWNER_CONFIRMATION",
+    });
+    changed = true;
+  }
+  if (state.product_focus) {
+    if (!state.business_model || !state.analytics_evidence_snapshot) {
+      lineageError("Product Focus revision потеряла Model или Analytics Evidence Snapshot.");
+    }
+    if (!await verifyProductFocusState(state.product_focus)) {
+      lineageError("Product Focus revision hash verification failed.");
+    }
+    const snapshotRecord = state.analytics_evidence_snapshot as unknown as Record<string, unknown>;
+    if (snapshotRecord.product_catalog && (
+      state.product_focus.catalog.catalog_id !== state.analytics_evidence_snapshot.product_catalog.catalog_id
+      || state.product_focus.focus_opportunities.recommendation_id !== state.analytics_evidence_snapshot.focus_opportunities.recommendation_id
+      || state.product_focus.analytics_evidence_snapshot_id !== state.analytics_evidence_snapshot.snapshot_id
+    )) {
+      lineageError("Product Focus revision ссылается на другую offer catalog, recommendation или evidence lineage.");
+    }
   }
 
   let modelChanged = false;
@@ -1728,6 +1898,7 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
     }
   }
   if (modelChanged && model) {
+    state.product_focus = null;
     state.analytics_evidence_snapshot = null;
     state.strategy_questionnaire = null;
     state.last_cascade = cascadeRecord(state, "MODEL", updatedAt, ["campaign_strategy", "recommendation_set", "campaign_drafts", "shortlist", "confirmation"]);
@@ -2039,6 +2210,15 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
   return { state, changed };
 }
 
+function focusDecisionRequired(state: P0Document) {
+  return state.product_focus?.decision_status === "HUMAN_DECISION_REQUIRED"
+    || state.product_focus?.decision_status === "INSUFFICIENT_EVIDENCE";
+}
+
+function materialDecisionRequired(state: P0Document) {
+  return state.context_state?.status === "GOAL_PROVISIONAL" || focusDecisionRequired(state);
+}
+
 function currentStep(state: P0Document) {
   if (state.package_review || state.human_decision_gate) return 4;
   if (state.strategy) return 3;
@@ -2239,7 +2419,10 @@ export class P0Application {
         allowed_commands: currentWorkflow.allowed_commands,
         context_status: state.context_state?.status ?? "MISSING",
         analytics_evidence_status: state.analytics_evidence_snapshot ? "AVAILABLE" : "MISSING",
-        material_decision_required: state.context_state?.status === "GOAL_PROVISIONAL",
+        material_decision_required: materialDecisionRequired(state),
+        product_focus_status: state.product_focus?.decision_status ?? "MISSING",
+        recommended_focus_offer_id: state.product_focus?.recommended_offer_id ?? null,
+        selected_focus_offer_id: state.product_focus?.selected_offer_id ?? null,
         exact_write_authority_present: Boolean(state.human_decision_gate),
         package_execution_status: state.package_execution?.status ?? null,
       } as unknown as Record<string, JsonValue>;
@@ -2250,7 +2433,7 @@ export class P0Application {
         fail("P0_AGENT_TOOL_INPUT_INVALID", "Assessment tool input не соответствует closed schema.");
       }
       const actualEvidenceStatus = state.analytics_evidence_snapshot ? "AVAILABLE" : "MISSING";
-      const actualDecisionRequired = state.context_state?.status === "GOAL_PROVISIONAL";
+      const actualDecisionRequired = materialDecisionRequired(state);
       const proposedEvidenceStatus = String(argumentsValue.analytics_evidence_status ?? "");
       const proposedDecisionRequired = argumentsValue.material_decision_required;
       const proposedSummary = artifactText(argumentsValue.summary, 500);
@@ -2302,23 +2485,25 @@ export class P0Application {
     if (stored.revision !== contract.authority.application_revision) {
       fail("P0_AGENT_AUTHORITY_STALE", "P0 revision изменилась до authoritative objective evaluation.");
     }
+    if (materialDecisionRequired(stored.state)) {
+      return {
+        status: "STOP",
+        stop_reason: {
+          code: "MATERIAL_DECISION_REQUIRED",
+          message: focusDecisionRequired(stored.state)
+            ? "Владелец должен подтвердить подготовленный Product Focus Gate или выбрать materially distinct alternative."
+            : "Владелец должен подтвердить или скорректировать provisional бизнес-цель.",
+          resumable: true,
+        },
+      };
+    }
     if (stored.state.analytics_evidence_snapshot) {
       return {
         status: "STOP",
         stop_reason: {
           code: "COMPLETED",
-          message: "Authoritative P0 application confirmed that an Analytics Evidence Snapshot is available.",
+          message: "Authoritative P0 application confirmed that an Analytics Evidence Snapshot and Product Focus revision are available.",
           resumable: false,
-        },
-      };
-    }
-    if (stored.state.context_state?.status === "GOAL_PROVISIONAL") {
-      return {
-        status: "STOP",
-        stop_reason: {
-          code: "MATERIAL_DECISION_REQUIRED",
-          message: "Владелец должен подтвердить или скорректировать provisional бизнес-цель.",
-          resumable: true,
         },
       };
     }
@@ -2433,6 +2618,7 @@ export class P0Application {
     if (!configuration.ready && blockers.length === 0) blockers.push("Direct production credentials не настроены");
     if (context.direct.ready !== true) blockers.push("Текущий аккаунт Директа не прошёл production preflight");
     if (state.context_state?.status !== "GOAL_CONFIRMED") blockers.push("Provisional бизнес-цель ещё не подтверждена владельцем");
+    if (state.product_focus?.decision_status !== "OWNER_SELECTED" || !state.product_focus.selected_offer_id) blockers.push("Product Focus revision ещё не подтверждена владельцем");
     if (
       state.context_state
       && String(context.direct.account ?? "") !== state.context_state.facts.direct.account
@@ -2617,6 +2803,11 @@ export class P0Application {
           context,
           timestamp,
         );
+        state.product_focus = await createProductFocusState({
+          artifacts: productFocusArtifacts(state.analytics_evidence_snapshot),
+          analyticsEvidenceSnapshotId: state.analytics_evidence_snapshot.snapshot_id,
+          selectedAt: timestamp,
+        });
       }
     } else if (action === "save_business_model") {
       if (!state.business_model) fail("P0_PREREQUISITE_MISSING", "Сначала исследуйте сайт.");
@@ -2632,6 +2823,9 @@ export class P0Application {
       }));
       const firstOwnerApproval = state.business_model.source !== "REAL_SITE_RESEARCH_PLUS_OWNER_CONFIRMATION";
       const materialModelChange = fields.some((field) => cleanText(String(state.business_model?.[field] ?? ""), 1_000) !== confirmedValues[field]);
+      const focusCandidateChanged = (["product", "audience", "value", "qualified_result"] as const)
+        .some((field) => cleanText(String(state.business_model?.[field] ?? ""), 1_000) !== confirmedValues[field]);
+      const selectedCatalogOffer = state.product_focus?.catalog.offers.find((offer) => offer.offer_id === state.product_focus?.selected_offer_id) ?? null;
       const modelApprovedAt = this.adapters.now();
       const context = sanitizeContext(await this.adapters.readContext());
       this.assertContextPreflight(context, modelApprovedAt);
@@ -2643,6 +2837,22 @@ export class P0Application {
       }
       const modelRecomputationRequired = !state.analytics_evidence_snapshot;
       if (firstOwnerApproval || materialModelChange || modelRecomputationRequired) {
+        if (focusCandidateChanged && selectedCatalogOffer) {
+          const selectedAxes = selectedCatalogOffer.material_axes;
+          state.business_model.offer_candidates = state.business_model.offer_candidates.map((candidate) => {
+            const belongsToSelectedCluster = cleanText(String(candidate.offer ?? ""), 1_000) === selectedAxes.offer
+              && cleanText(String(candidate.audience ?? ""), 1_000) === selectedAxes.audience
+              && cleanText(String(candidate.qualified_outcome ?? ""), 1_000) === selectedAxes.qualified_outcome
+              && cleanText(String(candidate.destination ?? ""), 1_000) === selectedAxes.destination;
+            return belongsToSelectedCluster ? {
+              ...candidate,
+              offer: confirmedValues.product,
+              audience: confirmedValues.audience,
+              value: confirmedValues.value,
+              qualified_outcome: confirmedValues.qualified_result,
+            } : candidate;
+          });
+        }
         for (const field of fields) {
           const fieldChanged = cleanText(String(state.business_model[field] ?? ""), 1_000) !== confirmedValues[field];
           state.business_model[field] = confirmedValues[field];
@@ -2663,6 +2873,39 @@ export class P0Application {
           context,
           modelApprovedAt,
         );
+        const focusArtifacts = productFocusArtifacts(state.analytics_evidence_snapshot);
+        if (state.product_focus) {
+          const editedCatalogOffer = focusArtifacts.catalog.offers.find((offer) =>
+            offer.material_axes.offer === confirmedValues.product
+            && offer.material_axes.audience === confirmedValues.audience
+            && offer.material_axes.qualified_outcome === confirmedValues.qualified_result,
+          );
+          const selectedOfferId = focusArtifacts.catalog.offers.some((offer) => offer.offer_id === state.product_focus?.selected_offer_id)
+            ? state.product_focus.selected_offer_id
+            : editedCatalogOffer?.offer_id ?? focusArtifacts.focus_opportunities.recommended_offer_id;
+          state.product_focus = selectedOfferId
+            ? await reviseProductFocusState({
+                previous: state.product_focus,
+                artifacts: focusArtifacts,
+                analyticsEvidenceSnapshotId: state.analytics_evidence_snapshot.snapshot_id,
+                selectedOfferId,
+                selectedAt: modelApprovedAt,
+                ownerEdited: focusCandidateChanged,
+              })
+            : await createProductFocusState({
+                artifacts: focusArtifacts,
+                analyticsEvidenceSnapshotId: state.analytics_evidence_snapshot.snapshot_id,
+                selectedAt: modelApprovedAt,
+                ownerConfirmed: true,
+              });
+        } else {
+          state.product_focus = await createProductFocusState({
+            artifacts: focusArtifacts,
+            analyticsEvidenceSnapshotId: state.analytics_evidence_snapshot.snapshot_id,
+            selectedAt: modelApprovedAt,
+            ownerConfirmed: true,
+          });
+        }
         state.strategy_questionnaire = await buildStrategyQuestionnaire({
           contextState: state.context_state as unknown as Record<string, unknown>,
           model: state.business_model as unknown as Record<string, unknown>,
@@ -2675,6 +2918,74 @@ export class P0Application {
           model: state.business_model as unknown as Record<string, unknown>,
           analyticsEvidence: state.analytics_evidence_snapshot as unknown as Record<string, unknown>,
           generatedAt: modelApprovedAt,
+        });
+      }
+    } else if (action === "select_focus") {
+      if (payload.confirmation !== "SELECT_PRODUCT_FOCUS") {
+        fail("P0_FOCUS_CONFIRMATION_REQUIRED", "Нужно явно подтвердить exact offer из текущего каталога.");
+      }
+      if (!state.business_model || !state.product_focus || !state.site_analysis || !state.context_state) {
+        fail("P0_PREREQUISITE_MISSING", "Product Focus требует persisted Context, Model и offer catalog.");
+      }
+      const focusOfferId = requiredInput(payload.focus_offer_id, "Рекламный фокус", 255);
+      const selectedOffer = state.product_focus.catalog.offers.find((offer) => offer.offer_id === focusOfferId);
+      if (!selectedOffer) fail("P0_FOCUS_NOT_FOUND", "Выбранный фокус отсутствует в current materially distinct offer catalog.");
+      const selectedCard = state.product_focus.focus_opportunities.cards.find((card) => card.offer_id === focusOfferId);
+      if (!selectedCard || selectedCard.launch_readiness.status === "BLOCKED") {
+        fail("P0_FOCUS_BLOCKED", "Заблокированный вариант нельзя выбрать рекламным фокусом до устранения причин.");
+      }
+      const selectedAt = this.adapters.now();
+      const context = sanitizeContext(await this.adapters.readContext());
+      this.assertContextPreflight(context, selectedAt);
+      this.assertPersistedBindings(state, context);
+      const focusChanged = state.product_focus.selected_offer_id !== focusOfferId;
+      if (focusChanged && (state.strategy || state.recommendation_set || state.draft || state.shortlist || state.package_review || state.human_decision_gate)) {
+        state.last_cascade = cascadeRecord(state, "MODEL", selectedAt, ["campaign_strategy", "recommendation_set", "campaign_drafts", "shortlist", "confirmation"]);
+        await invalidateDecisionAuthority(state, "MODEL_MATERIAL_CHANGE", "Owner selected a materially different Product Focus revision.", selectedAt);
+        invalidateStrategyDownstream(state);
+      }
+      const reference = selectedOffer.evidence_refs[0];
+      const selectedValues = {
+        product: selectedOffer.material_axes.offer,
+        audience: selectedOffer.material_axes.audience || state.business_model.audience,
+        value: selectedOffer.value_proposition || state.business_model.value,
+        qualified_result: selectedOffer.material_axes.qualified_outcome || state.business_model.qualified_result,
+      };
+      for (const [field, value] of Object.entries(selectedValues)) {
+        state.business_model[field as keyof typeof selectedValues] = value;
+        state.business_model.field_evidence[field] = {
+          ...state.business_model.field_evidence[field],
+          confidence: "OWNER_CONFIRMED",
+          source_url: reference?.source_url ?? state.business_model.field_evidence[field]?.source_url ?? "",
+          quote: reference?.quote ?? state.business_model.field_evidence[field]?.quote ?? "",
+          owner_confirmed: true,
+          owner_confirmed_at: selectedAt,
+          owner_edited: focusChanged || state.business_model.field_evidence[field]?.owner_edited === true,
+        };
+      }
+      state.analytics_evidence_snapshot = await this.buildModelEvidence(
+        state.site_analysis,
+        state.business_model,
+        context,
+        selectedAt,
+      );
+      const focusArtifacts = productFocusArtifacts(state.analytics_evidence_snapshot);
+      if (!focusArtifacts.catalog.offers.some((offer) => offer.offer_id === focusOfferId)) {
+        fail("P0_FOCUS_LINEAGE_STALE", "Selected focus material axes changed while rebuilding evidence.");
+      }
+      state.product_focus = await reviseProductFocusState({
+        previous: state.product_focus,
+        artifacts: focusArtifacts,
+        analyticsEvidenceSnapshotId: state.analytics_evidence_snapshot.snapshot_id,
+        selectedOfferId: focusOfferId,
+        selectedAt,
+      });
+      if (state.business_model.source === "REAL_SITE_RESEARCH_PLUS_OWNER_CONFIRMATION") {
+        state.strategy_questionnaire = await buildStrategyQuestionnaire({
+          contextState: state.context_state as unknown as Record<string, unknown>,
+          model: state.business_model as unknown as Record<string, unknown>,
+          analyticsEvidence: state.analytics_evidence_snapshot as unknown as Record<string, unknown>,
+          generatedAt: selectedAt,
         });
       }
     } else if (action === "approve_strategy") {

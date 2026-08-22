@@ -420,6 +420,89 @@ test("authoritative application collects market evidence only for a Model revisi
   assert.equal(result.state.recommendation_set.drafts.every((draft) => draft.market_evidence.frequency.snapshot_batch_id === result.state.analytics_evidence_snapshot.market_evidence.snapshot_batch_id), true);
 });
 
+test("application persists focus cards and an owner focus edit revises focus lineage and invalidates downstream artifacts", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "mox-p0-product-focus-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new JsonDurableStore(join(directory, "state.json"));
+  const base = adapters();
+  const application = new P0Application({
+    store,
+    adapters: adapters({
+      async researchSite(url) {
+        const site = await base.researchSite(url);
+        site.pages = [
+          {
+            url: "https://owner.example/exhibit",
+            title: "Участие со стендом",
+            description: "Промышленная выставка помогает производителям найти покупателей. Пакет от 500 000 ₽.",
+            headings: ["Стать участником выставки"],
+            forms_detected: 1,
+            text_excerpt: "Руководители промышленных компаний могут оставить заявку на участие со стендом.",
+          },
+          {
+            url: "https://owner.example/partners",
+            title: "Партнёрская программа",
+            description: "Партнёрский пакет для поставщиков оборудования на индивидуальных условиях.",
+            headings: ["Стать партнёром выставки"],
+            forms_detected: 1,
+            text_excerpt: "Поставщики оборудования могут отправить заявку на партнёрство.",
+          },
+        ];
+        site.url = site.pages[0].url;
+        site.title = site.pages[0].title;
+        site.description = site.pages[0].description;
+        site.headings = site.pages[0].headings;
+        site.forms_detected = site.pages[0].forms_detected;
+        site.text_excerpt = site.pages[0].text_excerpt;
+        site.research.pages_analyzed = 2;
+        return site;
+      },
+      async readMarketEvidence() {
+        const input = await marketEvidenceInput();
+        input.demand_clusters.push({
+          cluster_id: "cluster-partnership",
+          semantic_key: { product: "партнёрский пакет", need: "поставщики", intent: "commercial", offer: "партнёрство" },
+        });
+        return input;
+      },
+    }),
+  });
+
+  let result = await application.command("owner", { action: "analyze_site", expected_revision: 0, url: "https://owner.example/exhibit" });
+  result = await application.command("owner", { action: "confirm_context_goal", expected_revision: result.revision, confirmation: "CONFIRM_CONTEXT_GOAL", goal: result.state.context_state.provisional_business_goal.value });
+  assert.equal(result.state.product_focus.catalog.offers.length, 2);
+  assert.equal(result.state.product_focus.focus_opportunities.cards.length, 2);
+  assert.ok(result.state.product_focus.focus_opportunities.cards.every((card) => card.market_opportunity && card.launch_readiness && card.evidence_coverage));
+  assert.equal(result.state.product_focus.analytics_evidence_snapshot_id, result.state.analytics_evidence_snapshot.snapshot_id);
+  assert.equal(result.state.analytics_evidence_snapshot.product_catalog.catalog_id, result.state.product_focus.catalog.catalog_id);
+
+  result = await application.command("owner", { action: "save_business_model", expected_revision: result.revision, value: ownerModel(result.state) });
+  result = await approveStrategy(application, result);
+  const previousFocus = result.state.product_focus;
+  const alternative = previousFocus.catalog.offers.find((offer) => offer.offer_id !== previousFocus.selected_offer_id);
+  assert.ok(alternative);
+
+  result = await application.command("owner", {
+    action: "select_focus",
+    expected_revision: result.revision,
+    confirmation: "SELECT_PRODUCT_FOCUS",
+    focus_offer_id: alternative.offer_id,
+  });
+
+  assert.equal(result.state.product_focus.selected_offer_id, alternative.offer_id);
+  assert.equal(result.state.product_focus.selection_source, "OWNER_EDITED");
+  assert.equal(result.state.product_focus.previous_focus_revision_id, previousFocus.focus_revision_id);
+  assert.notEqual(result.state.product_focus.focus_revision_id, previousFocus.focus_revision_id);
+  assert.equal(result.state.business_model.product, alternative.material_axes.offer);
+  assert.equal(result.state.strategy, null);
+  assert.equal(result.state.recommendation_set, null);
+  assert.equal(result.state.draft, null);
+  assert.equal(result.state.shortlist, null);
+  assert.equal(result.state.last_cascade.trigger, "MODEL");
+  assert.equal(result.state.last_decision_invalidation.reason_code, "MODEL_MATERIAL_CHANGE");
+  assert.equal(result.write_readiness.ready, false);
+});
+
 test("authoritative application persists LandingAdvisoryRun while every publish decision surface remains byte-identical", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "mox-p0-landing-isolation-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -979,6 +1062,34 @@ test("rejects a corrupted persisted evidence snapshot before query reuse or down
   );
   assert.equal((await store.load("owner")).revision, row.revision);
   assert.equal(JSON.parse((await store.load("owner")).value_json).analytics_evidence_snapshot.claims[0].value, "forged without rehash");
+});
+
+test("rejects same-schema Product Focus omission or content drift before query reuse", async (t) => {
+  const { directory, store, application } = await fixture();
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  let result = await application.command("owner", { action: "analyze_site", expected_revision: 0, url: "https://owner.example/" });
+  await application.command("owner", {
+    action: "confirm_context_goal",
+    expected_revision: result.revision,
+    confirmation: "CONFIRM_CONTEXT_GOAL",
+    goal: result.state.context_state.provisional_business_goal.value,
+  });
+  const row = await store.load("owner");
+  const drifted = JSON.parse(row.value_json);
+  drifted.product_focus.selected_offer_id = "offer:forged";
+  await store.seed("owner", { ...row, value_json: JSON.stringify(drifted) });
+  await assert.rejects(
+    new P0Application({ store, adapters: adapters() }).query("owner"),
+    (error) => error instanceof P0ApplicationError && error.code === "P0_MIGRATION_LINEAGE_INVALID" && /Product Focus revision hash/u.test(error.message),
+  );
+
+  const missing = JSON.parse(row.value_json);
+  delete missing.product_focus;
+  await store.seed("owner", { ...row, value_json: JSON.stringify(missing) });
+  await assert.rejects(
+    new P0Application({ store, adapters: adapters() }).query("owner"),
+    (error) => error instanceof P0ApplicationError && error.code === "P0_MIGRATION_LINEAGE_INVALID" && /same-schema document field product_focus/u.test(error.message),
+  );
 });
 
 test("client context and persisted Context facts exclude injected credentials", async (t) => {
@@ -3321,7 +3432,26 @@ test("authoritative application owns the agent objective, typed tool schema, per
     confirmation: "CONFIRM_CONTEXT_GOAL",
     goal: result.state.context_state.provisional_business_goal.value,
   });
-  assert.equal(result.state.business_model.research.agent, "DETERMINISTIC_EVIDENCE_EXTRACTOR_V3");
+  assert.equal(result.state.business_model.research.agent, "DETERMINISTIC_EVIDENCE_EXTRACTOR_V4");
+  assert.equal(result.state.product_focus.decision_status, "HUMAN_DECISION_REQUIRED");
+  const focusDecisionContract = await value.application.agentContract("owner", "ASSESS_ANALYTICS_READINESS");
+  const focusDecision = await value.application.evaluateAgentObjective({
+    owner_key: "owner",
+    run_id: "agent-run-1",
+    objective: focusDecisionContract.objective,
+    authority: focusDecisionContract.authority,
+    observation_count: 0,
+    last_observation: null,
+  });
+  assert.equal(focusDecision.status, "STOP");
+  assert.equal(focusDecision.stop_reason.code, "MATERIAL_DECISION_REQUIRED");
+
+  result = await value.application.command("owner", {
+    action: "save_business_model",
+    expected_revision: result.revision,
+    value: ownerModel(result.state),
+  });
+  assert.equal(result.state.product_focus.decision_status, "OWNER_SELECTED");
   const completedContract = await value.application.agentContract("owner", "ASSESS_ANALYTICS_READINESS");
   assert.equal(completedContract.authority.application_revision, result.revision);
   const completed = await value.application.evaluateAgentObjective({

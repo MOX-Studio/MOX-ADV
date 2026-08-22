@@ -8,6 +8,10 @@ import {
   buildAnalyticsEvidence,
   verifyAnalyticsEvidenceSnapshot,
 } from "../lib/analytics-evidence.ts";
+import {
+  FOCUS_OPPORTUNITY_SCHEMA,
+  OFFER_CATALOG_SCHEMA,
+} from "../lib/business-model.ts";
 import { collectOfficialWordstatBatch } from "../lib/market-evidence.ts";
 
 function fixture({ sampled = false, sensitive = false, lag = 0, missing = [], competitors = [] } = {}) {
@@ -171,9 +175,11 @@ test("builds a deeply immutable content-addressed snapshot with stable IDs, comp
     "claims_sha256",
     "conflicts_sha256",
     "evidence_sha256",
+    "focus_opportunities_sha256",
     "gaps_sha256",
     "input_root_sha256",
     "market_evidence_sha256",
+    "product_catalog_sha256",
     "sources_sha256",
   ]);
   assert.ok(first.sources.every((source) => /^sha256:[a-f0-9]{64}$/.test(source.manifest_hash)));
@@ -191,6 +197,51 @@ test("builds a deeply immutable content-addressed snapshot with stable IDs, comp
     metrika_counter_id: "123",
     metrika_goal_id: "456",
   });
+});
+
+test("persists a materially distinct offer catalog and separate focus dimensions inside the immutable evidence snapshot", async () => {
+  const input = fixture();
+  input.model.offer_candidates = [
+    {
+      label: "Участие со стендом",
+      offer: "Участие со стендом в промышленной выставке",
+      audience: "Руководители компаний",
+      value: "Найти партнёров",
+      qualified_outcome: "Заявка на участие",
+      economics: "Пакет от 500 000 ₽",
+      destination: "https://owner.example/exhibit",
+      current_promotion: "NOT_OBSERVED",
+      unresolved_facts: [],
+      evidence_refs: [{ source_url: "https://owner.example/exhibit", quote: "Участие со стендом" }],
+    },
+    {
+      label: "Партнёрская программа",
+      offer: "Партнёрский пакет выставки",
+      audience: "Поставщики оборудования",
+      value: "Доступ к партнёрам",
+      qualified_outcome: "Заявка на партнёрство",
+      economics: "Индивидуальные условия",
+      destination: "https://owner.example/partners",
+      current_promotion: "UNKNOWN",
+      unresolved_facts: ["Текущий рекламный охват не подтверждён"],
+      evidence_refs: [{ source_url: "https://owner.example/partners", quote: "Партнёрский пакет выставки" }],
+    },
+  ];
+
+  const result = await buildAnalyticsEvidence(input);
+  assert.equal(result.product_catalog.schema_version, OFFER_CATALOG_SCHEMA);
+  assert.equal(result.product_catalog.offers.length, 2);
+  assert.equal(result.focus_opportunities.schema_version, FOCUS_OPPORTUNITY_SCHEMA);
+  assert.equal(result.focus_opportunities.cards.length, 2);
+  assert.ok(result.focus_opportunities.cards.every((card) => card.market_opportunity && card.launch_readiness && card.evidence_coverage));
+  assert.ok(result.claims.filter((claim) => claim.predicate === "material_offer").length >= 2);
+  assert.match(result.hashes.product_catalog_sha256, /^sha256:[a-f0-9]{64}$/);
+  assert.match(result.hashes.focus_opportunities_sha256, /^sha256:[a-f0-9]{64}$/);
+  assert.equal(await verifyAnalyticsEvidenceSnapshot(result), true);
+
+  const corrupted = structuredClone(result);
+  corrupted.focus_opportunities.cards[0].evidence_coverage.percent = 100;
+  assert.equal(await verifyAnalyticsEvidenceSnapshot(corrupted), false);
 });
 
 test("content IDs are insensitive to object key order and sensitive to normalized value, locator and version changes", async () => {

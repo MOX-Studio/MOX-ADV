@@ -11,6 +11,7 @@ import {
 import { weeklyBudgetValidationMessage } from "../lib/direct-limits";
 import { landingAdvisoryPriorities } from "../lib/landing-advisory";
 import { MarketEvidenceDisclosure } from "./MarketEvidenceDisclosure";
+import { ProductFocusDisclosure } from "./ProductFocusDisclosure";
 import {
   CampaignDraftCard,
   DraftEditFeedback,
@@ -379,10 +380,17 @@ function LandingAdvisoryPanel({ run }: { run: Record<string, any> | null }) {
   </section>;
 }
 
-function ModelStep({ payload, apply, back }: { payload: Payload; apply: (action: string, value?: Record<string, unknown>) => Promise<void>; back: () => void }) {
+function ModelStep({ payload, apply, back }: { payload: Payload; apply: (action: string, value?: Record<string, unknown>, extra?: Record<string, unknown>) => Promise<void>; back: () => void }) {
   const model = payload.state.business_model || {};
   const research = model.research || {};
+  const productFocus = payload.state.product_focus || null;
   const analyticsEvidence = payload.state.analytics_evidence_snapshot || null;
+  function selectFocus(focusOfferId: string) {
+    void apply("select_focus", undefined, {
+      confirmation: "SELECT_PRODUCT_FOCUS",
+      focus_offer_id: focusOfferId,
+    });
+  }
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
@@ -390,6 +398,7 @@ function ModelStep({ payload, apply, back }: { payload: Payload; apply: (action:
   }
   return <>
     <ArtifactHead eyebrow="Шаг 2 · проверяемая модель данных" title="Собрана базовая модель бизнеса" copy="Это проверяемая сводка из разрешённых источников, а не нейросетевой вывод. Исправьте только неверный факт." badge="ИЗВЛЕЧЁННЫЕ ДАННЫЕ" />
+    {productFocus && <ProductFocusDisclosure focus={productFocus} onSelect={selectFocus} />}
     <BusinessModelSummary model={model} />
     <LandingAdvisoryPanel run={payload.state.landing_advisory_run || null} />
     {analyticsEvidence && <AnalyticsEvidencePanel evidence={analyticsEvidence} />}
