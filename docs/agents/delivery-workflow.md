@@ -15,7 +15,7 @@ Wayfinder → to-spec → to-tickets → implement → code-review
 2. **to-spec** collapses the cleared map into one implementation-ready spec issue.
 3. **to-tickets** turns the accepted spec into approved tracer-bullet implementation tickets with native blocking edges.
 4. **implement** builds one frontier ticket in one fresh session, drives TDD at the agreed seams, validates the result, runs code review, and commits to the current branch.
-5. After acceptance criteria are verified, close the implemented ticket manually so its dependants enter the frontier.
+5. After acceptance criteria are verified and the exact ticket commit succeeds, `/ready` takeover closes the implemented ticket automatically so its dependants enter the frontier. A direct `implement` run outside `/ready` still requires explicit closure.
 
 Run `to-spec` and `to-tickets` in the same context window when practical so a large spec does not need to be fetched again.
 
@@ -51,7 +51,7 @@ Implementation tickets reference the spec as their parent. They are not children
 
 Invoke `implement` for one unblocked implementation ticket in a fresh session. It consumes decisions; it does not reopen product discovery or reslice the backlog. If the ticket is too large for one context window, return it to `to-tickets` for a smaller vertical breakdown.
 
-`implement` works on the current branch. In this repository that is `main` unless the user explicitly requests a branch. After tests, review, and commit, reconcile the acceptance criteria and close the ticket manually.
+`implement` works on the current branch. In this repository that is `main` unless the user explicitly requests a branch. After tests, review, and an exact-reference commit, `/ready` takeover reconciles and closes the ticket automatically; a direct `implement` invocation closes it explicitly after the same checks.
 
 ## Short paths
 
