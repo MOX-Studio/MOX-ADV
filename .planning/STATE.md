@@ -3,95 +3,81 @@ gsd_state_version: 1.0
 current_phase: 1
 current_phase_name: Data Collection and Analytics
 status: planning
-stopped_at: Phase 1 context gathered
-last_updated: "2026-08-22T14:08:04.881Z"
-last_activity: 2026-08-22
-last_activity_desc: Reconciled ADR-0001, current Yandex/OSS research, and the owner-defined P0 pipeline into four business submodules and viability-based MVP acceptance.
-state_head: b61550708ae47c21be16987073ca1747261f5c9d
+stopped_at: P0 refinement roadmap completed; awaiting owner review and GitHub reconciliation
+last_updated: "2026-08-22"
 progress:
   total_phases: 6
   completed_phases: 0
-  total_plans: 0
+  total_plans: 20
   completed_plans: 0
   percent: 0
 ---
 
 # Project State
 
-## Project Reference
+## Current focus
 
-See: `.planning/PROJECT.md` (updated 2026-08-22)
+Finish only P0 under `sites/p0-production/` through four business submodules:
 
-**Core value:** The owner receives a clear business recommendation and only the decisions that truly require them, while the agent completes all safe research, preparation, validation, and execution work inside an explicit authority boundary.
-**Current focus:** Phase 1 — Data Collection and Analytics
+1. Data Collection and Analytics;
+2. Questionnaire and Formalization;
+3. Marketing Strategy Development;
+4. Marketing Strategy Realization.
 
-## Current Position
+Then run deterministic product MVP acceptance and, only after explicit authority, one live official-API acceptance.
 
-Phase: 1 of 6 (Data Collection and Analytics)
-Plan: 0 of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-08-22 — Reconciled ADR-0001, current Yandex/OSS research, and the owner-defined P0 pipeline into four business submodules and viability-based MVP acceptance.
+## Current position
 
-Progress: [░░░░░░░░░░] 0%
+- **Phase:** 1 of 6 — Data Collection and Analytics
+- **Plan:** 0 of 7 in Phase 1
+- **Status:** roadmap refined; ready for owner review, then classical delivery handoff
+- **Progress:** 0/20 vertical plans
 
-## Performance Metrics
+## Accepted scope decisions
 
-**Velocity:**
+- Current milestone is P0 only.
+- P0 adds one bounded neural agent around the existing deterministic application authority.
+- Campaign goal appears early as an agent recommendation and remains owner-editable.
+- Multiple offers produce focus opportunity cards and one recommended editable focus.
+- Competitor performance that cannot be observed remains unknown.
+- Canonical Strategy stays complete; owner interaction becomes adaptive and asks only material unresolved questions.
+- Fan-out produces a finite editable canvas; P0 shortlist uses pre-launch viability, not post-launch effectiveness.
+- Current Direct realization uses an account capability matrix and current eligible combinatorial/`RESPONSIVE_AD` projection.
+- External landing analysis and correction planning are in scope; landing development/modification is deferred.
+- Product MVP is accepted deterministically with at least one editable `VIABLE` Draft and complete current projection.
+- Live creation is separately authority-gated and every campaign remains `SUSPENDED`.
 
-- Total plans completed: 0
-- Average duration: N/A
-- Total execution time: 0.0 hours
+## Explicitly deferred
 
-**By Phase:**
+- P1 campaign management, optimization and actual winner selection.
+- P2 monitoring and intervention.
+- P3 SEO text changes, article publishing and paid placement services.
+- External landing development.
+- Dashboard integration.
+- VK/other channels.
+- Serving, impressions and spend.
 
-| Phase | Plans | Total | Avg/Plan |
-|-------|-------|-------|----------|
-| - | - | - | - |
+## Planning artifacts
 
-**Recent Trend:**
+- Scope and baseline: `.planning/PROJECT.md`
+- Requirements and traceability: `.planning/REQUIREMENTS.md`
+- Six-phase / twenty-slice plan: `.planning/ROADMAP.md`
+- Phase 1 decisions and seams: `.planning/phases/01-data-collection-and-analytics/01-CONTEXT.md`
+- Gap analysis and sources: `docs/research/p0-agent-first-completion-gap-analysis.md`
 
-- Last 5 plans: none
-- Trend: N/A
+## Next actions
 
-## Accumulated Context
+1. Obtain owner verdict on the refined scope and roadmap.
+2. Reconcile the accepted plan with GitHub spec #100 and the conflicting #116 → #117 order; do not start Dashboard integration as the current frontier.
+3. Publish approved vertical implementation tickets through `to-tickets` rather than maintaining a second backlog.
+4. Execute one unblocked ticket per fresh session.
 
-### Decisions
+## Blockers and concerns
 
-Decisions are logged in `PROJECT.md` and `.planning/intel/decisions.md`.
+- The current production `TEXT_AD` substrate is not the intended current acceptance profile.
+- Public sources cannot prove competitor spend/conversions/profitability.
+- Viability is pre-launch readiness, not actual effectiveness.
+- Production credentials and real writes remain unavailable until Phase 5 passes and the owner grants exact live authority.
 
-- ADR-0001: Agent owns all permitted, bounded, observable safe work inside the active Mandate.
-- Current milestone: complete only `sites/p0-production/`; do not enter the next campaign-management module.
-- P0 has four business submodules: Data Collection and Analytics; Questionnaire and Formalization; Marketing Strategy Development; Marketing Strategy Realization.
-- Add one provider-neutral neural agent around the deterministic P0 authority rather than presenting heuristic synthesis as an agent.
-- Campaign goal is early, agent-recommended, owner-editable, and may be revised only with evidence.
-- Multiple products/services require focus opportunity cards and a recommended editable focus.
-- Owner-facing UI contains no technical identities or diagnostics; those remain internal.
-- Destination analysis distinguishes an existing site page, existing landing, missing future landing, and invalid target; current P0 does not develop or modify the external site.
-- Pre-launch viability is not actual effectiveness; deterministic MVP acceptance requires at least one editable `VIABLE` Draft.
-- Post-launch winner selection, external landing development, Dashboard integration, and P1–P3 are deferred.
-
-### Pending Todos
-
-- Run `/gsd:plan-phase 1` only after the onboarding planning commit and summary are accepted.
-
-### Blockers/Concerns
-
-- The current `TEXT_AD` production substrate conflicts with current combinatorial `RESPONSIVE_AD` creation guidance and must be replaced before live acceptance.
-- Competitor success metrics are not available through official Direct APIs; the product must show observed public patterns and honest limitations, never inferred spend/conversions/profit.
-- Current viability policy is deterministic but uncalibrated and excludes destination advisory; Phase 4 must add deterministic destination readiness without turning subjective CRO hypotheses into score points.
-- Live provider acceptance remains authority-gated and cannot run until deterministic Phase 5 passes.
-
-## Deferred Items
-
-| Category | Item | Status | Deferred At | Milestone |
-|----------|------|--------|-------------|-----------|
-| Destination | Agent develops or changes an external landing | Deferred | Project initialization | Future capability |
-| Next module | Post-launch winner selection and campaign optimization | Deferred | Project initialization | Next campaign-management module |
-| Integration | Replace the P0 Test Scenario in Dashboard | Deferred | Project initialization | After P0 acceptance |
-| Other modules | P2 monitoring and P3 SEO implementation | Deferred | Project initialization | Later milestones |
-
-## Session Continuity
-
-Last session: 2026-08-22T14:08:04.875Z
-Stopped at: Phase 1 context gathered
-Resume file: /Users/sviridov/Documents/MOX-ADV/.planning/phases/01-data-collection-and-analytics/01-CONTEXT.md
+---
+*Updated after refinement of the latest local P0 plan against the owner’s module requirements.*

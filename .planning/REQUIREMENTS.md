@@ -1,161 +1,108 @@
 # Requirements: MOX-ADV P0 Completion
 
-**Defined:** 2026-08-22
-**Core Value:** The owner receives a clear business recommendation and only the decisions that truly require them, while the agent completes all safe research, preparation, validation, and execution work inside an explicit authority boundary.
+**Scope:** только `P0 — Стратегия и создание рекламных кампаний`
+**Source of truth for scope:** `.planning/PROJECT.md`
+**Core value:** владелец получает подготовленную агентом бизнес-рекомендацию и принимает только решения, которые действительно требуют его authority или знания.
 
-## v1 Requirements
+## 1. Trusted neural agent
 
-### Business-First Experience
+- [ ] **AGT-01**: P0 использует один реальный provider-neutral neural model loop `model → typed tool → validated observation`, а не выдаёт deterministic extractors за AI-агента.
+- [ ] **AGT-02**: Модель планирует, интерпретирует evidence и предлагает действия; только P0 application contract авторизует tools, проверяет schemas, сохраняет state, выполняет side effects и объявляет final truth.
+- [ ] **AGT-03**: Агент получает узкие typed tools для разрешённой работы P0 и не получает произвольные HTTP, browser, SQL, shell, provider или site-write tools.
+- [ ] **AGT-04**: Objective, checkpoints, observations, source references, budgets и stop reasons сохраняются durable; безопасные reads, report queues и moderation polling продолжаются после restart/compaction.
+- [ ] **AGT-05**: Public pages и tool output считаются untrusted evidence и не могут менять objective, policy, authority или tool permissions.
+- [ ] **AGT-06**: Model/tool/time/cost/quota budgets ограничены; исчерпание бюджета приводит к честному bounded stop, а не к скрытому неполному результату.
 
-- [ ] **UX-01**: Every primary P0 screen communicates what the agent learned, what it recommends, why it matters, whether the owner must decide, what happens next, and the observed business outcome.
-- [ ] **UX-02**: Technical IDs, hashes, revisions, schemas, API methods, provider payloads, evidence locators, internal codes, journals, and tool versions are absent from owner-facing UI and retained only in internal audit/debug artifacts.
-- [ ] **UX-03**: The owner can complete the five-step path at 1920×1080 without implementation terminology, horizontal overflow, console/page errors, or inaccessible primary controls.
-- [ ] **UX-04**: Provider and validation failures are translated into business impact, what the agent already attempted, and the next safe action without exposing raw technical errors.
-- [ ] **UX-05**: The agent-recommended campaign goal is one of the first owner-visible fields, remains directly editable, and is revised only with an evidence-backed explanation when deeper analytics changes the recommendation.
+## 2. Data collection and analytics
 
-### Trusted Neural Agent
+- [ ] **ANL-01**: Агент строит ограниченный каталог materially distinct products/services/offers с audience, qualified outcome, economics, destination, current promotion и unresolved facts.
+- [ ] **ANL-02**: При нескольких значимых предложениях агент формирует comparable focus cards, раздельно показывая market opportunity, launch readiness и evidence coverage, рекомендует редактируемый initial focus и сохраняет альтернативы/blocked options с причинами.
+- [ ] **ANL-03**: Агент автономно собирает bounded public competitor set и наблюдает товары, предложения, сообщения, ad-visible patterns и destinations с source/time/scope/limitations; чужие spend, CPC, conversions, CPA, ROI и profitability остаются unknown.
+- [ ] **ANL-04**: P0 выполняет полный релевантный read-only Direct audit через официальные paginated APIs: campaigns, groups, criteria/keywords/autotargeting, ads/assets, settings/restrictions и asynchronous reports/search queries.
+- [ ] **ANL-05**: Агент готовит bounded multi-seed Wordstat plan по продуктам, проблемам, high-intent, brand/non-brand, exclusions, region, device и seasonality; official top/dynamics/regions evidence сохраняет точный scope.
+- [ ] **ANL-06**: Frequency хранится как source-scoped observation/lower bound; missing rows, quota и provider failures означают `UNAVAILABLE`, а не нулевой спрос.
+- [ ] **ANL-07**: Comparable cost candidates выводятся из Direct audit и квалифицируются deterministic-кодом по phrase, geography, placement, strategy и season; provider и first-party ranges не смешиваются и содержат source/date/currency/VAT/sample size.
+- [ ] **ANL-08**: Auction assumptions оформляются отдельными typed hypotheses с evidence, assumptions, uncertainty, affected Drafts и verification path и не выдаются за provider facts.
+- [ ] **ANL-09**: Metrika readiness проверяет exact counter/site binding, funnel goals, primary optimization goal semantics, recent reaches, value/revenue readiness, attribution, tracking, sampling/privacy/lag и optional offline-conversion readiness.
+- [ ] **ANL-10**: Для каждого focus определяется exact destination: existing site page, existing landing, `FUTURE_LANDING_REQUIRED` или invalid/unrelated target.
+- [ ] **ANL-11**: Existing destination получает deterministic checks и отдельно labelled neural hypotheses по offer/message match, CTA/action path, forms, measurement, access, performance, accessibility, prominence, hierarchy и readability; результат содержит не более трёх приоритетных corrections.
+- [ ] **ANL-12**: Первый активный curated P0 playbook содержит только принятые official-source правила с applicability, source, review/expiry, contradiction handling и eval fixture.
+- [ ] **ANL-13**: P0 применяет active playbook, но не повышает собственные pre-launch observations, edits или moderation outcomes до новых execution rules автоматически.
 
-- [ ] **AGT-01**: P0 uses a real provider-neutral neural model runtime and one bounded model/tool/observation loop rather than presenting deterministic heuristics as the agent.
-- [ ] **AGT-02**: The model may plan, interpret evidence, prepare questions, and propose actions, but only the P0 application may validate schemas, authorize tools, persist state, perform side effects, reconcile outcomes, and declare final truth.
-- [ ] **AGT-03**: The agent has narrow typed domain tools for permitted P0 work and no arbitrary HTTP, browser, SQL, shell, provider, or site-write tool.
-- [ ] **AGT-04**: Agent runs persist objectives, checkpoints, observations, source references, stop reasons, and bounded model/tool/time/quota budgets so they can resume safely after compaction, provider queues, or process restarts.
-- [ ] **AGT-05**: A versioned active P0 playbook supplies approved current rules with applicability, source, review/expiry, contradiction handling, and eval coverage; model observations cannot silently promote themselves into execution rules.
-- [ ] **AGT-06**: Public pages and tool output are treated as untrusted evidence and cannot grant authority, alter policy, override the objective, or instruct the harness to call another tool.
+## 3. Questionnaire and formalization
 
-### Adaptive Authority and Dialogue
+- [ ] **FRM-01**: Рекомендованная агентом цель кампании находится среди первых owner-visible полей, объясняется evidence и остаётся напрямую редактируемой.
+- [ ] **FRM-02**: Каноническая Strategy schema остаётся полной и стабильной, но interaction является adaptive: агент заполняет discoverable facts и задаёт по одному вопросу только по unresolved material business decision.
+- [ ] **FRM-03**: Prepared question содержит recommendation, evidence, confidence, alternatives и consequences; blank questionnaire не используется как способ сбора discoverable facts.
+- [ ] **FRM-04**: Владелец может изменить goal, focus, offer, audience, qualified result, exclusions, geography, period, destination, budget, target result cost и core message до Strategy approval.
+- [ ] **FRM-05**: Material Context/Model edit инвалидирует зависимые Strategy/Drafts; material Strategy edit создаёт новую immutable revision, пересчитывает Recommendation Set и очищает shortlist; material Draft edit меняет только Draft revision и зависимые score/package artifacts.
+- [ ] **FRM-06**: Один Strategy Human Decision Gate фиксирует complete business intent; routine facts и безопасные reads не требуют отдельного approval.
+- [ ] **FRM-07**: Owner-facing UI показывает findings, recommendation, business consequence, required decision, next action и outcome без technical identities, raw diagnostics и implementation terminology.
 
-- [ ] **AUTH-01**: The agent researches permitted sources and fills every supportable Strategy value before asking the owner; discoverable facts are not required owner fields.
-- [ ] **AUTH-02**: P0 asks one prepared question at a time only for an authority change, materially irreversible consequence, Mandate excess, or unresolved Material Uncertainty that can materially change the package.
-- [ ] **AUTH-03**: Every Human Decision Gate names the decision owner and contains the agent’s recommendation, evidence, confidence, alternatives, and consequences rather than a blank questionnaire.
-- [ ] **AUTH-04**: The complete canonical Strategy remains revisioned even though the owner sees only unresolved material decisions and the resulting business summary.
+## 4. Marketing strategy development
 
-### Product and Service Focus
+- [ ] **STR-01**: Агент формирует одну полную canonical Campaign Strategy с focus, business outcome, offer, audience, qualified result, exclusions, demand clusters, positioning, placements, geography, schedule/seasonality, budget/economics, attribution, measurement и destination.
+- [ ] **STR-02**: Каждое material Strategy value имеет internal trace к approved owner input или Analytics Evidence Snapshot; unsupported values явно отмечены.
+- [ ] **STR-03**: Выбор objective, bidding approach и Search/Network/Maps/other eligible placements основан на measurement quality, conversion volume, economics, attribution, budget, demand, seasonality, destination readiness и exact account capabilities.
+- [ ] **STR-04**: Sparse conversion/cost evidence создаёт explicit fallback strategy или Material Uncertainty Gate, а не fabricated certainty и не неподходящую conversion strategy.
+- [ ] **STR-05**: Competitor, demand, auction, creative, targeting и placement hypotheses типизированы и содержат mechanism, evidence, assumptions, uncertainty, affected Drafts и verification path.
+- [ ] **STR-06**: P0 не использует post-launch outcomes и не заявляет actual effectiveness или winner до serving; это граница следующего модуля.
 
-- [ ] **FOC-01**: P0 builds a complete bounded inventory of materially distinct products/services, offers, audiences, qualified outcomes, destinations, current promotion, and unresolved facts before choosing what to advertise.
-- [ ] **FOC-02**: When several products/services are eligible, the agent produces comparable focus opportunity cards using business priority, demand, economics, measurement, destination, competition, seasonality, and current Direct evidence, recommends an initial focus, and lets the owner edit that material choice.
+## 5. Marketing strategy realization
 
-### Evidence and Measurement Completeness
+- [ ] **CAM-01**: Approved Strategy revision детерминированно создаёт finite Recommendation Set materially distinct Campaign Drafts; каждый candidate получает terminal visible/hidden/blocked disposition.
+- [ ] **CAM-02**: Long-tail demand группируется по общим goal, economics, geography, destination, message и management; отдельный Draft появляется только при material delivery difference и evidence-backed capacity.
+- [ ] **CAM-03**: Каждый Draft представляет ровно одну будущую реальную campaign и содержит полный supported publish projection без silent subset.
+- [ ] **CAM-04**: Exact account capability matrix классифицирует Direct features как supported, conditionally eligible, unavailable или not implemented и объясняет выбранный core profile.
+- [ ] **CAM-05**: Core production profile поддерживает current eligible combinatorial/`RESPONSIVE_AD` creation и semantic readback; legacy `TEXT_AD` не является production acceptance substrate.
+- [ ] **CAM-06**: Applicable targeting, autotargeting/brand settings, sitelinks/callouts/assets, negatives, tracking, monitoring, goals/attribution, placements, geography и schedule включаются только после capability/eligibility check; selected unsupported fields блокируют publication.
+- [ ] **CAM-07**: Hard eligibility выполняется до scoring и включает lineage, destination/measurement readiness, demand, account capability, policy/legal constraints, duplicate protection, projection validity и non-serving safety.
+- [ ] **CAM-08**: Comparable eligible Drafts получают deterministic pre-launch score/rank, evidence coverage и sensitivity bounds со статусом `VIABLE`, `TESTABLE_WITH_GAPS`, `INSUFFICIENT_EVIDENCE` или `BLOCKED`; score не называется прогнозом эффективности.
+- [ ] **CAM-09**: Ranked campaign canvas позволяет открыть полную projection в drawer, редактировать каждое publishable поле, видеть delta, hidden reasons, filters/sort и не терять lineage.
+- [ ] **CAM-10**: Владелец вручную добавляет, исключает и возвращает Drafts; publish-blocked Draft нельзя поместить в shortlist.
+- [ ] **CAM-11**: Persistent shortlist и package review показывают exact selected Draft revisions/fingerprints, Strategy revision, account binding, capability profile и material consequences.
 
-- [ ] **EVD-01**: P0 autonomously discovers a bounded competitor candidate set and collects public competitor products, offers, messages, observed ad patterns, and destination patterns with source/time/limitations; competitor spend, conversions, CPA, ROI, and profitability remain explicitly unknowable unless a legitimate public first-party source proves them.
-- [ ] **EVD-02**: P0 performs a complete relevant read-only Direct account audit through official APIs, including paginated campaign/group/keyword/autotargeting/ad/asset configuration and asynchronous performance/search-query reports.
-- [ ] **EVD-03**: The agent prepares a bounded multi-seed Wordstat plan across product, problem, high-intent, brand/non-brand, exclusion, region, device, and seasonality hypotheses; official top/dynamics/regions evidence keeps its precise scope and limitations.
-- [ ] **EVD-04**: Comparable cost candidates are derived from the Direct audit and qualified by phrase, geography, placement, strategy, and season; provider and first-party ranges remain separate, and missing qualifying cost remains unavailable.
-- [ ] **EVD-05**: Auction hypotheses are separate typed artifacts with evidence, assumptions, uncertainty, affected Drafts, and a verification path and are never presented as observed provider facts.
-- [ ] **MET-01**: P0 verifies counter binding, funnel goals, primary optimization goal semantics, recent goal reaches, value/revenue readiness, attribution alignment, tracking parameters, data quality/lag, and optional offline-conversion readiness before strategy selection.
+## 6. Safe package execution
 
-### Strategy and Campaign Preparation
+- [ ] **EXE-01**: Один exact package Human Decision Gate фиксирует ordered selection и authority; любое material изменение после review инвалидирует Gate.
+- [ ] **EXE-02**: Package не считается транзакцией: каждый Draft имеет независимый durable execution record, outcome, provider issues и reconciliation state.
+- [ ] **EXE-03**: Для каждого item intent сохраняется до network mutation; затем campaign создаётся, немедленно suspend, подтверждается `State=SUSPENDED`, и только после этого создаются supported child objects.
+- [ ] **EXE-04**: Final semantic readback подтверждает полный supported graph и отсутствие silent field loss; ambiguous write/readback удерживает account lock и не повторяется вслепую.
+- [ ] **EXE-05**: Moderation продолжается asynchronously из durable checkpoint; `PREACCEPTED`/`MODERATION` остаются pending, correction создаёт новую Draft revision и требует новый exact Gate.
+- [ ] **EXE-06**: P0 interface/allowlist не содержит `Campaigns.resume`; каждая созданная campaign заканчивает P0 подтверждённо non-serving без impressions/spend.
 
-- [ ] **STR-01**: P0 derives one complete canonical business and campaign Strategy from first-party, Direct, Metrika, Wordstat, competitor, landing, and owner-approved evidence while identifying every unsupported value.
-- [ ] **STR-02**: Strategy selection explains the objective, optimization goal, Search/Network/Maps eligibility, conversion-volume sufficiency, budget/economics, attribution, geography, schedule, seasonality, and landing readiness; sparse evidence produces an honest fallback rather than false certainty.
-- [ ] **STR-03**: P0 produces a finite set of materially distinct editable Campaign Drafts, explains their business hypotheses and consequences, preserves every visible/hidden disposition, and prepares one exact shortlist/package.
-- [ ] **STR-04**: Current P0 completion does not rank winners from post-launch effectiveness or perform campaign optimization; that work remains deferred to the next module.
+## 7. Acceptance
 
-### Current Direct Capability and Readback
+- [ ] **ACC-01**: Build, lint, contracts и official-shape provider fixtures проходят без production credentials и real writes.
+- [ ] **ACC-02**: Agent evals покрывают unfamiliar business, multiple offers, sparse/conflicting evidence, prompt injection, tool misuse, provider quota/queue, unnecessary owner question, restart/compaction и false certainty.
+- [ ] **ACC-03**: Полный пятишаговый путь проходит через UI Playwright в 1920×1080 без direct state/API manipulation, horizontal overflow, console/page errors и inaccessible primary controls.
+- [ ] **ACC-04**: Rendered owner HTML не содержит IDs, hashes, schemas, API methods, raw payloads/journals и internal codes; complete redacted evidence остаётся доступным во внутренних artifacts.
+- [ ] **ACC-05**: Product MVP acceptance формирует editable canvas минимум с одним `VIABLE` Draft, sufficient evidence, complete current Direct projection, reproducible shortlist и exact package review.
+- [ ] **ACC-06**: После отдельного явного разрешения live acceptance фиксирует official-API requests/readbacks, terminal item outcomes и final `SUSPENDED` каждой созданной campaign без resume, serving и spend.
 
-- [ ] **DIR-01**: P0 maintains an explicit versioned capability matrix for the exact account and classifies applicable Direct features as supported, conditionally eligible, unavailable, or not implemented.
-- [ ] **DIR-02**: The production creation profile supports current eligible combinatorial `RESPONSIVE_AD` projection and semantic readback rather than relying on fixed legacy `TEXT_AD` creation.
-- [ ] **DIR-03**: The capability matrix can select and justify applicable creative assets, autotargeting/brand settings, sitelinks, callouts, images/video, action/price/contact/promo elements, negative phrases, tracking, monitoring, goals, attribution, placements, geography, and schedule without requiring every feature for every business.
-- [ ] **DIR-04**: Unsupported selected fields block publication instead of being silently dropped, and every supported campaign/group/criterion/ad/asset field is verified against normalized provider readback.
+## Отсечённые требования
 
-### Landing Analysis and Correction Plan
-
-- [ ] **LND-01**: P0 classifies the destination as an existing business-site page, existing dedicated landing, missing landing that requires future development, or invalid/unrelated target, then analyzes an existing exact first-party destination for offer/query/message match, CTA and qualified action, forms, measurement, technical access, performance, accessibility, visual prominence, hierarchy, readability, and desktop creative cropping using deterministic evidence and explicitly labelled neural hypotheses.
-- [ ] **LND-02**: P0 prepares at most three prioritized concrete landing corrections with evidence, expected business effect, exact target area, proposed change, validation method, and acknowledged uncertainty rather than generic advice.
-- [ ] **LND-03**: P0 cannot apply, publish, develop, or otherwise modify the external business site or landing in the current milestone; a correction plan or `FUTURE_LANDING_REQUIRED` brief is the terminal destination artifact.
-
-### Pre-launch Viability
-
-- [ ] **VIA-01**: Every Draft passes hard eligibility before scoring, including Strategy/evidence lineage, exact destination readiness, measurement binding, demand support, account capability, policy/legal constraints, projection validity, duplicate protection, and non-serving safety.
-- [ ] **VIA-02**: Eligible comparable Drafts receive an explainable deterministic score/rank with evidence coverage and sensitivity bounds; the score is labelled comparative pre-launch priority and never presented as probability, forecast CPA, expected uplift, or actual effectiveness.
-- [ ] **VIA-03**: P0 exposes `VIABLE`, `TESTABLE_WITH_GAPS`, `INSUFFICIENT_EVIDENCE`, and `BLOCKED` dispositions and lets the owner manually edit and shortlist while preserving every candidate and reason in the internal audit ledger.
-
-### Safe Execution and Acceptance
-
-- [ ] **EXEC-01**: One exact owner-authorized package can be created only through official Direct APIs with durable intent, independent per-item outcomes, explicit suspension, semantic readback, and no resume/impression/spend capability.
-- [ ] **EXEC-02**: Reports queues and moderation continue from durable checkpoints automatically within read authority; ambiguous writes are never retried, and provider partial success remains visible internally until reconciled.
-- [ ] **TEST-01**: Build, lint, contracts, official-shape fixtures, and the complete deterministic 1920×1080 Playwright path pass without production credentials, external network, or real writes.
-- [ ] **TEST-02**: Agent evals cover unfamiliar businesses, sparse/conflicting evidence, prompt injection, tool misuse, unnecessary owner questions, provider quotas/queues, current ad normalization, restart/compaction, moderation rejection, and false certainty.
-- [ ] **TEST-03**: Acceptance proves that no technical identity or raw diagnostic appears in owner-facing rendered HTML while complete redacted audit evidence remains available internally.
-- [ ] **TEST-04**: Deterministic MVP acceptance produces an editable campaign canvas with at least one `VIABLE` Draft, sufficient evidence, and a complete current Direct projection; serving data is not required.
-- [ ] **TEST-05**: After deterministic readiness, one separately authorized official-API acceptance verifies exact account binding, exact package authority, durable outcomes, moderation, final `SUSPENDED` state for every created campaign, and zero serving/spend.
-
-## Deferred Requirements
-
-### Next Campaign-Management Module
-
-- **NEXT-01**: Rank or select winners using mature, attributable post-launch effectiveness evidence.
-- **NEXT-02**: Execute bounded campaign-management changes based on observed performance and the active Mandate.
-
-### Later Integration
-
-- **INT-01**: Replace exactly the accepted P0 Test Scenario in the Integrated Prototype with the accepted Production Module while unfinished modules remain visibly simulated.
-
-## Out of Scope
-
-| Feature | Reason |
-|---------|--------|
-| Developing, applying, or publishing an external landing | Current P0 classifies/analyzes the destination and returns a correction plan or future-development brief only |
-| Post-launch winner selection and optimization | Explicitly deferred to the next module |
-| P1–P3 implementation | Owner directed completion of the current P0 module only |
-| Dashboard integration | Follows current-module acceptance in a later milestone |
-| Campaign serving or `Campaigns.resume` | Outside P0 authority and non-serving safety |
-| Browser automation of Yandex cabinets | Official APIs only |
-| Mobile/responsive prototype design | Current acceptance is 1920×1080 desktop |
+- **OUT-01 — P1:** post-launch campaign management, optimization, bids/budgets, experiments и выбор actual winner.
+- **OUT-02 — P2:** unified monitoring и human intervention для рекламы и SEO.
+- **OUT-03 — P3:** автоматическое изменение текстов сайта, написание/публикация статей и интеграция с paid-article/link marketplaces.
+- **OUT-04 — Future landing:** разработка, изменение и публикация внешнего лендинга; P0 заканчивает correction plan или future-landing brief.
+- **OUT-05 — Future channels:** VK и другие рекламные каналы.
+- **OUT-06 — Integration:** замена P0 Test Scenario внутри Integrated Prototype до отдельного post-acceptance milestone.
+- **OUT-07 — Serving:** `Campaigns.resume`, показы и расходы.
+- **OUT-08 — Other:** browser automation кабинетов Яндекса, mobile/responsive design, multi-account/RBAC/enterprise workflows.
 
 ## Traceability
 
-| Requirement | Phase | Status |
-|-------------|-------|--------|
-| AGT-01 | Phase 1 | Pending |
-| AGT-02 | Phase 1 | Pending |
-| AGT-03 | Phase 1 | Pending |
-| AGT-04 | Phase 1 | Pending |
-| AGT-05 | Phase 1 | Pending |
-| AGT-06 | Phase 1 | Pending |
-| FOC-01 | Phase 1 | Pending |
-| FOC-02 | Phase 1 | Pending |
-| EVD-01 | Phase 1 | Pending |
-| EVD-02 | Phase 1 | Pending |
-| EVD-03 | Phase 1 | Pending |
-| EVD-04 | Phase 1 | Pending |
-| EVD-05 | Phase 1 | Pending |
-| MET-01 | Phase 1 | Pending |
-| LND-01 | Phase 1 | Pending |
-| LND-02 | Phase 1 | Pending |
-| LND-03 | Phase 1 | Pending |
-| UX-01 | Phase 2 | Pending |
-| UX-02 | Phase 2 | Pending |
-| UX-03 | Phase 2 | Pending |
-| UX-04 | Phase 2 | Pending |
-| UX-05 | Phase 2 | Pending |
-| AUTH-01 | Phase 2 | Pending |
-| AUTH-02 | Phase 2 | Pending |
-| AUTH-03 | Phase 2 | Pending |
-| AUTH-04 | Phase 2 | Pending |
-| STR-01 | Phase 3 | Pending |
-| STR-02 | Phase 3 | Pending |
-| STR-03 | Phase 3 | Pending |
-| STR-04 | Phase 3 | Pending |
-| VIA-01 | Phase 4 | Pending |
-| VIA-02 | Phase 4 | Pending |
-| VIA-03 | Phase 4 | Pending |
-| DIR-01 | Phase 4 | Pending |
-| DIR-02 | Phase 4 | Pending |
-| DIR-03 | Phase 4 | Pending |
-| DIR-04 | Phase 4 | Pending |
-| EXEC-01 | Phase 4 | Pending |
-| EXEC-02 | Phase 4 | Pending |
-| TEST-01 | Phase 5 | Pending |
-| TEST-02 | Phase 5 | Pending |
-| TEST-03 | Phase 5 | Pending |
-| TEST-04 | Phase 5 | Pending |
-| TEST-05 | Phase 6 | Pending |
+| Phase | Requirements |
+|---|---|
+| Phase 1 — Data Collection and Analytics | AGT-01..06, ANL-01..13 |
+| Phase 2 — Questionnaire and Formalization | FRM-01..07 |
+| Phase 3 — Marketing Strategy Development | STR-01..06 |
+| Phase 4 — Marketing Strategy Realization | CAM-01..11, EXE-01..06 |
+| Phase 5 — Deterministic P0 Acceptance | ACC-01..05 |
+| Phase 6 — Authorized Live P0 Acceptance | ACC-06 |
 
-**Coverage:**
-- v1 requirements: 44 total
-- Mapped to phases: 44
-- Unmapped: 0 ✓
+**Coverage:** 55 in-scope requirements; 55 mapped; 0 unmapped.
 
 ---
-*Requirements defined: 2026-08-22*
-*Last updated: 2026-08-22 after the owner-defined four-submodule pipeline, current-source research, and viability clarification*
+*Обновлено: 2026-08-22 после scope cut требований владельца.*

@@ -1,94 +1,123 @@
-# MOX-ADV
+# MOX-ADV — завершение P0
 
-## What This Is
+## Назначение текущего milestone
 
-MOX-ADV is an AI-first advertising operations system that turns permitted evidence into campaign strategy, campaign drafts, bounded external actions, and observable outcomes. The current milestone completes only the existing five-step P0 module under `sites/p0-production/`: from first-party context and Yandex account evidence to prepared, moderated campaigns independently verified as `SUSPENDED`.
+Текущий milestone завершает только модуль **P0 «Стратегия и создание рекламных кампаний»** в `sites/p0-production/`.
 
-The existing P0 is a strong deterministic safety harness, not yet the intended neural agent product. It has revisioned state, evidence lineage, an uncalibrated pre-launch viability scorer, exact package authority, official API boundaries, suspension/readback, and moderation, but it lacks a real model/tool loop, multi-product focus analysis, complete evidence and measurement tools, current combinatorial Direct support, adaptive owner interaction, and a business-only owner interface.
+P0 должен провести владельца бизнеса по одному связному пути:
 
-P0 has four stable business submodules: **Data Collection and Analytics**, **Questionnaire and Formalization**, **Marketing Strategy Development**, and **Marketing Strategy Realization**. Neural-agent control, evidence lineage, authority, playbook learning, and owner-facing language span all four.
+```text
+разрешённый бизнес-контекст
+→ сбор аналитики
+→ выбор рекламного фокуса
+→ формализация цели
+→ утверждённая маркетинговая стратегия
+→ конечный набор Campaign Drafts
+→ ручное редактирование и shortlist
+→ точный пакет
+→ безопасное создание кампаний без запуска показов
+```
 
-## Core Value
+Агент самостоятельно выполняет разрешённый сбор данных, анализ, подготовку рекомендаций и безопасную техническую работу. Человек редактирует бизнес-решения и подтверждает только материальные решения и точную внешнюю запись.
 
-The owner receives a clear business recommendation and only the decisions that truly require them, while the agent completes all safe research, preparation, validation, and execution work inside an explicit authority boundary.
+## Четыре сабмодуля P0
 
-## Requirements
+1. **Сбор данных и аналитика** — компания, продукты и услуги, фокус, конкуренты, спрос, стоимость, текущий Direct, Metrika, аукционные гипотезы, посадочная страница.
+2. **Опросник и формализация** — ранняя рекомендованная цель кампании, адаптивные вопросы только по неразрешённым материальным решениям, полная каноническая Strategy revision.
+3. **Разработка маркетинговой стратегии** — итоговый фокус, предложение, аудитория, цель, экономика, география, размещения, измерение, спрос и проверяемые гипотезы.
+4. **Реализация маркетинговой стратегии** — finite fan-out в редактируемое полотно Campaign Drafts, pre-launch viability, shortlist, точный пакет и безопасное non-serving создание.
 
-### Validated
+## Scope cut исходных требований
 
-- ✓ P0 has one revisioned application contract and five user-facing steps: Контекст, Модель бизнеса, Стратегия кампании, Рекламные кампании, Подтверждение.
-- ✓ Deterministic contracts and Playwright seams cover evidence, Strategy, multiple Campaign Drafts, shortlist, package authority, Direct creation, suspension/readback, moderation, and correction.
-- ✓ P0 has durable intent, independent per-item outcomes, explicit suspension, and no `Campaigns.resume` capability.
-- ✓ Direct, Metrika, and Wordstat integrations are constrained to official APIs.
+| Исходное требование | Решение для текущего P0 |
+|---|---|
+| Анализ компании, продуктов и услуг | Входит полностью. Агент строит ограниченный каталог materially distinct offers. |
+| Выбор фокуса при большом количестве услуг/продуктов | Входит. Агент сравнивает opportunity, readiness и evidence coverage и рекомендует редактируемый фокус. |
+| Анализ конкурентов и их рекламы | Входит как наблюдаемые публичные товары, предложения, сообщения, объявления и посадочные паттерны. Чужие расходы, CPA, конверсии и «успешность» не выдаются за известные факты. |
+| Wordstat, частотность и стоимость запросов | Входит через официальный API, scoped frequency и source-labelled cost ranges. Отсутствующая стоимость остаётся `UNAVAILABLE`. |
+| Анализ текущего продвижения в Direct | Входит как полный релевантный read-only audit объектов и отчётов через официальный API. |
+| Аукционные гипотезы | Входят как отдельные типизированные гипотезы с evidence, uncertainty и verification path. |
+| Применение возможностей Яндекс Директа | Входит через версионированную capability matrix для конкретного аккаунта и текущий core creation profile. Неподдерживаемое поле блокирует публикацию, а не теряется молча. |
+| Самообучение на лучших практиках | Входит как применение активного curated playbook с официальными источниками, сроком пересмотра и eval fixtures. Автоматическое превращение единичных наблюдений P0 в правила запрещено; post-launch learning относится к следующему модулю. |
+| Цель кампании в начале опросника | Входит. Агент сначала предлагает evidence-backed цель, человек может изменить её. |
+| Финальная редактируемая стратегия | Входит. Владелец утверждает одну полную Strategy revision и может вернуться к её редактированию до package gate. |
+| Fan-out рекламных кампаний | Входит как конечный Recommendation Set materially distinct Drafts с полной lineage и disposition каждого кандидата. |
+| Оставлять наиболее эффективные кампании | В P0 трактуется как ручной shortlist **жизнеспособных до запуска** Drafts. Реальная эффективность и выбор победителя требуют serving outcomes и относятся к P1. |
+| Анализ сайта/лендинга | Входит: exact destination classification, deterministic checks и явно помеченные neural hypotheses, максимум три приоритетные рекомендации. |
+| Разработка лендинга агентом | Не входит; P0 формирует `FUTURE_LANDING_REQUIRED` brief или correction plan. Реализация — будущий milestone. |
+| Управление кампанией после запуска | Не входит; это P1. |
+| Мониторинг и вмешательство для рекламы/SEO | Не входит; это P2. |
+| SEO: изменение текстов, публикация и покупные статьи | Не входит; это P3. |
+| VK и другие рекламные каналы | Не входят; только будущая product-navigation маркировка вне текущего P0 milestone. |
 
-### Active
+## Существующий baseline, который нужно сохранить
 
-- [ ] Add one real provider-neutral neural-agent loop in which the model plans and interprets while the P0 application remains the sole authority for tools, permissions, persistence, validation, provider execution, and final truth.
-- [ ] Replace the technical owner console with a business-only experience; preserve IDs, hashes, schemas, provider payloads, journals, and raw diagnostics internally rather than rendering them in owner-facing UI.
-- [ ] Build a complete product/service inventory and recommend an initial advertising focus with comparable opportunity cards when the company has several meaningful offers.
-- [ ] Put an agent-recommended, owner-editable campaign goal among the first owner-visible fields and replace the fixed questionnaire with adaptive questioning over a complete canonical Strategy.
-- [ ] Complete bounded competitor, full Direct account/report, multi-seed Wordstat, comparable-cost, auction-hypothesis, Metrika measurement, destination classification, and landing evidence tools.
-- [ ] Make strategy and placement selection evidence-driven, including measurement quality, conversion volume, economics, attribution, budget, geography, seasonality, and landing readiness.
-- [ ] Replace the stale `TEXT_AD` production profile with a current versioned capability matrix centered on eligible combinatorial/`RESPONSIVE_AD` creation and applicable assets, targeting, tracking, goals, placements, and semantic readback.
-- [ ] Produce a manually editable campaign canvas of materially distinct Drafts, explain their hypotheses, preserve every disposition, and prepare one exact package without entering post-launch optimization.
-- [ ] Classify where each campaign leads: existing site page, existing landing, missing landing requiring future development, or invalid destination; analyze existing destinations and prepare a correction plan without modifying or building an external site.
-- [ ] Apply hard eligibility before comparative pre-launch score/rank and expose `VIABLE`, `TESTABLE_WITH_GAPS`, `INSUFFICIENT_EVIDENCE`, and `BLOCKED` without calling any pre-launch result actual effectiveness.
-- [ ] Accept the deterministic MVP when the editable canvas contains at least one `VIABLE` Draft with sufficient evidence and a complete current Direct projection, then separately authorize one official-API live acceptance.
+Production candidate уже содержит сильный deterministic harness и пять принятых user-facing steps: `Контекст → Модель бизнеса → Стратегия кампании → Рекламные кампании → Подтверждение`.
 
-### Out of Scope
+- один revisioned application contract в `sites/p0-production/lib/p0-application.ts`;
+- compare-and-swap state и история revisions;
+- evidence, Strategy, Draft и package lineage;
+- конечный Recommendation Set, score/rank, canvas, shortlist и package authority;
+- durable per-item Direct execution, single-writer boundary, suspension, semantic readback, moderation и correction;
+- отсутствие `Campaigns.resume`;
+- contract tests и deterministic Playwright E2E.
 
-- Developing, applying, or publishing an external business landing — current P0 classifies/analyzes the destination and prepares a correction plan or future-development brief only.
-- Post-launch winner selection, campaign optimization, bid/budget management, or performance experiments — these belong to the next module.
-- P1–P3 implementation or redesign — the current milestone is P0 only.
-- Dashboard integration — do not freeze P0 inside the Integrated Prototype before current-module acceptance.
-- Mobile/responsive design — current acceptance remains 1920×1080 desktop.
-- Automatic serving, `Campaigns.resume`, impressions, or spend — outside P0 authority.
-- Browser automation of Yandex cabinets — official APIs only.
+План развивает этот baseline. Переписывание P0 с нуля и создание второй реализации запрещены.
 
-## Context
+## Основные gaps
 
-The owner identified incomplete P0 areas directly: the company/product/service inventory does not support an evidence-backed focus choice; competitor evidence is empty; current Direct audit is partial; Wordstat lacks automatically qualified comparable cost; auction hypotheses are not separate artifacts; the Direct profile is limited to Unified Campaign/Search/explicit keywords/text ads; autotargeting, sitelinks, and other current capabilities are absent; destination/landing analysis is incomplete; the fixed eleven-field questionnaire creates unnecessary work; live official-API behavior is unproven; and the UI exposes substantial technical noise.
+- Нет настоящего provider-neutral neural-agent loop; часть «агентской» работы сейчас выполняют фиксированные extractors.
+- Нет полного product/service inventory и evidence-backed выбора фокуса.
+- Production evidence contour неполон: competitors, Direct graph/reports, multi-seed Wordstat, automatic comparable cost, auction hypotheses и Metrika readiness.
+- Landing adapter не подключён к production contour.
+- Каноническая Strategy полезна, но owner interaction перегружен фиксированными полями и техническими деталями.
+- Выбор стратегии, размещений и возможностей Direct ещё не основан на полной evidence/capability matrix.
+- Production projection опирается на устаревающий `TEXT_AD` substrate вместо current capability-gated combinatorial/`RESPONSIVE_AD` contour.
+- Viability и canvas требуют финальной сквозной проверки на реальном незнакомом бизнесе.
 
-The owner requires the campaign goal near the start of the form, prefilled as the agent’s recommendation but editable by the owner. P0 must produce an editable campaign canvas and is accepted deterministically when at least one campaign is defensibly `VIABLE`. Competitor effectiveness cannot be asserted from public observations; true winner/effectiveness selection still requires later mature serving outcomes.
+Полный gap analysis: `docs/research/p0-agent-first-completion-gap-analysis.md`.
 
-The repository audit added two release-level findings. First, `sites/p0-production/` contains deterministic synthesis and provider fixtures but no real neural model runtime or model/tool loop. Second, current Yandex documentation has moved new Unified Performance Campaign ad creation toward combinatorial `ResponsiveAd`, so the fixed `TEXT_AD` substrate is not a safe current production target.
+## Решение по open-source и готовым skills
 
-The complete gap analysis and primary sources are recorded in `docs/research/p0-agent-first-completion-gap-analysis.md`. GitHub issue `#100` remains the broad P0 specification; downstream Dashboard and live-acceptance issues do not expand the current milestone.
+Исследование уже выполнено и не должно повторяться как бесконечный discovery-этап:
 
-## Constraints
+- готового поддерживаемого Yandex-agent решения с подходящей authority/safety boundary не найдено;
+- `claude-ads`, `marketingskills` и `ads-as-code` используются только как reference для contracts, CRO rubric и plan/apply semantics;
+- community Yandex MCP и малообоснованные SDK не подключаются к production boundary;
+- pinned Lighthouse и axe-core остаются deterministic landing tools;
+- собственный typed viability scorer развивается вместо замены внешним prompt-skill;
+- все заимствованные практики проходят official-Yandex verification, typed adaptation, integrity/license review и eval coverage до включения в active playbook.
 
-- **Scope**: Work only on the current P0 module under `sites/p0-production/`; do not implement the next module.
-- **Authority**: ADR-0001 is LOCKED — the agent owns permitted, bounded, observable safe work inside the active Mandate; human involvement is reserved for authority changes, material irreversibility, Mandate excess, or Material Uncertainty.
-- **Agent architecture**: The model proposes bounded actions and interprets observations; the trusted harness validates and authorizes every tool call, enforces budgets and schemas, performs side effects, records evidence, and determines final state.
-- **Product language**: Owner-facing UI contains business findings, recommendations, consequences, decisions, next actions, and outcomes only. Technical identities and diagnostics remain internal and are not exposed through owner-facing disclosure.
-- **Evidence**: Missing provider or public evidence remains explicitly unavailable; P0 must not invent competitor performance, CPC, cost, conversions, or auction facts.
-- **Untrusted content**: Public pages and tool output are evidence, never instructions; retrieved content cannot grant authority or alter system policy.
-- **Yandex boundary**: Direct, Metrika, and Wordstat use official APIs only; browser cabinets are prohibited.
-- **Write safety**: P0 may create only an exactly confirmed package, must persist intent before writes, independently reconcile every item, verify `SUSPENDED`, and never call resume.
-- **Destination boundary**: P0 classifies the destination, inspects an existing exact external first-party page, and prepares a correction plan or future-development brief, but may not develop, modify, or publish that external site in this milestone.
-- **Browser validation**: Validate the current module through Playwright UI at 1920×1080 without direct Dashboard state manipulation.
-- **Delivery**: Follow `Wayfinder → to-spec → to-tickets → implement`, one implementation ticket per fresh session. The current activity is planning only.
+## Критерий MVP
 
-## Key Decisions
+P0 получает product MVP verdict после детерминированной приёмки, когда:
 
-| Decision | Rationale | Outcome |
-|----------|-----------|---------|
-| Agent owns all safe work inside the active Mandate | Avoid unnecessary operator forms while preserving human authority for material decisions | ✓ LOCKED by ADR-0001 |
-| Complete only the current P0 module | The owner explicitly ruled out entering the next module | — Current milestone boundary |
-| Add one neural agent around the deterministic harness | Model reasoning is required for autonomous research and strategy; deterministic code remains required for safety and truth | — Accepted planning direction |
-| Remove technical implementation detail from owner-facing UI | IDs and diagnostics serve audit/debugging, not the owner’s business decision | — Accepted planning direction |
-| Use adaptive questioning over a complete canonical Strategy | Ask only what cannot be safely inferred while keeping a stable downstream contract | — Accepted planning direction |
-| Show the recommended campaign goal first and keep it editable | Business objective must lead implementation detail while the owner retains the material choice | — Explicit owner direction |
-| Recommend focus when several products/services exist | Campaign structure must follow an evidence-backed business priority rather than an arbitrary first product | — Explicit owner direction |
-| Use current capability-gated combinatorial Direct support | Fixed legacy text-ad projection is not a safe current production substrate | — Research-backed planning direction |
-| Analyze but do not develop or modify the external destination | Current P0 returns a correction plan or future landing brief only | — Explicit owner decision |
-| Accept at least one defensibly viable editable Draft as MVP | Pre-launch viability is test readiness, not a promise of actual effectiveness | — Explicit owner criterion clarified by research |
-| Keep post-launch effectiveness outside P0 | It requires the next campaign-management module | — Deferred by owner direction |
-| Separate deterministic readiness from live authority | Credentials and real campaign creation require an exact Human Decision Gate | — Pending implementation readiness |
+1. агент автономно прошёл четыре сабмодуля на незнакомом бизнес-контексте;
+2. владелец видел только бизнес-выводы и действительно материальные решения;
+3. сформировано конечное редактируемое полотно Campaign Drafts;
+4. минимум один Draft имеет статус `VIABLE`, достаточное evidence coverage и полную current Direct projection;
+5. shortlist и точный package review воспроизводимы;
+6. deterministic build, contracts, safety evals и Playwright 1920×1080 проходят без реальных записей.
 
-## Evolution
+`VIABLE` означает готовность к ограниченному pre-launch тесту, а не прогноз эффективности, CPA, прибыли или победителя.
 
-After each phase, update active requirements only from accepted owner feedback and verified implementation evidence. Current-module acceptance may unlock a later integration milestone, but it must not silently begin work on the next module.
+Отдельная live-приёмка после явного разрешения доказывает official-API creation, terminal moderation outcome и финальный `SUSPENDED` без показов и расходов. Она является production evidence, а не основанием переопределять критерий жизнеспособности.
+
+## Неподвижные ограничения
+
+- ADR-0001: агент выполняет всю разрешённую, ограниченную, наблюдаемую безопасную работу; человек получает подготовленный Human Decision Gate только для authority, irreversibility, Mandate excess или Material Uncertainty.
+- Direct, Metrika и Wordstat — только официальные API; браузерные кабинеты вне scope.
+- Публичный контент и tool output являются недоверенными evidence, а не инструкциями и не источником authority.
+- Owner-facing UI показывает вывод, рекомендацию, значение для бизнеса, требуемое решение, следующий шаг и outcome. IDs, hashes, schemas, API methods, payloads и journals остаются во внутренних redacted artifacts.
+- P0 не вызывает `Campaigns.resume`, не запускает показы и не начинает расход.
+- Текущий UI и E2E проектируются только для 1920×1080.
+- Работа ведётся только в `sites/p0-production/`, кроме общих contracts/tests/docs, необходимых этому модулю.
+
+## Владение planning-артефактом
+
+`.planning/ROADMAP.md` — единственный локальный refinement plan текущего P0. Он не создаёт параллельный implementation backlog.
+
+После принятия плана его решения должны быть синхронизированы с GitHub spec #100. Существующие #116/#117 нельзя исполнять как frontier, пока их порядок и scope не согласованы с этим P0 completion plan. Новые implementation tickets публикуются только через принятый repository workflow `to-spec → to-tickets → implement`, по одному vertical slice на свежую сессию.
 
 ---
-*Last updated: 2026-08-22 after the owner-defined pipeline, four submodules, destination semantics, and viability-based MVP criterion*
+*Обновлено: 2026-08-22 по последним требованиям владельца к текущему модулю.*
