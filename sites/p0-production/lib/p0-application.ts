@@ -45,7 +45,6 @@ import {
   directProjectionMaterialDelta,
   fingerprintDirectProjection,
   preserveSelectedConditionalProjection,
-  resolveActivePlaybookReleaseIdentity,
   type CampaignRecommendationSet,
   type DirectCapabilitySnapshot,
 } from "./campaign-fanout.ts";
@@ -667,26 +666,20 @@ function record(value: unknown): Record<string, unknown> {
 
 function activePlaybookReleaseIdentity(recommendationSet: CampaignRecommendationSet) {
   const release = record(recommendationSet.playbook_release);
-  const appliedRuleIds = Array.isArray(release.applied_rule_ids)
-    ? release.applied_rule_ids.map(String)
-    : [];
-  const explicitRuleIdentities = Array.isArray(release.applied_rule_identities)
-    ? release.applied_rule_identities.map((identity) => ({
+  const appliedRuleLineage = Array.isArray(release.applied_rule_lineage)
+    ? release.applied_rule_lineage.map((identity) => ({
         rule_id: String(record(identity).rule_id ?? ""),
         rule_version: String(record(identity).rule_version ?? ""),
+        content_digest: String(record(identity).content_digest ?? ""),
+        eval_fixture_id: String(record(identity).eval_fixture_id ?? ""),
       }))
-    : null;
-  const compatibleRuleIdentities = appliedRuleIds.flatMap((ruleId) => [...new Set(recommendationSet.drafts
-    .filter((draft) => draft.playbook_rule_id === ruleId)
-    .map((draft) => String(draft.playbook_rule_version ?? "")))]
-    .sort()
-    .map((ruleVersion) => ({ rule_id: ruleId, rule_version: ruleVersion })));
+    : [];
   return {
     status: String(release.status ?? ""),
     release_id: release.release_id === null ? null : String(release.release_id ?? ""),
     release_version: release.release_version === null ? null : String(release.release_version ?? ""),
     content_digest: release.content_digest === null ? null : String(release.content_digest ?? ""),
-    applied_governed_rule_identities: explicitRuleIdentities ?? compatibleRuleIdentities,
+    applied_rule_lineage: appliedRuleLineage,
   };
 }
 
@@ -1669,6 +1662,7 @@ async function buildMaterialDraftCorrection(
     playbook_release_version: sourceDraft.playbook_release_version,
     playbook_rule_id: sourceDraft.playbook_rule_id,
     playbook_rule_version: sourceDraft.playbook_rule_version,
+    playbook_rule_digest: sourceDraft.playbook_rule_digest,
   };
   const basicProjection = buildPublishProjection(
     state.business_model as unknown as Record<string, unknown>,
@@ -2360,6 +2354,7 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
       draft.playbook_release_version = baseline.playbook_release_version;
       draft.playbook_rule_id = baseline.playbook_rule_id;
       draft.playbook_rule_version = baseline.playbook_rule_version;
+      draft.playbook_rule_digest = baseline.playbook_rule_digest;
       changed = true;
       draftChanged = true;
     }
@@ -3854,19 +3849,19 @@ export class P0Application {
       const recalculatedAt = this.adapters.now();
       const previousSet = state.recommendation_set;
       const playbookReleases = await this.playbookReleases();
+      const currentSet = await buildCampaignRecommendationSet({
+        model: state.business_model as unknown as Record<string, unknown>,
+        strategy: state.strategy as unknown as Record<string, unknown>,
+        analyticsEvidence: state.analytics_evidence_snapshot as unknown as Record<string, unknown>,
+        playbookReleases,
+        directCapabilitySnapshot: state.context_state?.facts.direct.capability_snapshot ?? null,
+        measurementDestinationReadiness: state.measurement_destination_readiness as unknown as Record<string, unknown> | null,
+        generatedAt: recalculatedAt,
+      });
       const releaseChanged = JSON.stringify(activePlaybookReleaseIdentity(previousSet))
-        !== JSON.stringify(await resolveActivePlaybookReleaseIdentity(playbookReleases));
+        !== JSON.stringify(activePlaybookReleaseIdentity(currentSet));
       let changes: Array<Record<string, unknown>> = [];
       if (releaseChanged) {
-        const currentSet = await buildCampaignRecommendationSet({
-          model: state.business_model as unknown as Record<string, unknown>,
-          strategy: state.strategy as unknown as Record<string, unknown>,
-          analyticsEvidence: state.analytics_evidence_snapshot as unknown as Record<string, unknown>,
-          playbookReleases,
-          directCapabilitySnapshot: state.context_state?.facts.direct.capability_snapshot ?? null,
-          measurementDestinationReadiness: state.measurement_destination_readiness as unknown as Record<string, unknown> | null,
-          generatedAt: recalculatedAt,
-        });
         changes = recommendationRecalculationChanges(previousSet, currentSet);
         const replacement = correspondingDraft(state.draft, currentSet);
         await invalidateDecisionAuthority(state, "PLAYBOOK_REGENERATION", "Active governed playbook regeneration changed exact Recommendation Set lineage.", recalculatedAt);
@@ -3927,6 +3922,7 @@ export class P0Application {
         playbook_release_version: generated.playbook_release_version,
         playbook_rule_id: generated.playbook_rule_id,
         playbook_rule_version: generated.playbook_rule_version,
+        playbook_rule_digest: generated.playbook_rule_digest,
       };
       const normalized = { ...normalizedFields, ...lineage };
       const normalizedProjection = buildPublishProjection(

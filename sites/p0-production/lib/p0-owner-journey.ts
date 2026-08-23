@@ -112,6 +112,10 @@ export type OwnerJourneyProjection = {
     };
     materialQuestions: Array<{ question: string; consequence: string }>;
   } | null;
+  appliedPractice: {
+    practice: string;
+    limitation: string;
+  } | null;
   businessReadiness: {
     status: "Готово" | "Заблокировано";
     measurement: {
@@ -762,6 +766,23 @@ function materialUnknowns(state: InternalState) {
   return [...new Set(gaps)].slice(0, 6);
 }
 
+function appliedPractice(state: InternalState): OwnerJourneyProjection["appliedPractice"] {
+  const draft = list(record(state.recommendation_set).drafts)
+    .map(record)
+    .find((candidate) => candidate.visibility === "VISIBLE" && record(candidate.variant).kind === "IMPROVEMENT");
+  const family = String(record(record(draft?.variant).hypothesis).changed_family ?? "");
+  const practices: Record<string, string> = {
+    QUALIFIED_ACTION: "Качественный результат прямо назван в формулировке предложения и проверяется как отдельная гипотеза.",
+    AUDIENCE_SPECIFICITY: "Предложение сформулировано для выбранной аудитории и сравнивается с базовым вариантом.",
+    MESSAGE_OFFER: "Сообщение прямо связано с выбранным предложением и сравнивается с базовым вариантом.",
+  };
+  if (!practices[family]) return null;
+  return {
+    practice: practices[family],
+    limitation: "Это практика для подготовки и сравнения гипотез, а не обещание результата. Она не отменяет ограничения, проверки и решение владельца перед созданием.",
+  };
+}
+
 function campaignOptions(view: InternalView): OwnerJourneyProjection["campaignOptions"] {
   const state = view.state;
   const drafts = list(record(state.recommendation_set).drafts);
@@ -955,6 +976,7 @@ async function project(
     competitorMatrix: competitorMatrixProjection(view.state),
     demandCostResearch: projectDemandCostResearchForOwner(view.state.analytics_evidence_snapshot),
     businessModel: businessModelProjection(view.state),
+    appliedPractice: appliedPractice(view.state),
     businessReadiness: businessReadinessProjection(view.state),
     materialUnknowns: unknowns,
     agentActivity: agent ? {
@@ -1080,6 +1102,7 @@ async function projectAccessOnly(
     competitorMatrix: null,
     demandCostResearch: null,
     businessModel: null,
+    appliedPractice: null,
     businessReadiness: null,
     materialUnknowns: [...access.limitations],
     agentActivity: null,

@@ -27,6 +27,7 @@ import {
   type DirectExecutionJournal,
   type DirectExecutionRecord,
 } from "./execution-safety.ts";
+import { readP0CuratedPlaybookV1 } from "./p0-curated-playbook-v1.ts";
 import {
   P0Application,
   type P0ApplicationStore,
@@ -1347,6 +1348,9 @@ const application = new P0Application({
     researchSite,
     readCurrencyLimits,
     readMarketEvidence,
+    async readPlaybookReleases() {
+      return [readP0CuratedPlaybookV1()];
+    },
     externalWriteConfiguration() {
       const config = directWriteConfig();
       const blockers = [

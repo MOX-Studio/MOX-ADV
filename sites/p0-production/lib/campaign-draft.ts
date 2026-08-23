@@ -64,6 +64,7 @@ export function buildPublishProjection(
       playbook_release_version: draft.playbook_release_version,
       playbook_rule_id: draft.playbook_rule_id,
       playbook_rule_version: draft.playbook_rule_version,
+      playbook_rule_digest: draft.playbook_rule_digest,
     },
     business: {
       product: strategyAnswerValue(strategy, "advertised_offer") || model.product,

@@ -1,0 +1,24 @@
+{
+  "schema_version": "p0-playbook-eval-fixture-v1",
+  "fixture_id": "qualified-result-alignment-ready",
+  "applicability": {
+    "campaign_fanout_contract": "campaign-fanout-v1",
+    "capability_profile_id": "direct-v501-unified-search-explicit-text",
+    "campaign_type": "UNIFIED_CAMPAIGN",
+    "placement": "SEARCH",
+    "strategy_fields": [
+      "advertised_offer",
+      "qualified_result"
+    ],
+    "measurement_status": "READY"
+  },
+  "expected": {
+    "outcome": "APPLIED",
+    "changed_family": "QUALIFIED_ACTION",
+    "changed_fields": [
+      "/direct/keyword/Keyword",
+      "/direct/ad/TextAd/Text"
+    ],
+    "authority_expanded": false
+  }
+}

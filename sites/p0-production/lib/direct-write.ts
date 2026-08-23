@@ -14,6 +14,7 @@ export type DirectProjection = {
     playbook_release_version?: unknown;
     playbook_rule_id?: unknown;
     playbook_rule_version?: unknown;
+    playbook_rule_digest?: unknown;
   };
   business: Record<string, unknown>;
   safety: { must_end_non_serving: true; resume_allowed: false; network_serving: false };

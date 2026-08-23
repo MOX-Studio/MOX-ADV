@@ -1,6 +1,6 @@
 {
   "schema_version": "campaign-recommendation-set-v3",
-  "recommendation_set_id": "recommendation-set-f567d5e328dcadeb7f90",
+  "recommendation_set_id": "recommendation-set-3eb4bfb3c19406c3f56e",
   "capability_profile": "direct-v501-unified-search-explicit-text@1.0.0",
   "playbook_release": "test-curated-release-default@1.0.0",
   "coverage": {
@@ -39,8 +39,8 @@
   },
   "draft_identities": [
     {
-      "draft_id": "draft-84bf7e71993fda9a5514",
-      "draft_revision_id": "draft-84bf7e71993fda9a5514-r1",
+      "draft_id": "draft-4013efb1889847c1f499",
+      "draft_revision_id": "draft-4013efb1889847c1f499-r1",
       "variant": "CONTROL",
       "playbook_rule_id": null,
       "visibility": "VISIBLE",
@@ -49,8 +49,8 @@
       "changed_fields": []
     },
     {
-      "draft_id": "draft-040a023bb3a0441de667",
-      "draft_revision_id": "draft-040a023bb3a0441de667-r1",
+      "draft_id": "draft-26d361be8a76582575c4",
+      "draft_revision_id": "draft-26d361be8a76582575c4-r1",
       "variant": "QUALIFIED_ACTION",
       "playbook_rule_id": "qualified-action-v1",
       "visibility": "VISIBLE",
@@ -62,8 +62,8 @@
       ]
     },
     {
-      "draft_id": "draft-070206df41eca1786bc6",
-      "draft_revision_id": "draft-070206df41eca1786bc6-r1",
+      "draft_id": "draft-2fc90b7f24a3002d6b3f",
+      "draft_revision_id": "draft-2fc90b7f24a3002d6b3f-r1",
       "variant": "AUDIENCE_SPECIFICITY",
       "playbook_rule_id": "audience-specificity-v1",
       "visibility": "VISIBLE",
@@ -77,17 +77,17 @@
   ],
   "candidate_dispositions": [
     {
-      "candidate_id": "draft-candidate:draft-040a023bb3a0441de667",
+      "candidate_id": "draft-candidate:draft-26d361be8a76582575c4",
       "visibility": "VISIBLE",
       "reason_code": "VISIBLE:GENERATED_DRAFT"
     },
     {
-      "candidate_id": "draft-candidate:draft-070206df41eca1786bc6",
+      "candidate_id": "draft-candidate:draft-2fc90b7f24a3002d6b3f",
       "visibility": "VISIBLE",
       "reason_code": "VISIBLE:GENERATED_DRAFT"
     },
     {
-      "candidate_id": "draft-candidate:draft-84bf7e71993fda9a5514",
+      "candidate_id": "draft-candidate:draft-4013efb1889847c1f499",
       "visibility": "VISIBLE",
       "reason_code": "VISIBLE:GENERATED_DRAFT"
     },

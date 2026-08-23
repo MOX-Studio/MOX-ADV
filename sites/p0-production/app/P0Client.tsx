@@ -127,6 +127,10 @@ export default function P0Client() {
             <div className="owner-demand-formulations"><h3>Проверенные формулировки</h3>{projection.demandCostResearch.demand.formulations.map((item, index) => <article key={`${item.category}-${index}`}><span>{item.category}</span><strong>{item.phrase}</strong><small>{item.status}</small></article>)}</div>
           </section>}
 
+          {projection.appliedPractice && <section className="owner-recommendation" aria-labelledby="owner-applied-practice-title">
+            <span>Применённая практика</span><h3 id="owner-applied-practice-title">{projection.appliedPractice.practice}</h3><p>{projection.appliedPractice.limitation}</p>
+          </section>}
+
           {projection.businessReadiness && <section className="owner-business-readiness" aria-labelledby="owner-business-readiness-title">
             <header><div><p className="owner-eyebrow">ИЗМЕРИМОСТЬ И ПОСАДОЧНАЯ</p><h2 id="owner-business-readiness-title">Готовность бизнес-результата</h2></div><strong>{projection.businessReadiness.status}</strong></header>
             <div className="owner-demand-cost-grid">

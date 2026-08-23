@@ -1863,8 +1863,12 @@ async function governedPlaybookRelease({ releaseId, releaseVersion, family, deci
     release_version: releaseVersion,
     status: "ACTIVE",
     approval_status: "APPROVED",
+    observed_at: "2026-08-20T00:00:00.000Z",
+    review_due_at: "2026-11-20T00:00:00.000Z",
+    expires_at: "2027-02-20T00:00:00.000Z",
+    previous_release_digest: null,
     promotion_policy: { policy_id: "fixture-promotion-policy", policy_version: "1.0.0", content_digest: `sha256:${"b".repeat(64)}` },
-    approval_attestation: { decision_id: decisionId, actor_id: "fixture-steward", actor_role: "KNOWLEDGE_STEWARD", approved_at: "2026-08-21T09:00:00.000Z" },
+    approval_attestation: { decision_id: decisionId, actor_id: "fixture-steward", actor_role: "KNOWLEDGE_STEWARD", approved_at: "2026-08-21T09:00:00.000Z", basis_url: "https://github.com/ElJeskos/MOX-ADV/issues/149" },
     superseded_by_release_id: null,
     competitive_sample_rules: [],
     rules: [{
@@ -1874,14 +1878,30 @@ async function governedPlaybookRelease({ releaseId, releaseVersion, family, deci
       state: "ACTIVE",
       approval_status: "APPROVED",
       changed_family: family,
-      mechanism: "Deterministic governed fixture treatment.",
+      mechanism: "Показать качественный результат прямо в формулировке предложения и проверить его как отдельную гипотезу.",
       changed_fields: changedFields,
       required_capabilities: [],
       evidence_quality: 80,
       priority: 10,
       promotion_policy_id: "fixture-promotion-policy",
-      qualified_evidence_refs: [`fixture-evidence:${family}`],
-      applicability: { campaign_fanout_contract: "campaign-fanout-v1" },
+      qualified_evidence_refs: ["https://yandex.ru/support/direct/ru/efficiency/improve-your-ads"],
+      applicability: {
+        campaign_fanout_contract: "campaign-fanout-v1",
+        capability_profile_ids: ["direct-v501-unified-search-explicit-text"],
+        campaign_types: ["UNIFIED_CAMPAIGN"],
+        placements: ["SEARCH"],
+        required_strategy_fields: ["advertised_offer", "qualified_result"],
+        measurement_statuses: ["READY"],
+      },
+      official_source: { authority: "YANDEX_DIRECT", title: "Fixture official rule", url: "https://yandex.ru/support/direct/ru/efficiency/improve-your-ads" },
+      observed_at: "2026-08-20T00:00:00.000Z",
+      review_due_at: "2026-11-20T00:00:00.000Z",
+      expires_at: "2027-02-20T00:00:00.000Z",
+      conflicts: [{ code: "MEASUREMENT_NOT_READY", effect: "NOT_APPLICABLE" }],
+      exceptions: [{ code: "QUALIFIED_RESULT_UNCONFIRMED", effect: "NOT_APPLICABLE" }],
+      eval_fixture: { fixture_id: `fixture-${family.toLowerCase()}`, path: "tests/fixtures/playbook/qualified-result-alignment-ready.json", expected_outcome: "APPLIED" },
+      admission: { method: "CURATED_PROJECT_RELEASE", source_kind: "OFFICIAL_SOURCE_AND_ACCEPTED_PROJECT_DECISION", automatic_promotion: false, authority_effect: "NONE" },
+      superseded_by_rule_id: null,
     }],
   });
 }
@@ -3843,6 +3863,9 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
   ownerResponses.push(projection);
   assert.equal(projection.journey.currentStage, "campaigns");
   assert.ok(projection.campaignOptions.length >= 1);
+  assert.match(projection.appliedPractice.practice, /качественный результат|проверяемую практику/iu);
+  assert.match(projection.appliedPractice.limitation, /не обещание результата/iu);
+  assert.doesNotMatch(JSON.stringify(projection.appliedPractice), /release|digest|rule[_ -]?id|evaluator/iu);
   assert.equal(projection.businessReadiness.status, "Готово");
   assert.equal(projection.businessReadiness.measurement.checks.length, 8);
   assert.deepEqual(projection.businessReadiness.destination.scopes.map((scope) => [scope.device, scope.classification]), [

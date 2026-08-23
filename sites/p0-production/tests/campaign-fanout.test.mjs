@@ -22,6 +22,8 @@ const model = {
 const strategy = {
   strategy_revision_id: "campaign-strategy-r7",
   goal: "Получать заявки на участие",
+  advertised_offer: "Участие со стендом в выставке ИННОПРОМ",
+  qualified_result: "Отправленная заявка на участие",
   geography: "Россия",
   period_start: "2026-09-01",
   period_end: "2026-09-30",
@@ -53,6 +55,7 @@ async function recommendationSet(analyticsEvidence = null, overrides = {}) {
     analyticsEvidence,
     playbookReleases: await defaultPlaybookFixtureReleases(),
     directCapabilitySnapshot: coreCapabilitySnapshot,
+    measurementDestinationReadiness: { measurement: { status: "READY" }, destination: { status: "READY" } },
     generatedAt: "2026-08-21T12:00:00.000Z",
     ...overrides,
   });
@@ -250,8 +253,24 @@ function playbookRule(rule_id, overrides = {}) {
     evidence_quality: 80,
     priority: 10,
     promotion_policy_id: "test-promotion-policy-v1",
-    qualified_evidence_refs: [`test-qualified-evidence:${rule_id}`],
-    applicability: { campaign_fanout_contract: "campaign-fanout-v1" },
+    qualified_evidence_refs: [`https://yandex.ru/support/direct/ru/efficiency/improve-your-ads#${rule_id}`],
+    applicability: {
+      campaign_fanout_contract: "campaign-fanout-v1",
+      capability_profile_ids: ["direct-v501-unified-search-explicit-text"],
+      campaign_types: ["UNIFIED_CAMPAIGN"],
+      placements: ["SEARCH"],
+      required_strategy_fields: ["advertised_offer", "qualified_result"],
+      measurement_statuses: ["READY"],
+    },
+    official_source: { authority: "YANDEX_DIRECT", title: "Fixture official rule", url: "https://yandex.ru/support/direct/ru/efficiency/improve-your-ads" },
+    observed_at: "2026-08-20T00:00:00.000Z",
+    review_due_at: "2026-11-20T00:00:00.000Z",
+    expires_at: "2027-02-20T00:00:00.000Z",
+    conflicts: [{ code: "MEASUREMENT_NOT_READY", effect: "NOT_APPLICABLE" }],
+    exceptions: [{ code: "QUALIFIED_RESULT_UNCONFIRMED", effect: "NOT_APPLICABLE" }],
+    eval_fixture: { fixture_id: `fixture-${rule_id}`, path: "tests/fixtures/playbook/qualified-result-alignment-ready.json", expected_outcome: "APPLIED" },
+    admission: { method: "CURATED_PROJECT_RELEASE", source_kind: "OFFICIAL_SOURCE_AND_ACCEPTED_PROJECT_DECISION", automatic_promotion: false, authority_effect: "NONE" },
+    superseded_by_rule_id: null,
     ...overrides,
   };
 }
@@ -264,6 +283,10 @@ async function playbookRelease(rules, overrides = {}) {
     release_version: "1.0.0",
     status: "ACTIVE",
     approval_status: "APPROVED",
+    observed_at: "2026-08-20T00:00:00.000Z",
+    review_due_at: "2026-11-20T00:00:00.000Z",
+    expires_at: "2027-02-20T00:00:00.000Z",
+    previous_release_digest: null,
     promotion_policy: {
       policy_id: "test-promotion-policy-v1",
       policy_version: "1.0.0",
@@ -274,6 +297,7 @@ async function playbookRelease(rules, overrides = {}) {
       actor_id: "test-knowledge-steward",
       actor_role: "KNOWLEDGE_STEWARD",
       approved_at: "2026-08-21T11:00:00.000Z",
+      basis_url: "https://github.com/ElJeskos/MOX-ADV/issues/149",
     },
     superseded_by_release_id: null,
     rules,
@@ -451,7 +475,12 @@ test("filters curated releases and rule states fail closed while pinning exact a
   assert.equal(value.playbook_release.release_id, "test-curated-release");
   assert.match(value.playbook_release.content_digest, /^sha256:[a-f0-9]{64}$/u);
   assert.deepEqual(value.playbook_release.applied_rule_ids, ["active-rule"]);
-  assert.deepEqual(value.playbook_release.applied_rule_identities, [{ rule_id: "active-rule", rule_version: "1.0.0" }]);
+  assert.deepEqual(value.playbook_release.applied_rule_lineage, [{
+    rule_id: "active-rule",
+    rule_version: "1.0.0",
+    content_digest: release.rules[0].content_digest,
+    eval_fixture_id: "fixture-active-rule",
+  }]);
   assert.deepEqual(value.drafts.map((draft) => draft.playbook_rule_id).filter(Boolean), ["active-rule"]);
   for (const reason of [
     "HIDDEN:PLAYBOOK_RULE_QUARANTINED",
@@ -558,6 +587,7 @@ test("pins Strategy, Draft, capability profile and playbook IDs in immutable Dra
     assert.equal(draft.capability_profile_id, value.capability_profile.profile_id);
     assert.equal(draft.capability_profile_version, value.capability_profile.profile_version);
     assert.equal(draft.playbook_release_id, value.playbook_release.release_id);
+    if (draft.playbook_rule_id) assert.match(draft.playbook_rule_digest, /^sha256:[a-f0-9]{64}$/u);
     assert.match(draft.publish_fingerprint, /^sha256:[a-f0-9]{64}$/u);
     assert.equal(draft.publish_projection.lineage.draft_revision_id, draft.draft_revision_id);
     assert.equal(draft.publish_projection.lineage.capability_profile_version, draft.capability_profile_version);

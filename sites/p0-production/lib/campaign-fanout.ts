@@ -29,20 +29,6 @@ const PROVIDER_UNORDERED_ARRAY_PATHS = new Set([
 ]);
 const FORBIDDEN_PUBLISH_FINGERPRINT_FIELD = /(?:landing.*advisory|advisory.*landing|post.*launch|launch.*outcome|campaign.*outcome|moderation.*outcome|outcome.*learning|calibrat)/iu;
 
-export async function resolveActivePlaybookReleaseIdentity(releases: CuratedPlaybookRelease[]) {
-  const playbook = await resolveCuratedPlaybookReleases(releases);
-  const activeRules = playbook.rules.slice(0, MAX_IMPROVEMENTS_PER_DELIVERY_BUCKET);
-  return {
-    status: playbook.release ? "ACTIVE_APPROVED" : "BLOCKED_FAIL_CLOSED",
-    release_id: playbook.release?.release_id ?? null,
-    release_version: playbook.release?.release_version ?? null,
-    content_digest: playbook.release?.content_digest ?? null,
-    applied_governed_rule_identities: activeRules.map((rule) => ({
-      rule_id: rule.rule_id,
-      rule_version: rule.rule_version,
-    })),
-  };
-}
 
 export const CORE_DIRECT_CAPABILITY_PROFILE = Object.freeze({
   profile_id: "direct-v501-unified-search-explicit-text",
@@ -502,6 +488,7 @@ export type CampaignDraftCandidate = Record<string, unknown> & {
   capability_profile_version: string;
   playbook_release_id: string | null;
   playbook_rule_id: string | null;
+  playbook_rule_digest: string | null;
   publish_projection: Record<string, unknown>;
   publish_fingerprint: string;
   treatment_fingerprint: string;
@@ -571,6 +558,23 @@ function expectedChangedFields(rule: CuratedPlaybookRule) {
   return [...new Set(rule.changed_fields.map(text).filter(Boolean))].sort();
 }
 
+function playbookApplicationContext(
+  strategy: Record<string, unknown>,
+  measurementDestinationReadiness: Record<string, unknown> | null,
+) {
+  const requiredFields = ["advertised_offer", "qualified_result"] as const;
+  const strategyFields = requiredFields
+    .filter((field) => Boolean(text(strategyAnswerValue(strategy, field))));
+  return {
+    campaign_fanout_contract: FAN_OUT_CONTRACT,
+    capability_profile_id: CORE_DIRECT_CAPABILITY_PROFILE.profile_id,
+    campaign_type: CORE_DIRECT_CAPABILITY_PROFILE.campaign_type,
+    placement: "SEARCH",
+    strategy_fields: strategyFields,
+    measurement_status: text(record(measurementDestinationReadiness?.measurement).status),
+  };
+}
+
 export async function buildCampaignRecommendationSet({
   model,
   strategy,
@@ -599,7 +603,10 @@ export async function buildCampaignRecommendationSet({
   const weeklyBudget = strategyAnswerValue(strategy, "weekly_budget");
   const targetResultCost = strategyAnswerValue(strategy, "target_result_cost");
   const coreMessage = strategyAnswerValue(strategy, "core_message") || model.value;
-  const playbook = await resolveCuratedPlaybookReleases(playbookReleases);
+  const playbook = await resolveCuratedPlaybookReleases(playbookReleases, {
+    evaluatedAt: generatedAt,
+    applicability: playbookApplicationContext(strategy, measurementDestinationReadiness),
+  });
   const coreCapability = evaluateCoreDirectCapability(directCapabilitySnapshot);
   const controlBasis = competitiveControlBasis(analyticsEvidence, playbook.competitiveSampleRules);
   const marketEvidence = analyticsEvidence?.market_evidence && typeof analyticsEvidence.market_evidence === "object"
@@ -744,6 +751,7 @@ export async function buildCampaignRecommendationSet({
         playbook_release_version: playbook.release?.release_version ?? null,
         playbook_rule_id: rule?.rule_id ?? null,
         playbook_rule_version: rule?.rule_version ?? null,
+        playbook_rule_digest: rule?.content_digest ?? null,
       }) as unknown as Record<string, unknown>;
       applyConditionalProjection(projection, family);
       const actualChangedFields = comparator
@@ -809,6 +817,7 @@ export async function buildCampaignRecommendationSet({
         playbook_release_digest: playbook.release?.content_digest ?? null,
         playbook_rule_id: rule?.rule_id ?? null,
         playbook_rule_version: rule?.rule_version ?? null,
+        playbook_rule_digest: rule?.content_digest ?? null,
         source: FAN_OUT_CONTRACT,
         generation_order: compiled.length + 1,
         delivery_bucket_id: bucketId,
@@ -945,7 +954,12 @@ export async function buildCampaignRecommendationSet({
       release_version: playbook.release?.release_version ?? null,
       content_digest: playbook.release?.content_digest ?? null,
       applied_rule_ids: activeRules.map((rule) => rule.rule_id),
-      applied_rule_identities: activeRules.map((rule) => ({ rule_id: rule.rule_id, rule_version: rule.rule_version })),
+      applied_rule_lineage: activeRules.map((rule) => ({
+        rule_id: rule.rule_id,
+        rule_version: rule.rule_version,
+        content_digest: rule.content_digest,
+        eval_fixture_id: rule.eval_fixture.fixture_id,
+      })),
       excluded_audit_ids: playbook.audits.map((audit) => audit.audit_id),
       mutable_default_read_at_query_time: false,
     },
