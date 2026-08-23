@@ -153,9 +153,9 @@ import {
 } from "./measurement-destination-readiness.ts";
 
 export const P0_APPLICATION_CONTRACT = "mox-adv.p0.application";
-export const P0_APPLICATION_CONTRACT_VERSION = "1.20.0";
-export const P0_DOCUMENT_SCHEMA = "p0-application-document-v14";
-const P0_LEGACY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4", "p0-application-document-v5", "p0-application-document-v6", "p0-application-document-v7", "p0-application-document-v8", "p0-application-document-v9", "p0-application-document-v10", "p0-application-document-v11", "p0-application-document-v12", "p0-application-document-v13"]);
+export const P0_APPLICATION_CONTRACT_VERSION = "1.21.0";
+export const P0_DOCUMENT_SCHEMA = "p0-application-document-v15";
+const P0_LEGACY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4", "p0-application-document-v5", "p0-application-document-v6", "p0-application-document-v7", "p0-application-document-v8", "p0-application-document-v9", "p0-application-document-v10", "p0-application-document-v11", "p0-application-document-v12", "p0-application-document-v13", "p0-application-document-v14"]);
 const P0_PRE_PACKAGE_AUTHORITY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4"]);
 export const P0_CONTEXT_SCHEMA = "p0-context-v2";
 const P0_LEGACY_CONTEXT_SCHEMA = "p0-context-v1";
@@ -578,6 +578,12 @@ export const P0_COMMAND_TRUTH_TABLE = {
   save_auction_protocol: (state: P0Document) => Boolean(
     state.strategy && state.recommendation_set && packageNotDispatched(state),
   ),
+  revalidate_draft: (state: P0Document) => Boolean(
+    state.strategy && state.recommendation_set && state.analytics_evidence_snapshot
+      && state.recommendation_set.drafts.some((draft) => Array.isArray(draft.publication_blockers)
+        && draft.publication_blockers.some((blocker) => record(blocker).code === "DRAFT_REVALIDATION_REQUIRED"))
+      && packageNotDispatched(state),
+  ),
   revalidate_auction_protocol: (state: P0Document) => Boolean(
     state.strategy && state.recommendation_set && state.analytics_evidence_snapshot && packageNotDispatched(state),
   ),
@@ -597,7 +603,9 @@ export const P0_COMMAND_TRUTH_TABLE = {
     state.strategy && state.recommendation_set && state.shortlist?.selections.length && packageNotDispatched(state),
   ),
   confirm_package: (state: P0Document) => Boolean(
-    state.package_review && !state.human_decision_gate && state.shortlist?.selections.length && packageNotDispatched(state),
+    state.package_review?.business_projection.preflight.status === "PASS"
+      && state.package_review.business_projection.preflight.passed === 9
+      && !state.human_decision_gate && state.shortlist?.selections.length && packageNotDispatched(state),
   ),
   dispatch_package: (state: P0Document) => Boolean(
     state.package_review
@@ -2575,6 +2583,11 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
     const binding = directAccountBinding(state);
     const capabilitySnapshot = state.context_state?.facts.direct.capability_snapshot;
     const evidenceSnapshotId = state.analytics_evidence_snapshot?.snapshot_id;
+    if (legacyDocument && state.package_review && record(state.package_review.authority).schema_version !== "p0-package-authority-v3") {
+      if (state.package_execution) lineageError("Legacy package authority cannot continue an execution under the expanded exact business binding.");
+      await invalidateDecisionAuthority(state, "LEGACY_AUTHORITY_REQUIRES_REVIEW", "Legacy package authority did not bind exact Strategy, Business Model, Evidence, claims/assets and preflight 9/9.", updatedAt);
+      changed = true;
+    }
     if (state.package_review) {
       if (!binding || !capabilitySnapshot || !evidenceSnapshotId || !state.shortlist
         || !await verifyPackageReview({
@@ -2582,6 +2595,10 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
           shortlist: state.shortlist,
           recommendationSet: state.recommendation_set,
           strategyRevisionId: String(strategy.strategy_revision_id ?? ""),
+          strategy: strategy as Record<string, unknown>,
+          businessModel: state.business_model as unknown as Record<string, unknown>,
+          analyticsEvidenceSnapshot: state.analytics_evidence_snapshot as unknown as Record<string, unknown>,
+          measurementDestinationReadiness: state.measurement_destination_readiness as unknown as Record<string, unknown>,
           accountBinding: binding,
           capabilitySnapshot: capabilitySnapshot as unknown as Record<string, unknown>,
           analyticsEvidenceSnapshotId: evidenceSnapshotId,
@@ -2636,6 +2653,10 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
           shortlist: correction.shortlist,
           recommendationSet: correction.corrected_recommendation_set,
           strategyRevisionId: String(strategy.strategy_revision_id ?? ""),
+          strategy: strategy as Record<string, unknown>,
+          businessModel: state.business_model as unknown as Record<string, unknown>,
+          analyticsEvidenceSnapshot: state.analytics_evidence_snapshot as unknown as Record<string, unknown>,
+          measurementDestinationReadiness: state.measurement_destination_readiness as unknown as Record<string, unknown>,
           accountBinding: binding,
           capabilitySnapshot: capabilitySnapshot as unknown as Record<string, unknown>,
           analyticsEvidenceSnapshotId: evidenceSnapshotId,
@@ -4172,7 +4193,7 @@ export class P0Application {
           updatedAt: editedAt,
         });
       }
-    } else if (action === "revalidate_auction_protocol") {
+    } else if (action === "revalidate_draft" || action === "revalidate_auction_protocol") {
       const draftId = requiredInput(payload.draft_id, "Campaign Draft", 255);
       if (!state.strategy || !state.business_model || !state.recommendation_set || !state.analytics_evidence_snapshot || !state.shortlist) {
         fail("P0_PREREQUISITE_MISSING", "Auction Protocol revalidation требует current Strategy, Recommendation Set, Evidence Snapshot и shortlist.");
@@ -4180,10 +4201,11 @@ export class P0Application {
       const draft = state.recommendation_set.drafts.find((candidate) => candidate.draft_id === draftId);
       if (!draft || !await verifyAuctionProtocol(draft.auction_protocol, draft)) fail("P0_AUCTION_PROTOCOL_INVALID", "Exact Auction Protocol не прошёл frozen content и lineage verification.");
       const persistedBlockers = Array.isArray(draft.publication_blockers) ? draft.publication_blockers : [];
-      if (!persistedBlockers.some((blocker) => record(blocker).code === "AUCTION_PROTOCOL_REVALIDATION_REQUIRED")) {
-        fail("P0_AUCTION_PROTOCOL_REVALIDATION_NOT_REQUIRED", "Current Campaign revision не ожидает Auction Protocol revalidation.");
+      const revalidationCode = action === "revalidate_draft" ? "DRAFT_REVALIDATION_REQUIRED" : "AUCTION_PROTOCOL_REVALIDATION_REQUIRED";
+      if (!persistedBlockers.some((blocker) => record(blocker).code === revalidationCode)) {
+        fail(action === "revalidate_draft" ? "P0_DRAFT_REVALIDATION_NOT_REQUIRED" : "P0_AUCTION_PROTOCOL_REVALIDATION_NOT_REQUIRED", "Current Campaign revision не ожидает explicit revalidation.");
       }
-      const blockers = persistedBlockers.filter((blocker) => record(blocker).code !== "AUCTION_PROTOCOL_REVALIDATION_REQUIRED");
+      const blockers = persistedBlockers.filter((blocker) => record(blocker).code !== revalidationCode);
       const publishEligibility = blockers.some((blocker) => record(blocker).code === "DEMAND_EVIDENCE_GAP")
         ? "BLOCKED_EVIDENCE_GAP" : blockers.length ? "BLOCKED_HARD" : "ELIGIBLE";
       const readyDraft = {
@@ -4376,8 +4398,22 @@ export class P0Application {
           current_publish_fingerprint: currentDraft.publish_fingerprint,
           changed_fields: materialFields,
         };
+        const revalidationBlocker = {
+          code: "DRAFT_REVALIDATION_REQUIRED",
+          message: "Material Campaign Draft edit требует explicit score и publish preflight revalidation до новой authority.",
+          field_path: "/draft",
+        };
         state.draft = {
           ...currentDraft,
+          publication_blockers: [
+            ...(Array.isArray(currentDraft.publication_blockers) ? currentDraft.publication_blockers : [])
+              .filter((blocker) => record(blocker).code !== "DRAFT_REVALIDATION_REQUIRED"),
+            revalidationBlocker,
+          ],
+          shortlist_eligible: false,
+          publish_eligibility: "BLOCKED_HARD",
+          viability_status: "INSUFFICIENT_EVIDENCE",
+          viability_score: undefined,
           material_delta: {
             schema_version: "p0-draft-material-delta-v1",
             changed_at: editedAt,
@@ -4388,8 +4424,11 @@ export class P0Application {
             fields: materialFields,
             policy_reason: scoreDelta.comparative_priority_reason,
           },
-          score_delta: scoreDelta,
-          draft_save_result: draftSaveResult,
+          score_delta: null,
+          draft_save_result: {
+            ...draftSaveResult,
+            message: "Создана новая immutable Draft revision; score, preflight и exact authority invalidated до explicit revalidation.",
+          },
         };
         recommendationSet.recommendation_set_id = rescoredRecommendationSetId;
         recommendationSet.drafts = rescored.map((item) => item.draft_id === draftId ? state.draft as typeof item : item);
@@ -4527,6 +4566,10 @@ export class P0Application {
             shortlist: state.shortlist,
             recommendationSet: state.recommendation_set,
             strategyRevisionId: String(state.strategy.strategy_revision_id ?? ""),
+            strategy: state.strategy as Record<string, unknown>,
+            businessModel: state.business_model as unknown as Record<string, unknown>,
+            analyticsEvidenceSnapshot: state.analytics_evidence_snapshot as unknown as Record<string, unknown>,
+            measurementDestinationReadiness: state.measurement_destination_readiness as unknown as Record<string, unknown>,
             accountBinding: binding,
             capabilitySnapshot: state.context_state.facts.direct.capability_snapshot as unknown as Record<string, unknown>,
             analyticsEvidenceSnapshotId: state.analytics_evidence_snapshot.snapshot_id,
@@ -4554,6 +4597,10 @@ export class P0Application {
         shortlist: state.shortlist,
         recommendationSet: state.recommendation_set,
         strategyRevisionId: String(state.strategy.strategy_revision_id ?? ""),
+        strategy: state.strategy as Record<string, unknown>,
+        businessModel: state.business_model as unknown as Record<string, unknown>,
+        analyticsEvidenceSnapshot: state.analytics_evidence_snapshot as unknown as Record<string, unknown>,
+        measurementDestinationReadiness: state.measurement_destination_readiness as unknown as Record<string, unknown>,
         accountBinding: binding,
         capabilitySnapshot: state.context_state.facts.direct.capability_snapshot as unknown as Record<string, unknown>,
         analyticsEvidenceSnapshotId: state.analytics_evidence_snapshot.snapshot_id,
@@ -4841,6 +4888,10 @@ export class P0Application {
         shortlist: correction.shortlist,
         recommendationSet: correction.corrected_recommendation_set,
         strategyRevisionId: String(state.strategy.strategy_revision_id ?? ""),
+        strategy: state.strategy as Record<string, unknown>,
+        businessModel: state.business_model as unknown as Record<string, unknown>,
+        analyticsEvidenceSnapshot: state.analytics_evidence_snapshot as unknown as Record<string, unknown>,
+        measurementDestinationReadiness: state.measurement_destination_readiness as unknown as Record<string, unknown>,
         accountBinding: binding,
         capabilitySnapshot: state.context_state.facts.direct.capability_snapshot as unknown as Record<string, unknown>,
         analyticsEvidenceSnapshotId: state.analytics_evidence_snapshot.snapshot_id,

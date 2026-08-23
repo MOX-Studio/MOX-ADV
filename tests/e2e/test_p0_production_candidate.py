@@ -332,7 +332,7 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 checkpoint()
 
                 page.get_by_role(
-                    "button", name="Подтвердить и создать без запуска", exact=True
+                    "button", name="Подтвердить точный пакет", exact=True
                 ).click()
                 page.get_by_role(
                     "button", name="Подготовить исправление", exact=True

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildGoalBudgetAlignment,
   emptyShortlist,
   restoredInsertionIndex,
   selectionForDraft,
@@ -88,6 +89,30 @@ test("shortlist eligibility rejects hidden, hard-blocked and unresolved evidence
     shortlistSelectionBlockReason(scoreGap),
     "DEMAND_SCOPE_MISSING: Official demand scope unavailable.: /evidence/frequency",
   );
+});
+
+test("goal-budget alignment is deterministic arithmetic and never a forecast", () => {
+  const selected = (budget, start = "2026-09-01", end = "2026-09-30") => ({
+    draft_id: `draft-${budget}`,
+    campaign_name: `Кампания ${budget}`,
+    auction_protocol: { test_budget_rub: budget, test_period: { start_date: start, end_date: end } },
+  });
+
+  const limited = buildGoalBudgetAlignment({ weeklyBudgetRub: 24_000, selectedDrafts: [selected(36_000), selected(36_000)] });
+  assert.equal(limited.strategy_monthly_budget_rub, 104_000);
+  assert.equal(limited.ordered_package_sum_rub, 72_000);
+  assert.equal(limited.classification, "LIMITED_TEST");
+  assert.equal(limited.performance_forecast, false);
+  assert.deepEqual(limited.campaigns.map((item) => item.test_budget_rub), [36_000, 36_000]);
+
+  assert.equal(buildGoalBudgetAlignment({ weeklyBudgetRub: 24_000, selectedDrafts: [selected(104_000)] }).classification, "ALIGNED");
+  assert.equal(buildGoalBudgetAlignment({ weeklyBudgetRub: 24_000, selectedDrafts: [selected(104_001)] }).classification, "REQUIRED_EDIT");
+  assert.equal(buildGoalBudgetAlignment({ weeklyBudgetRub: 24_000, selectedDrafts: [selected(1, "2026-10-02", "2026-10-01")] }).classification, "BLOCKER");
+  assert.equal(buildGoalBudgetAlignment({
+    weeklyBudgetRub: 24_000,
+    intendedPeriod: { start_date: "2026-09-01", end_date: "2026-09-30" },
+    selectedDrafts: [selected(1, "2026-09-01", "2026-10-01")],
+  }).classification, "BLOCKER");
 });
 
 test("positional restore keeps insertion order when multiple Drafts are removed and restored in any order", () => {

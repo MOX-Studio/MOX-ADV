@@ -205,6 +205,14 @@ export type OwnerJourneyProjection = {
   packageSummary: {
     campaignCount: number;
     preflight: string;
+    preflightGates: Array<{ label: string; status: "Пройдено" | "Заблокировано"; explanation: string }>;
+    strategyMonthlyBudget: string;
+    orderedPackageBudget: string;
+    budgetAlignment: {
+      classification: "Соответствует" | "Ограниченный тест" | "Нужно изменить" | "Заблокировано";
+      explanation: string;
+    };
+    campaignBudgets: Array<{ name: string; budget: string; period: string }>;
     execution: string;
     outcomes: Array<{ campaign: string; outcome: string }>;
   } | null;
@@ -238,8 +246,10 @@ type ActionKind =
   | "confirm-goal"
   | "confirm-business-model"
   | "approve-strategy"
+  | "revalidate-draft"
   | "revalidate-auction-protocol"
   | "prepare-package"
+  | "edit-package"
   | "review-package"
   | "authorize-and-create"
   | "start-correction"
@@ -481,6 +491,18 @@ function actionDescriptor(view: InternalView): InternalActionDescriptor | null {
     };
   }
 
+  const draftRevalidation = list(record(state.recommendation_set).drafts).map(record).find((draft) =>
+    list(draft.publication_blockers).map(record).some((blocker) => blocker.code === "DRAFT_REVALIDATION_REQUIRED")
+  );
+  if (draftRevalidation) {
+    return {
+      kind: "revalidate-draft",
+      target: String(draftRevalidation.draft_id ?? ""),
+      label: "Повторно проверить изменённую кампанию",
+      description: "Материальная правка создала новую неизменяемую версию. Агент заново проверит сравнительный score и все 9 бизнес-ограничений до нового решения.",
+      fields: [],
+    };
+  }
   const protocolRevalidation = list(record(state.recommendation_set).drafts).map(record).find((draft) =>
     list(draft.publication_blockers).map(record).some((blocker) => blocker.code === "AUCTION_PROTOCOL_REVALIDATION_REQUIRED")
   );
@@ -556,12 +578,24 @@ function actionDescriptor(view: InternalView): InternalActionDescriptor | null {
     }
     return null;
   }
+  if (!state.human_decision_gate && record(record(state.package_review).business_projection).preflight
+    && record(record(record(state.package_review).business_projection).preflight).status === "BLOCKED") {
+    const drafts = list(record(state.recommendation_set).drafts).map(record);
+    return {
+      kind: "edit-package",
+      label: "Исправить бюджет или протокол пакета",
+      description: "Предпубликационная проверка заблокирована. Измените показанные тестовые бюджеты или периоды; материальная правка потребует явной повторной проверки.",
+      fields: protocolFields((state.shortlist?.selections ?? []).map((selection) =>
+        drafts.find((draft) => draft.draft_id === selection.draft_id) ?? {}
+      )),
+    };
+  }
   if (!state.human_decision_gate && allowed(view, "confirm_package")) {
     const drafts = list(record(state.recommendation_set).drafts).map(record);
     return {
       kind: "authorize-and-create",
-      label: "Подтвердить и создать без запуска",
-      description: "Одно решение разрешает только показанный пакет и точные протоколы тестов. Кампании останутся без показов и расходов.",
+      label: "Подтвердить точный пакет",
+      description: "Одно решение выдаёт одноразовое полномочие только на показанный пакет и точные протоколы тестов. Подтверждение не создаёт кампании и не выполняет внешнюю запись.",
       fields: protocolFields((state.shortlist?.selections ?? []).map((selection) =>
         drafts.find((draft) => draft.draft_id === selection.draft_id) ?? {}
       )),
@@ -1034,6 +1068,15 @@ function packageSummary(view: InternalView, campaigns: OwnerJourneyProjection["c
   const state = view.state;
   if (!state.package_review) return null;
   const execution = state.package_execution;
+  const businessProjection = record(state.package_review.business_projection);
+  const preflight = record(businessProjection.preflight);
+  const alignment = record(businessProjection.budget_alignment);
+  const alignmentLabels: Record<string, NonNullable<OwnerJourneyProjection["packageSummary"]>["budgetAlignment"]["classification"]> = {
+    ALIGNED: "Соответствует",
+    LIMITED_TEST: "Ограниченный тест",
+    REQUIRED_EDIT: "Нужно изменить",
+    BLOCKER: "Заблокировано",
+  };
   const correctedItemIds = new Set(state.package_corrections
     .filter((correction) => correction.terminal_outcome === "PASS_AFTER_CORRECTION")
     .map((correction) => correction.source.item_execution_id));
@@ -1041,7 +1084,30 @@ function packageSummary(view: InternalView, campaigns: OwnerJourneyProjection["c
     && execution!.items.every((item) => item.status === "DIRECT_ACCEPTED" || correctedItemIds.has(item.item_execution_id));
   return {
     campaignCount: state.shortlist?.selections.length ?? 0,
-    preflight: "9/9 бизнес-проверок пройдено",
+    preflight: `${Number(preflight.passed ?? 0)}/${Number(preflight.total ?? 9)} бизнес-проверок ${preflight.status === "PASS" ? "пройдено" : "требуют внимания"}`,
+    preflightGates: list(preflight.gates).map((value) => {
+      const item = record(value);
+      return {
+        label: ownerText(item.label),
+        status: item.status === "PASS" ? "Пройдено" as const : "Заблокировано" as const,
+        explanation: ownerText(item.explanation),
+      };
+    }),
+    strategyMonthlyBudget: `${Number(alignment.strategy_monthly_budget_rub ?? 0).toLocaleString("ru-RU")} ₽ в месяц`,
+    orderedPackageBudget: `${Number(alignment.ordered_package_sum_rub ?? 0).toLocaleString("ru-RU")} ₽`,
+    budgetAlignment: {
+      classification: alignmentLabels[String(alignment.classification)] ?? "Заблокировано",
+      explanation: ownerText(alignment.explanation, "Арифметическое сопоставление недоступно; это не прогноз результата."),
+    },
+    campaignBudgets: list(alignment.campaigns).map((value) => {
+      const item = record(value);
+      const period = record(item.period);
+      return {
+        name: ownerText(item.campaign_name),
+        budget: `${Number(item.test_budget_rub ?? 0).toLocaleString("ru-RU")} ₽`,
+        period: `${ownerText(period.start_date, "Недоступно", 20)} — ${ownerText(period.end_date, "Недоступно", 20)}`,
+      };
+    }),
     execution: execution
       ? completed ? "Создание завершено" : "Агент продолжает создание и проверку"
       : state.human_decision_gate ? "Решение подтверждено" : "Ожидает решения владельца",
@@ -1095,7 +1161,7 @@ function recommendation(view: InternalView, stage: OwnerJourneyStageId): OwnerJo
   }
   if (stage === "strategy") return { headline: "Утвердить подготовленную стратегию", rationale: "Агент заполнил discoverable факты; от владельца требуется только материальное бизнес-решение." };
   if (stage === "campaigns") return { headline: "Принять готовые к проверке варианты", rationale: "Жёсткие ограничения применены до сравнительной оценки; заблокированные варианты не попадут в пакет." };
-  return { headline: "Создать подтверждённые кампании без запуска", rationale: "Каждая кампания будет создана и проверена независимо, а показы останутся выключены." };
+  return { headline: "Подтвердить точный пакет", rationale: "Решение выдаст одноразовое полномочие только на показанные кампании; отдельное исполнение останется работой агента." };
 }
 
 function cards(
@@ -1515,6 +1581,8 @@ export class P0OwnerJourney {
           core_message: required(values, "message"),
         },
       });
+    } else if (descriptor.kind === "revalidate-draft") {
+      await command({ action: "revalidate_draft", draft_id: descriptor.target });
     } else if (descriptor.kind === "revalidate-auction-protocol") {
       await command({ action: "revalidate_auction_protocol", draft_id: descriptor.target });
     } else if (descriptor.kind === "prepare-package") {
@@ -1547,6 +1615,13 @@ export class P0OwnerJourney {
       if (allowed(view, "review_package")) await command({ action: "review_package" });
     } else if (descriptor.kind === "review-package") {
       await command({ action: "review_package" });
+    } else if (descriptor.kind === "edit-package") {
+      const selectedDrafts = (view.state.shortlist?.selections ?? []).map((selection) =>
+        list(record(view.state.recommendation_set).drafts).map(record).find((draft) => draft.draft_id === selection.draft_id) ?? {}
+      );
+      if (!await saveProtocols(selectedDrafts)) {
+        throw new P0ApplicationError("P0_OWNER_PACKAGE_EDIT_REQUIRED", "Измените бюджет или период хотя бы одного теста перед повторной проверкой.");
+      }
     } else if (descriptor.kind === "authorize-and-create") {
       const selectedDrafts = (view.state.shortlist?.selections ?? []).map((selection) =>
         list(record(view.state.recommendation_set).drafts).map(record).find((draft) => draft.draft_id === selection.draft_id) ?? {}
@@ -1562,10 +1637,6 @@ export class P0OwnerJourney {
         package_review_id: review.package_review_id,
         package_id: review.package_id,
       });
-      if (!this.agentProjection) {
-        const gate = view.state.human_decision_gate!;
-        await command({ action: "dispatch_package", package_id: gate.package_id, gate_id: gate.gate_id });
-      }
     } else if (descriptor.kind === "start-correction") {
       await command({ action: "start_package_correction", item_execution_id: descriptor.target });
     } else if (descriptor.kind === "save-correction") {
@@ -1605,7 +1676,7 @@ export class P0OwnerJourney {
       }
     }
 
-    if (!this.agentProjection) view = await this.continueSafeWork(ownerKey, view);
+    if (!this.agentProjection) view = await this.continueSafeWork(ownerKey, view, descriptor.kind !== "authorize-and-create");
     const agent = this.agentProjection ? await this.agentProjection(ownerKey) : null;
     const access = accessState && this.accessReadiness ? this.accessReadiness.project(accessState) : null;
     return project(ownerKey, view, agent, access);
@@ -1615,9 +1686,19 @@ export class P0OwnerJourney {
     return this.application.query(ownerKey);
   }
 
-  private async continueSafeWork(ownerKey: string, initial: InternalView) {
+  private async continueSafeWork(ownerKey: string, initial: InternalView, allowDispatch = true) {
     let view = initial;
     for (let attempt = 0; attempt < 8; attempt += 1) {
+      if (allowDispatch && view.state.human_decision_gate && !view.state.package_execution && allowed(view, "dispatch_package")) {
+        const gate = view.state.human_decision_gate;
+        view = await this.application.command(ownerKey, {
+          action: "dispatch_package",
+          expected_revision: view.revision,
+          package_id: gate.package_id,
+          gate_id: gate.gate_id,
+        });
+        continue;
+      }
       const initialItem = view.state.package_execution?.items.find((item) => ["MODERATION_PENDING", "OUTCOME_UNKNOWN"].includes(item.status));
       if (initialItem && allowed(view, "poll_package_moderation")) {
         try {

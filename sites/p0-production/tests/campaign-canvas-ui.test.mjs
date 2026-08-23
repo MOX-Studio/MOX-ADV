@@ -26,12 +26,14 @@ test("owner surface renders exactly one opaque primary action seam", () => {
 });
 
 test("owner package review shows business outcomes while exact authority stays behind the interface", () => {
-  assert.match(ownerSource, /9\/9 бизнес-проверок пройдено/u);
+  assert.match(ownerSource, /preflightGates/u);
+  assert.match(clientSource, /Предпубликационная проверка/u);
+  assert.match(clientSource, /Месячный бюджет Strategy/u);
   assert.match(ownerSource, /Создана и оставлена без показов/u);
   assert.match(ownerSource, /Нужно исправить формулировку/u);
   assert.match(ownerSource, /authorize-and-create/u);
   assert.match(ownerSource, /confirm_package/u);
-  assert.match(ownerSource, /dispatch_package/u);
+  assert.match(ownerSource, /allowDispatch.*dispatch_package/su);
   assert.doesNotMatch(clientSource, /package_id|gate_id|package_review_id|account_lock/u);
 });
 

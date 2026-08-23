@@ -222,6 +222,12 @@ export default function P0Client() {
           {projection.packageSummary && <section className="owner-package" aria-labelledby="owner-package-title">
             <header><div><p className="owner-eyebrow">ИТОГОВАЯ ПРОВЕРКА</p><h2 id="owner-package-title">{projection.packageSummary.campaignCount} кампании к созданию</h2></div><strong>{projection.packageSummary.preflight}</strong></header>
             <p>{projection.packageSummary.execution}</p>
+            <div className="owner-demand-cost-grid">
+              <article><span>Месячный бюджет Strategy</span><h3>{projection.packageSummary.strategyMonthlyBudget}</h3></article>
+              <article><span>Сумма выбранного пакета</span><h3>{projection.packageSummary.orderedPackageBudget}</h3><p>{projection.packageSummary.budgetAlignment.classification}. {projection.packageSummary.budgetAlignment.explanation}</p></article>
+            </div>
+            <div><h3>Бюджеты и периоды выбранных тестов</h3><ol>{projection.packageSummary.campaignBudgets.map((campaign) => <li key={`${campaign.name}-${campaign.period}`}><strong>{campaign.name}</strong><span>{campaign.budget} · {campaign.period}</span></li>)}</ol></div>
+            <div><h3>Предпубликационная проверка</h3><ol>{projection.packageSummary.preflightGates.map((gate) => <li key={gate.label}><strong>{gate.label} · {gate.status}</strong><span>{gate.explanation}</span></li>)}</ol></div>
             {projection.packageSummary.outcomes.length > 0 && <ul>{projection.packageSummary.outcomes.map((item) => <li key={item.campaign}><strong>{item.campaign}</strong><span>{item.outcome}</span></li>)}</ul>}
           </section>}
 

@@ -10,6 +10,7 @@ import {
   P0Application,
   P0ApplicationError,
 } from "../lib/p0-application.ts";
+import { buildPackageBusinessProjection } from "../lib/campaign-decision-gate.ts";
 import {
   directExecutionFailureOutcome,
   recordPackageItemOutcome,
@@ -499,6 +500,24 @@ async function marketEvidenceInput() {
     demand_clusters: [{ cluster_id: "cluster-participation", semantic_key: { product: "выставка", need: "участие", intent: "commercial", offer: "стенд" } }],
     cost_observations: [],
   };
+}
+
+async function packageMarketEvidenceInput() {
+  const input = await marketEvidenceInput();
+  input.cost_observations = [{
+    observation_id: "history-package-fixture",
+    source: "DIRECT_HISTORY_OWN_EMPIRICAL",
+    status: "AVAILABLE",
+    scenario: "day-level P25-P75",
+    scope: { account: "owner-account", phrase: "CLUSTER", geography: "SAME", placement: "SAME", strategy: "SAME", season: "SAME" },
+    as_of: "2026-08-20T00:00:00.000Z",
+    currency: "RUB",
+    vat_treatment: "INCLUDED",
+    sample_size: { unit: "clicks", value: 42 },
+    range: { low: 110, high: 170, kind: "EMPIRICAL_IQR" },
+    qualification: { first_party: true, complete_direct_audit: true, clicks: 42 },
+  }];
+  return input;
 }
 
 test("authoritative application collects market evidence only for a Model revision and persists it for downstream delivery packing", async (t) => {
@@ -1839,6 +1858,39 @@ test("restart rejects every same-schema persisted field registry mutation before
   assert.equal(migrated.revision, row.revision + 1);
 });
 
+test("a material Draft edit requires explicit revalidation while preserving unrelated immutable Draft revisions", async (t) => {
+  const { application, result: approved } = await approvedDraftFixture(t);
+  const generated = approved.state.recommendation_set.drafts.find((draft) => draft.visibility === "VISIBLE");
+  const unrelatedBefore = Object.fromEntries(approved.state.recommendation_set.drafts
+    .filter((draft) => draft.draft_id !== generated.draft_id)
+    .map((draft) => [draft.draft_id, draft.draft_revision_id]));
+
+  let result = await application.command("owner", {
+    action: "save_draft",
+    expected_revision: approved.revision,
+    value: editableDraftValue(generated, { keyword: `${generated.keyword} завод` }),
+  });
+  assert.notEqual(result.state.draft.draft_revision_id, generated.draft_revision_id);
+  assert.equal(result.state.draft.viability_score, undefined);
+  assert.equal(result.state.draft.shortlist_eligible, false);
+  assert.equal(result.state.draft.publication_blockers.some((blocker) => blocker.code === "DRAFT_REVALIDATION_REQUIRED"), true);
+  assert.equal(result.state.package_review, null);
+  assert.equal(result.state.human_decision_gate, null);
+  assert.deepEqual(Object.fromEntries(result.state.recommendation_set.drafts
+    .filter((draft) => draft.draft_id !== generated.draft_id)
+    .map((draft) => [draft.draft_id, draft.draft_revision_id])), unrelatedBefore);
+  assert.equal(result.workflow.allowed_commands.includes("revalidate_draft"), true);
+
+  result = await application.command("owner", {
+    action: "revalidate_draft",
+    expected_revision: result.revision,
+    draft_id: generated.draft_id,
+  });
+  assert.ok(result.state.draft.viability_score);
+  assert.equal(result.state.draft.publication_blockers.some((blocker) => blocker.code === "DRAFT_REVALIDATION_REQUIRED"), false);
+  assert.equal(result.state.draft.draft_revision_id.startsWith(`${generated.draft_id}-r`), true);
+});
+
 test("normalization-only Draft save reports a no-op without inventing a Draft or Recommendation Set revision", async (t) => {
   const { application, result: approved } = await approvedDraftFixture(t);
   const generated = approved.state.recommendation_set.drafts.find((draft) => draft.visibility === "VISIBLE");
@@ -1941,7 +1993,7 @@ async function packageFixture(t, { release } = {}) {
   let contextReads = 0;
   const adapter = adapters({
     async readContext() { contextReads += 1; return context(); },
-    async readMarketEvidence() { return marketEvidenceInput(); },
+    async readMarketEvidence() { return packageMarketEvidenceInput(); },
     async readPlaybookReleases() { return releases; },
     async createExternalOutcome() {
       externalWrites += 1;
@@ -1997,6 +2049,39 @@ function auctionProtocolValue(draft, overrides = {}) {
     ...overrides,
   };
 }
+
+test("publish preflight evaluates each of the exact nine business gates fail closed", async (t) => {
+  const value = await packageFixture(t);
+  const state = value.result.state;
+  const selected = state.recommendation_set.drafts.find((draft) => draft.shortlist_eligible && draft.visibility === "VISIBLE");
+  const baseline = {
+    selectedDrafts: [selected],
+    strategy: state.strategy,
+    businessModel: state.business_model,
+    analyticsEvidenceSnapshot: state.analytics_evidence_snapshot,
+    recommendationSet: state.recommendation_set,
+    capabilitySnapshot: state.context_state.facts.direct.capability_snapshot,
+    measurementDestinationReadiness: state.measurement_destination_readiness,
+  };
+  const cases = [
+    ["GOAL_STRATEGY", (input) => { input.strategy.answers.find((answer) => answer.field_id === "business_goal").value = ""; }],
+    ["MODEL_ECONOMICS", (input) => { input.businessModel.owner_contract.economics.status = "MATERIAL_UNCERTAINTY"; }],
+    ["EVIDENCE_FRESHNESS", (input) => { input.analyticsEvidenceSnapshot.confidence.freshness = "UNKNOWN"; }],
+    ["MARKET_PROVENANCE", (input) => { delete input.analyticsEvidenceSnapshot.market_evidence.cost.status; }],
+    ["MEASUREMENT", (input) => { input.measurementDestinationReadiness.measurement.status = "BLOCKED"; }],
+    ["DESTINATION", (input) => { input.measurementDestinationReadiness.destination.status = "BLOCKED"; }],
+    ["CLAIMS_ASSETS", (input) => { input.selectedDrafts[0].publish_projection.brand_claims_contract.creative_family.assets[0].rights.status = "UNVERIFIED"; }],
+    ["DIRECT_PROFILE", (input) => { input.recommendationSet.capability_profile.eligibility.eligible = false; }],
+    ["AUCTION_BUDGET_INTEGRITY", (input) => { input.selectedDrafts[0].auction_protocol.test_budget_rub = 999_999_999; }],
+  ];
+  for (const [code, mutate] of cases) {
+    const input = structuredClone(baseline);
+    mutate(input);
+    const projection = await buildPackageBusinessProjection(input);
+    assert.equal(projection.preflight.gates.find((gate) => gate.code === code).status, "BLOCKED", code);
+    assert.equal(projection.preflight.status, "BLOCKED", code);
+  }
+});
 
 test("every selected Campaign revision freezes a complete honest Auction Protocol in exact authority and P1 lineage", async (t) => {
   const value = await packageFixture(t);
@@ -2210,6 +2295,27 @@ test("ordered multi-Draft shortlist supports add/remove/positional restore, exac
   assert.equal(review.authority.direct_capability_snapshot.snapshot_id, result.state.context_state.facts.direct.capability_snapshot.snapshot_id);
   assert.equal(review.authority.capability_profile.profile_id, result.state.recommendation_set.capability_profile.profile_id);
   assert.equal(review.authority.analytics_evidence_snapshot_id, result.state.analytics_evidence_snapshot.snapshot_id);
+  assert.deepEqual(review.authority.strategy_snapshot, result.state.strategy);
+  assert.deepEqual(review.authority.business_model_snapshot, result.state.business_model);
+  assert.deepEqual(review.authority.analytics_evidence_snapshot, result.state.analytics_evidence_snapshot);
+  assert.deepEqual(review.authority.measurement_destination_readiness, result.state.measurement_destination_readiness);
+  assert.deepEqual(review.authority.claims_assets, result.state.shortlist.selections.map((selection) => ({
+    draft_id: selection.draft_id,
+    draft_revision_id: selection.draft_revision_id,
+    contract: result.state.recommendation_set.drafts.find((draft) => draft.draft_id === selection.draft_id).publish_projection.brand_claims_contract,
+  })));
+  assert.equal(review.business_projection.budget_alignment.strategy_monthly_budget_rub, Math.round(50_000 * 52 / 12));
+  assert.equal(review.business_projection.budget_alignment.ordered_package_sum_rub,
+    review.business_projection.budget_alignment.campaigns.reduce((sum, campaign) => sum + campaign.test_budget_rub, 0));
+  assert.equal(review.business_projection.budget_alignment.classification, "LIMITED_TEST");
+  assert.equal(review.business_projection.budget_alignment.performance_forecast, false);
+  assert.equal(review.business_projection.preflight.passed, 9, JSON.stringify(review.business_projection.preflight.gates));
+  assert.equal(review.business_projection.preflight.total, 9);
+  assert.deepEqual(review.business_projection.preflight.gates.map((gate) => gate.code), [
+    "GOAL_STRATEGY", "MODEL_ECONOMICS", "EVIDENCE_FRESHNESS", "MARKET_PROVENANCE", "MEASUREMENT",
+    "DESTINATION", "CLAIMS_ASSETS", "DIRECT_PROFILE", "AUCTION_BUDGET_INTEGRITY",
+  ]);
+  assert.equal(review.business_projection.preflight.gates.every((gate) => gate.status === "PASS"), true);
   assert.match(review.package_id, /^sha256:[a-f0-9]{64}$/u);
   assert.match(review.package_review_id, /^sha256:[a-f0-9]{64}$/u);
   assert.equal(review.authority.orchestration.selected_campaigns_execute_independently, true);
@@ -3448,6 +3554,11 @@ test("same-schema shortlist, package and confirmation tampering all fail closed 
     ["selected Draft revision", (state) => { state.shortlist.selections[0].draft_revision_id = "draft-forged-r9"; }],
     ["selected publish fingerprint", (state) => { state.shortlist.selections[0].publish_fingerprint = `sha256:${"0".repeat(64)}`; }],
     ["package contents", (state) => { state.package_review.authority.direct_account_binding.account = "other-account"; }],
+    ["Strategy snapshot", (state) => { state.package_review.authority.strategy_snapshot.answers[0].value = "forged goal"; }],
+    ["Business Model snapshot", (state) => { state.package_review.authority.business_model_snapshot.owner_contract.economics.target_result_cost_rub = 1; }],
+    ["Evidence snapshot", (state) => { state.package_review.authority.analytics_evidence_snapshot.as_of = "2030-01-01T00:00:00.000Z"; }],
+    ["claims/assets", (state) => { state.package_review.authority.claims_assets[0].contract.creative_family.assets[0].rights.status = "FORGED"; }],
+    ["frozen protocol", (state) => { state.package_review.authority.frozen_auction_protocols[0].test_budget_rub += 1; }],
     ["confirmation token", (state) => { state.human_decision_gate.confirmation_token = "FORGED"; }],
     ["confirmation timestamp", (state) => { state.human_decision_gate.confirmed_at = "2030-01-01T00:00:00.000Z"; }],
   ];
@@ -3492,10 +3603,9 @@ test("normalization preserves exact package Gate while a material Draft edit inv
   assert.equal(result.state.package_review, null);
   assert.equal(result.state.human_decision_gate, null);
   assert.equal(result.state.last_decision_invalidation.reason_code, "DRAFT_MATERIAL_CHANGE");
-  assert.equal(result.state.shortlist.selections[0].draft_id, draft.draft_id);
-  assert.equal(result.state.shortlist.selections[0].draft_revision_id, result.state.draft.draft_revision_id);
-  assert.equal(result.state.shortlist.selections[0].publish_fingerprint, result.state.draft.publish_fingerprint);
-  assert.equal(result.state.shortlist.selections[0].recommendation_set_id, result.state.recommendation_set.recommendation_set_id);
+  assert.equal(result.state.draft.viability_score, undefined);
+  assert.equal(result.state.draft.publication_blockers.some((blocker) => blocker.code === "DRAFT_REVALIDATION_REQUIRED"), true);
+  assert.equal(result.state.shortlist.selections.some((selection) => selection.draft_id === draft.draft_id), false);
 });
 
 test("Strategy, Model, Context and playbook material paths invalidate current Gate with an audit-visible reason", async (t) => {
@@ -3592,8 +3702,8 @@ test("same exact active playbook release preserves a material owner Draft revisi
     recommendation_set_id: result.state.recommendation_set.recommendation_set_id,
     draft_revision_id: result.state.draft.draft_revision_id,
     publish_fingerprint: result.state.draft.publish_fingerprint,
-    score: result.state.draft.viability_score.score,
-    rank: result.state.draft.viability_score.rank,
+    score_invalidated: result.state.draft.viability_score === undefined,
+    revalidation_required: result.state.draft.publication_blockers.some((blocker) => blocker.code === "DRAFT_REVALIDATION_REQUIRED"),
   };
 
   result = await application.command("owner", { action: "recalculate_recommendations", expected_revision: result.revision });
@@ -3606,8 +3716,8 @@ test("same exact active playbook release preserves a material owner Draft revisi
   assert.equal(result.state.recommendation_set.recommendation_set_id, preserved.recommendation_set_id);
   assert.equal(result.state.draft.draft_revision_id, preserved.draft_revision_id);
   assert.equal(result.state.draft.publish_fingerprint, preserved.publish_fingerprint);
-  assert.equal(result.state.draft.viability_score.score, preserved.score);
-  assert.equal(result.state.draft.viability_score.rank, preserved.rank);
+  assert.equal(result.state.draft.viability_score === undefined, preserved.score_invalidated);
+  assert.equal(result.state.draft.publication_blockers.some((blocker) => blocker.code === "DRAFT_REVALIDATION_REQUIRED"), preserved.revalidation_required);
   assert.deepEqual(result.state.recommendation_recalculation, {
     schema_version: "p0-recommendation-recalculation-v1",
     material_change: false,
@@ -3681,7 +3791,7 @@ test("every editable Direct field round-trips into a material immutable Draft re
   for (const [inputName, nextValue, expectedPointer] of cases) {
     const previousRecommendationSetId = result.state.recommendation_set.recommendation_set_id;
     const previousFingerprint = current.publish_fingerprint;
-    const previousScores = Object.fromEntries(result.state.recommendation_set.drafts.map((draft) => [draft.draft_id, draft.viability_score.fingerprints.input]));
+    const previousDraftRevisions = Object.fromEntries(result.state.recommendation_set.drafts.map((draft) => [draft.draft_id, draft.draft_revision_id]));
     result = await application.command("owner", {
       action: "save_draft",
       expected_revision: result.revision,
@@ -3695,12 +3805,23 @@ test("every editable Direct field round-trips into a material immutable Draft re
     assert.deepEqual(current.material_delta.fields.map((field) => field.pointer), [expectedPointer]);
     assert.equal(current.material_delta.fields[0].reason_code, "SUPPORTED_PUBLISHABLE_FIELD_CHANGED");
     assert.equal(current.draft_save_result.material_change, true);
-    assert.equal(current.score_delta.changed_pointers.includes(expectedPointer), true);
-    assert.equal(typeof current.score_delta.comparative_priority_reason.message, "string");
-    assert.equal(current.score_delta.comparative_priority_reason.message.length > 0, true);
-    assert.equal(result.state.recommendation_set.drafts.length, Object.keys(previousScores).length);
+    assert.equal(current.viability_score, undefined);
+    assert.equal(current.score_delta, null);
+    assert.equal(current.publication_blockers.some((blocker) => blocker.code === "DRAFT_REVALIDATION_REQUIRED"), true);
+    assert.equal(result.state.recommendation_set.drafts.length, Object.keys(previousDraftRevisions).length);
+    assert.deepEqual(Object.fromEntries(result.state.recommendation_set.drafts
+      .filter((draft) => draft.draft_id !== current.draft_id)
+      .map((draft) => [draft.draft_id, draft.draft_revision_id])), Object.fromEntries(Object.entries(previousDraftRevisions)
+        .filter(([draftId]) => draftId !== current.draft_id)));
+    result = await application.command("owner", {
+      action: "revalidate_draft",
+      expected_revision: result.revision,
+      draft_id: current.draft_id,
+    });
+    current = result.state.draft;
+    assert.ok(current.viability_score);
+    assert.equal(current.publication_blockers.some((blocker) => blocker.code === "DRAFT_REVALIDATION_REQUIRED"), false);
     for (const draft of result.state.recommendation_set.drafts) {
-      assert.notEqual(draft.viability_score.fingerprints.input, previousScores[draft.draft_id]);
       assert.equal(draft.viability_score.ranking.recommendation_set_id, result.state.recommendation_set.recommendation_set_id);
     }
     assert.equal(result.state.recommendation_set.coverage.generated_count, result.state.recommendation_set.coverage.visible_count + result.state.recommendation_set.coverage.hidden_count);
@@ -3904,7 +4025,7 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
   const application = new P0Application({
     store,
     adapters: adapters({
-      async readMarketEvidence() { return marketEvidenceInput(); },
+      async readMarketEvidence() { return packageMarketEvidenceInput(); },
       async readPlaybookReleases() { return [release]; },
     }),
   });
@@ -4038,8 +4159,26 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
   ownerResponses.push(projection);
   assert.equal(projection.journey.currentStage, "review");
   assert.equal(projection.packageSummary.preflight, "9/9 бизнес-проверок пройдено");
+  assert.equal(projection.packageSummary.preflightGates.length, 9);
+  assert.equal(projection.packageSummary.preflightGates.every((gate) => gate.status === "Пройдено"), true);
+  assert.match(projection.packageSummary.strategyMonthlyBudget, /₽/u);
+  assert.match(projection.packageSummary.orderedPackageBudget, /₽/u);
+  assert.equal(projection.packageSummary.budgetAlignment.classification, "Ограниченный тест");
+  assert.match(projection.packageSummary.budgetAlignment.explanation, /арифметик|не прогноз/iu);
+  assert.deepEqual(projection.packageSummary.campaignBudgets.map((campaign) => campaign.name),
+    projection.campaignOptions.filter((campaign) => campaign.selected).map((campaign) => campaign.name));
   assert.equal(projection.packageSummary.campaignCount, 2);
-  assert.equal(projection.primaryAction.label, "Подтвердить и создать без запуска");
+  assert.equal(projection.primaryAction.label, "Подтвердить точный пакет");
+  projection = await journey.submit(ownerKey, {
+    handle: projection.primaryAction.handle,
+    values: values(projection),
+  });
+  ownerResponses.push(projection);
+  const confirmedDiagnostics = await journey.diagnostics(ownerKey);
+  assert.ok(confirmedDiagnostics.state.human_decision_gate);
+  assert.equal(confirmedDiagnostics.state.package_execution, null);
+  assert.equal(confirmedDiagnostics.state.external_write_intent, null);
+  assert.equal(confirmedDiagnostics.state.campaign, null);
 
   for (const forbidden of [
     /schema[_ -]?version/iu,
