@@ -2539,6 +2539,14 @@ test("a campaign passes only with a complete suspended graph, one ACCEPTED ad pe
   assert.equal(item.provider_issues.some((issue) => issue.details === "Policy detail"), true);
   assert.equal(item.moderation.observations.length, 2);
   assert.equal(item.moderation.next_poll_at, null);
+
+  const handoff = await value.application.exportP1Handoff("owner");
+  assert.equal(handoff.admitted_campaigns.length, 1);
+  assert.equal(handoff.excluded_outcomes.length, 0);
+  assert.equal(handoff.admitted_campaigns[0].final_state.serving, "SUSPENDED");
+  assert.equal(handoff.admitted_campaigns[0].final_state.moderation, "ACCEPTED");
+  assert.equal(JSON.stringify(handoff).includes("\"provider_ids\":"), false);
+  assert.equal(JSON.stringify(handoff).includes("\"campaign_id\":"), false);
 });
 
 test("a later poll cannot reuse a stale terminal ad row omitted from the current observation", async (t) => {

@@ -139,6 +139,7 @@ import {
 import { normalizePublicHttpsUrl } from "./site-url.ts";
 import { cleanText } from "./text.ts";
 import type { MarketEvidenceInput } from "./market-evidence.ts";
+import { buildP0P1Handoff, type P0P1Handoff } from "./p0-p1-handoff.ts";
 import {
   runLandingAdvisory,
   unavailableLandingAdvisoryAdapter,
@@ -3614,6 +3615,11 @@ export class P0Application {
     }
     const uniqueBlockers = [...new Set(blockers)];
     return { ready: uniqueBlockers.length === 0, blockers: uniqueBlockers };
+  }
+
+  async exportP1Handoff(key: string): Promise<P0P1Handoff> {
+    const stored = await this.load(key);
+    return buildP0P1Handoff(stored.state);
   }
 
   async query(key: string) {
