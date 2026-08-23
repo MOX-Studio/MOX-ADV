@@ -10,6 +10,7 @@ import type {
   ShortlistSelection,
 } from "./campaign-decision-gate.ts";
 import type { DirectProjection } from "./direct-write.ts";
+import { verifyAuctionProtocol } from "./auction-protocol.ts";
 
 export const PACKAGE_EXECUTION_SCHEMA = "p0-package-execution-v2";
 export const PACKAGE_ITEM_EXECUTION_SCHEMA = "p0-package-item-execution-v2";
@@ -248,6 +249,8 @@ function selectionMatchesDraft(
   return selection.draft_id === draft.draft_id
     && selection.draft_revision_id === draft.draft_revision_id
     && selection.publish_fingerprint === draft.publish_fingerprint
+    && selection.auction_protocol_revision_id === draft.auction_protocol?.protocol_revision_id
+    && selection.auction_protocol_content_hash === draft.auction_protocol?.content_hash
     && selection.strategy_revision_id === draft.strategy_revision_id
     && selection.capability_profile_id === draft.capability_profile_id
     && selection.capability_profile_version === draft.capability_profile_version
@@ -279,6 +282,12 @@ export async function exactPackageDispatchPlans(input: {
     const blockers = campaignDraftPublishBlockers(draft);
     if (blockers.length) throw new Error(`Selected Draft ${selection.draft_id} blocked: ${blockers[0]}`);
     const projection = draft.publish_projection as DirectProjection;
+    const frozenProtocol = input.gate.authority.frozen_auction_protocols[position];
+    if (!frozenProtocol
+      || JSON.stringify(frozenProtocol) !== JSON.stringify(draft.auction_protocol)
+      || !await verifyAuctionProtocol(frozenProtocol, draft)) {
+      throw new Error(`Selected Draft ${selection.draft_id} Auction Protocol не совпадает с exact Gate.`);
+    }
     if (!projection || await fingerprintDirectProjection(projection as unknown as Record<string, unknown>) !== selection.publish_fingerprint) {
       throw new Error(`Selected Draft ${selection.draft_id} projection fingerprint не совпадает с exact Gate.`);
     }

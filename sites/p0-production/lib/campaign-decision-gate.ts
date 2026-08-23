@@ -1,9 +1,9 @@
 import { canonicalizeEvidence } from "./analytics-evidence.ts";
 import { campaignDraftPublishBlockers, type CampaignRecommendationSet } from "./campaign-fanout.ts";
 
-export const SHORTLIST_SCHEMA = "p0-shortlist-v2";
-export const PACKAGE_REVIEW_SCHEMA = "p0-package-review-v1";
-export const HUMAN_DECISION_GATE_SCHEMA = "p0-human-decision-gate-v1";
+export const SHORTLIST_SCHEMA = "p0-shortlist-v3";
+export const PACKAGE_REVIEW_SCHEMA = "p0-package-review-v2";
+export const HUMAN_DECISION_GATE_SCHEMA = "p0-human-decision-gate-v2";
 export const DECISION_INVALIDATION_SCHEMA = "p0-decision-invalidation-v1";
 export const PACKAGE_CONFIRMATION_TOKEN = "CONFIRM_EXACT_SHORTLIST_PACKAGE";
 export const INDEPENDENT_EXECUTION_DISCLOSURE = "Каждая выбранная кампания будет отправляться, сдерживаться, модерироваться и оцениваться независимо. Пакет не является одной атомарной внешней транзакцией.";
@@ -12,6 +12,8 @@ export type ShortlistSelection = {
   draft_id: string;
   draft_revision_id: string;
   publish_fingerprint: string;
+  auction_protocol_revision_id: string;
+  auction_protocol_content_hash: string;
   strategy_revision_id: string;
   capability_profile_id: string;
   capability_profile_version: string;
@@ -25,7 +27,7 @@ export type RemovedShortlistSelection = ShortlistSelection & {
 
 export type P0Shortlist = {
   schema_version: typeof SHORTLIST_SCHEMA;
-  contract_version: "2.0.0";
+  contract_version: "3.0.0";
   shortlist_revision_id: string;
   strategy_revision_id: string;
   recommendation_set_id: string;
@@ -44,7 +46,7 @@ export type DirectAccountBinding = {
 };
 
 export type PackageAuthority = {
-  schema_version: "p0-package-authority-v1";
+  schema_version: "p0-package-authority-v2";
   ordered_selections: ShortlistSelection[];
   shortlist_revision_id: string;
   recommendation_set_id: string;
@@ -53,6 +55,7 @@ export type PackageAuthority = {
   direct_capability_snapshot: Record<string, unknown>;
   capability_profile: Record<string, unknown>;
   analytics_evidence_snapshot_id: string;
+  frozen_auction_protocols: CampaignRecommendationSet["drafts"][number]["auction_protocol"][];
   orchestration: {
     external_transactionality: "NOT_PROMISED";
     selected_campaigns_execute_independently: true;
@@ -62,7 +65,7 @@ export type PackageAuthority = {
 
 export type PackageReview = {
   schema_version: typeof PACKAGE_REVIEW_SCHEMA;
-  contract_version: "1.0.0";
+  contract_version: "2.0.0";
   package_review_id: string;
   package_id: string;
   reviewed_at: string;
@@ -71,7 +74,7 @@ export type PackageReview = {
 
 export type HumanDecisionGate = {
   schema_version: typeof HUMAN_DECISION_GATE_SCHEMA;
-  contract_version: "1.0.0";
+  contract_version: "2.0.0";
   gate_id: string;
   package_review_id: string;
   package_id: string;
@@ -142,6 +145,8 @@ function exactSelection(draft: DraftRecord, recommendationSet: CampaignRecommend
     draft_id: String(draft.draft_id ?? ""),
     draft_revision_id: String(draft.draft_revision_id ?? ""),
     publish_fingerprint: String(draft.publish_fingerprint ?? ""),
+    auction_protocol_revision_id: String(draft.auction_protocol?.protocol_revision_id ?? ""),
+    auction_protocol_content_hash: String(draft.auction_protocol?.content_hash ?? ""),
     strategy_revision_id: String(draft.strategy_revision_id ?? ""),
     capability_profile_id: String(draft.capability_profile_id ?? ""),
     capability_profile_version: String(draft.capability_profile_version ?? ""),
@@ -196,7 +201,7 @@ export async function emptyShortlist(input: {
 }) {
   return sealShortlist({
     schema_version: SHORTLIST_SCHEMA,
-    contract_version: "2.0.0",
+    contract_version: "3.0.0",
     shortlist_revision_id: input.shortlistRevisionId,
     strategy_revision_id: input.strategyRevisionId,
     recommendation_set_id: input.recommendationSetId,
@@ -217,7 +222,7 @@ export async function reviseShortlist(input: {
 }) {
   return sealShortlist({
     schema_version: SHORTLIST_SCHEMA,
-    contract_version: "2.0.0",
+    contract_version: "3.0.0",
     shortlist_revision_id: input.shortlistRevisionId,
     strategy_revision_id: input.previous.strategy_revision_id,
     recommendation_set_id: input.recommendationSetId ?? input.previous.recommendation_set_id,
@@ -243,7 +248,7 @@ export async function verifyShortlist(
     "recommendation_set_id", "ordering", "selections", "removed_selections", "updated_at", "content_hash",
   ])
     || candidate.schema_version !== SHORTLIST_SCHEMA
-    || candidate.contract_version !== "2.0.0"
+    || candidate.contract_version !== "3.0.0"
     || candidate.ordering !== "INSERTION_ORDER_WITH_POSITIONAL_RESTORE"
     || !candidate.shortlist_revision_id
     || !candidate.updated_at
@@ -252,11 +257,11 @@ export async function verifyShortlist(
     || !Array.isArray(candidate.selections)
     || !Array.isArray(candidate.removed_selections)
     || candidate.selections.some((item) => !hasExactKeys(item, [
-      "draft_id", "draft_revision_id", "publish_fingerprint", "strategy_revision_id",
+      "draft_id", "draft_revision_id", "publish_fingerprint", "auction_protocol_revision_id", "auction_protocol_content_hash", "strategy_revision_id",
       "capability_profile_id", "capability_profile_version", "recommendation_set_id",
     ]))
     || candidate.removed_selections.some((item) => !hasExactKeys(item, [
-      "draft_id", "draft_revision_id", "publish_fingerprint", "strategy_revision_id",
+      "draft_id", "draft_revision_id", "publish_fingerprint", "auction_protocol_revision_id", "auction_protocol_content_hash", "strategy_revision_id",
       "capability_profile_id", "capability_profile_version", "recommendation_set_id", "removed_at", "removed_index",
     ]))) return false;
   const unsigned = { ...candidate } as Record<string, unknown>;
@@ -276,6 +281,8 @@ export async function verifyShortlist(
       draft_id: item.draft_id,
       draft_revision_id: item.draft_revision_id,
       publish_fingerprint: item.publish_fingerprint,
+      auction_protocol_revision_id: item.auction_protocol_revision_id,
+      auction_protocol_content_hash: item.auction_protocol_content_hash,
       strategy_revision_id: item.strategy_revision_id,
       capability_profile_id: item.capability_profile_id,
       capability_profile_version: item.capability_profile_version,
@@ -346,7 +353,7 @@ export async function buildPackageReview(input: {
     throw new Error("Shortlist lineage is stale or invalid.");
   }
   const authority: PackageAuthority = {
-    schema_version: "p0-package-authority-v1",
+    schema_version: "p0-package-authority-v2",
     ordered_selections: structuredClone(input.shortlist.selections),
     shortlist_revision_id: input.shortlist.shortlist_revision_id,
     recommendation_set_id: input.recommendationSet.recommendation_set_id,
@@ -355,6 +362,11 @@ export async function buildPackageReview(input: {
     direct_capability_snapshot: structuredClone(input.capabilitySnapshot),
     capability_profile: structuredClone(input.recommendationSet.capability_profile),
     analytics_evidence_snapshot_id: input.analyticsEvidenceSnapshotId,
+    frozen_auction_protocols: input.shortlist.selections.map((selection) => {
+      const draft = input.recommendationSet.drafts.find((item) => item.draft_id === selection.draft_id);
+      if (!draft?.auction_protocol) throw new Error(`Selected Draft ${selection.draft_id} не содержит exact Auction Protocol.`);
+      return structuredClone(draft.auction_protocol);
+    }),
     orchestration: {
       external_transactionality: "NOT_PROMISED",
       selected_campaigns_execute_independently: true,
@@ -365,7 +377,7 @@ export async function buildPackageReview(input: {
   const reviewIdentity = { package_id: packageId, reviewed_at: input.reviewedAt, authority };
   return {
     schema_version: PACKAGE_REVIEW_SCHEMA,
-    contract_version: "1.0.0",
+    contract_version: "2.0.0",
     package_review_id: await sha256(reviewIdentity),
     package_id: packageId,
     reviewed_at: input.reviewedAt,
@@ -383,7 +395,7 @@ export async function verifyPackageReview(input: {
   analyticsEvidenceSnapshotId: string;
 }) {
   const candidate = record(input.review) as PackageReview;
-  if (candidate.schema_version !== PACKAGE_REVIEW_SCHEMA || candidate.contract_version !== "1.0.0" || !candidate.reviewed_at) return false;
+  if (candidate.schema_version !== PACKAGE_REVIEW_SCHEMA || candidate.contract_version !== "2.0.0" || !candidate.reviewed_at) return false;
   let rebuilt: PackageReview;
   try {
     rebuilt = await buildPackageReview({
@@ -404,7 +416,7 @@ export async function verifyPackageReview(input: {
 export async function buildHumanDecisionGate(review: PackageReview, confirmedAt: string) {
   const unsigned = {
     schema_version: HUMAN_DECISION_GATE_SCHEMA as typeof HUMAN_DECISION_GATE_SCHEMA,
-    contract_version: "1.0.0" as const,
+    contract_version: "2.0.0" as const,
     package_review_id: review.package_review_id,
     package_id: review.package_id,
     confirmation_token: PACKAGE_CONFIRMATION_TOKEN as typeof PACKAGE_CONFIRMATION_TOKEN,
@@ -420,7 +432,7 @@ export async function buildHumanDecisionGate(review: PackageReview, confirmedAt:
 export async function verifyHumanDecisionGate(gate: HumanDecisionGate | unknown, review: PackageReview) {
   const candidate = record(gate) as HumanDecisionGate;
   if (candidate.schema_version !== HUMAN_DECISION_GATE_SCHEMA
-    || candidate.contract_version !== "1.0.0"
+    || candidate.contract_version !== "2.0.0"
     || candidate.confirmation_token !== PACKAGE_CONFIRMATION_TOKEN
     || candidate.package_review_id !== review.package_review_id
     || candidate.package_id !== review.package_id

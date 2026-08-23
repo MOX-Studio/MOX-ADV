@@ -1,5 +1,10 @@
 import { buildAdTitle } from "./ad-copy.ts";
 import {
+  buildAuctionProtocol,
+  reviseAuctionProtocol,
+  verifyAuctionProtocol,
+} from "./auction-protocol.ts";
+import {
   buildAnalyticsEvidence,
   redactSensitiveEvidenceText,
   verifyAnalyticsEvidenceSnapshot,
@@ -148,9 +153,9 @@ import {
 } from "./measurement-destination-readiness.ts";
 
 export const P0_APPLICATION_CONTRACT = "mox-adv.p0.application";
-export const P0_APPLICATION_CONTRACT_VERSION = "1.19.0";
-export const P0_DOCUMENT_SCHEMA = "p0-application-document-v13";
-const P0_LEGACY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4", "p0-application-document-v5", "p0-application-document-v6", "p0-application-document-v7", "p0-application-document-v8", "p0-application-document-v9", "p0-application-document-v10", "p0-application-document-v11", "p0-application-document-v12"]);
+export const P0_APPLICATION_CONTRACT_VERSION = "1.20.0";
+export const P0_DOCUMENT_SCHEMA = "p0-application-document-v14";
+const P0_LEGACY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4", "p0-application-document-v5", "p0-application-document-v6", "p0-application-document-v7", "p0-application-document-v8", "p0-application-document-v9", "p0-application-document-v10", "p0-application-document-v11", "p0-application-document-v12", "p0-application-document-v13"]);
 const P0_PRE_PACKAGE_AUTHORITY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4"]);
 export const P0_CONTEXT_SCHEMA = "p0-context-v2";
 const P0_LEGACY_CONTEXT_SCHEMA = "p0-context-v1";
@@ -569,6 +574,12 @@ export const P0_COMMAND_TRUTH_TABLE = {
   ),
   save_draft: (state: P0Document) => Boolean(
     state.strategy && state.recommendation_set && packageNotDispatched(state),
+  ),
+  save_auction_protocol: (state: P0Document) => Boolean(
+    state.strategy && state.recommendation_set && packageNotDispatched(state),
+  ),
+  revalidate_auction_protocol: (state: P0Document) => Boolean(
+    state.strategy && state.recommendation_set && state.analytics_evidence_snapshot && packageNotDispatched(state),
   ),
   add_to_shortlist: (state: P0Document) => Boolean(
     state.strategy && state.recommendation_set && state.shortlist && packageNotDispatched(state),
@@ -1736,6 +1747,13 @@ async function buildMaterialDraftCorrection(
     publish_projection: projection,
     publish_fingerprint: publishFingerprint,
   } as typeof sourceDraft;
+  const reboundProtocol = await reviseAuctionProtocol({
+    previous: sourceDraft.auction_protocol,
+    draft: editedDraft,
+    values: sourceDraft.auction_protocol as unknown as Record<string, unknown>,
+    registeredAt: editedAt,
+  });
+  editedDraft.auction_protocol = reboundProtocol.protocol;
   const draftMembership = sourceRecommendationSet.drafts.map((item) => item.draft_id === sourceDraft.draft_id ? editedDraft : structuredClone(item));
   const correctedRecommendationSetId = await recommendationSetRevisionId(sourceRecommendationSet.recommendation_set_id, draftMembership);
   const rescored = await scoreCampaignDrafts({
@@ -2329,6 +2347,51 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
   }
 
   const strategy = state.strategy;
+  if (state.recommendation_set && strategy && model && state.analytics_evidence_snapshot) {
+    const missingProtocols = state.recommendation_set.drafts.some((draft) => !draft.auction_protocol);
+    if (missingProtocols) {
+      if (!legacyDocument) lineageError("same-schema Campaign Draft Auction Protocol отсутствует.");
+      const measurementGoal = strategyAnswerValue(strategy, "qualified_result") || model.qualified_result;
+      const withProtocols = await Promise.all(state.recommendation_set.drafts.map(async (draft) => ({
+        ...draft,
+        auction_protocol: draft.auction_protocol ?? await buildAuctionProtocol({
+          draft,
+          measurementGoal: String(measurementGoal ?? ""),
+          evidenceSnapshotId: state.analytics_evidence_snapshot!.snapshot_id,
+          registeredAt: updatedAt,
+        }),
+        protocol_budget_readiness: {
+          ...record(draft.protocol_budget_readiness),
+          status: "PREREGISTERED",
+          future_immutable_gate: null,
+        },
+        readiness_gaps: (Array.isArray(draft.readiness_gaps) ? draft.readiness_gaps : [])
+          .filter((gap) => record(gap).code !== "AUCTION_PROTOCOL_PREREGISTRATION_PENDING"),
+      })));
+      const recommendationSetId = await recommendationSetRevisionId(state.recommendation_set.recommendation_set_id, withProtocols);
+      state.recommendation_set.recommendation_set_id = recommendationSetId;
+      state.recommendation_set.drafts = await scoreCampaignDrafts({
+        recommendationSetId,
+        drafts: withProtocols,
+        model: model as unknown as Record<string, unknown>,
+        strategy,
+        analyticsEvidence: state.analytics_evidence_snapshot as unknown as Record<string, unknown>,
+        scoredAt: updatedAt,
+      });
+      state.draft = state.draft ? state.recommendation_set.drafts.find((draft) => draft.draft_id === state.draft?.draft_id) ?? null : null;
+      await invalidateDecisionAuthority(state, "LEGACY_AUTHORITY_REQUIRES_REVIEW", "Auction Protocol migration requires a new exact shortlist review and authority.", updatedAt);
+      state.shortlist = await emptyShortlist({
+        shortlistRevisionId: `p0-shortlist-r${Math.max(1, revision + 1)}`,
+        strategyRevisionId: String(strategy.strategy_revision_id ?? ""),
+        recommendationSetId,
+        updatedAt,
+      });
+      changed = true;
+    }
+    for (const draft of state.recommendation_set.drafts) {
+      if (!await verifyAuctionProtocol(draft.auction_protocol, draft)) lineageError("Campaign Draft Auction Protocol content hash, completeness или immutable lineage не прошли проверку.");
+    }
+  }
   if (strategy && model) {
     if (strategy.schema_version === CAMPAIGN_STRATEGY_SCHEMA) {
       if (!state.context_state || !state.analytics_evidence_snapshot || !state.strategy_questionnaire) {
@@ -3980,6 +4043,188 @@ export class P0Application {
         changes,
         evaluator_traces_exposed: false,
       };
+    } else if (action === "save_auction_protocol") {
+      const value = record(payload.value);
+      if (!state.strategy || !state.business_model || !state.recommendation_set || !state.analytics_evidence_snapshot || !state.shortlist) {
+        fail("P0_PREREQUISITE_MISSING", "Auction Protocol edit требует current Strategy, Recommendation Set, Evidence Snapshot и shortlist.");
+      }
+      const allowedInputs = new Set([
+        "draft_id", "control", "tested_change", "bidding", "query_matching", "autotargeting_policy", "traffic_split",
+        "test_budget_rub", "test_period", "measurement_goal", "success_threshold", "stop_condition",
+      ]);
+      const unsupportedInput = Object.keys(value).find((field) => !allowedInputs.has(field));
+      if (unsupportedInput) fail("P0_AUCTION_PROTOCOL_FIELD_UNSUPPORTED", `Auction Protocol field ${unsupportedInput} не является business-visible editable field.`);
+      const draftId = requiredInput(value.draft_id, "Campaign Draft", 255);
+      const generatedIndex = state.recommendation_set.drafts.findIndex((draft) => draft.draft_id === draftId);
+      const generated = state.recommendation_set.drafts[generatedIndex];
+      if (!generated?.auction_protocol || !await verifyAuctionProtocol(generated.auction_protocol, generated)) {
+        fail("P0_AUCTION_PROTOCOL_INVALID", "Current Auction Protocol отсутствует, повреждён или потерял exact Campaign lineage.");
+      }
+      const normalizedValues = {
+        control: value.control,
+        tested_change: value.tested_change,
+        bidding: record(value.bidding),
+        query_matching: value.query_matching,
+        autotargeting_policy: value.autotargeting_policy,
+        traffic_split: record(value.traffic_split),
+        test_budget_rub: value.test_budget_rub,
+        test_period: record(value.test_period),
+        measurement_goal: value.measurement_goal,
+        success_threshold: value.success_threshold,
+        stop_condition: value.stop_condition,
+      };
+      const editedAt = this.adapters.now();
+      const normalized = await reviseAuctionProtocol({
+        previous: generated.auction_protocol,
+        draft: generated,
+        values: normalizedValues,
+        registeredAt: editedAt,
+      });
+      if (!normalized.material_change) {
+        state.draft = {
+          ...generated,
+          protocol_edit_result: {
+            schema_version: "p0-auction-protocol-edit-result-v1",
+            material_change: false,
+            previous_protocol_revision_id: generated.auction_protocol.protocol_revision_id,
+            current_protocol_revision_id: generated.auction_protocol.protocol_revision_id,
+            previous_draft_revision_id: generated.draft_revision_id,
+            current_draft_revision_id: generated.draft_revision_id,
+            message: "Normalization-only Auction Protocol edit сохранил immutable lineage.",
+          },
+        };
+        state.recommendation_set.drafts[generatedIndex] = state.draft as typeof generated;
+      } else {
+        const nextDraftRevision = nextDraftRevisionId(draftId, generated.draft_revision_id);
+        const projection = buildPublishProjection(
+          state.business_model as unknown as Record<string, unknown>,
+          state.strategy,
+          { ...generated, ...creationProfileDraftMetadata(generated), draft_revision_id: nextDraftRevision },
+        ) as unknown as Record<string, unknown>;
+        const preserved = preserveSelectedConditionalProjection({
+          generatedDraft: generated,
+          editedProjection: projection,
+          snapshot: state.context_state?.facts.direct.capability_snapshot ?? null,
+        });
+        const revisionDraft = {
+          ...generated,
+          draft_revision_id: nextDraftRevision,
+          publish_projection: preserved.projection,
+          publish_fingerprint: await fingerprintDirectProjection(preserved.projection),
+        };
+        const revised = await reviseAuctionProtocol({
+          previous: generated.auction_protocol,
+          draft: revisionDraft,
+          values: normalizedValues,
+          registeredAt: editedAt,
+        });
+        if (!revised.material_change) fail("P0_AUCTION_PROTOCOL_MATERIALITY_INVALID", "Material Auction Protocol edit unexpectedly normalized to the previous revision.");
+        const revalidationBlocker = {
+          code: "AUCTION_PROTOCOL_REVALIDATION_REQUIRED",
+          message: "Material Auction Protocol edit требует полного score и publish preflight revalidation до новой authority.",
+          field_path: "/auction_protocol",
+        };
+        const publicationBlockers = [
+          ...(Array.isArray(generated.publication_blockers) ? generated.publication_blockers : [])
+            .filter((blocker) => record(blocker).code !== "AUCTION_PROTOCOL_REVALIDATION_REQUIRED"),
+          revalidationBlocker,
+        ];
+        const editedDraft = {
+          ...revisionDraft,
+          source: "OWNER_REVIEWED_AUCTION_PROTOCOL",
+          edited_at: editedAt,
+          auction_protocol: revised.protocol,
+          publication_blockers: publicationBlockers,
+          shortlist_eligible: false,
+          publish_eligibility: "BLOCKED_HARD",
+          viability_status: "INSUFFICIENT_EVIDENCE",
+          viability_score: undefined,
+          protocol_edit_result: {
+            schema_version: "p0-auction-protocol-edit-result-v1",
+            material_change: true,
+            previous_protocol_revision_id: generated.auction_protocol.protocol_revision_id,
+            current_protocol_revision_id: revised.protocol.protocol_revision_id,
+            previous_draft_revision_id: generated.draft_revision_id,
+            current_draft_revision_id: nextDraftRevision,
+            message: "Создана новая immutable Campaign revision; score, preflight и exact authority invalidated до revalidation.",
+          },
+        } as typeof generated;
+        const drafts = state.recommendation_set.drafts.map((draft) => draft.draft_id === draftId ? editedDraft : draft);
+        const recommendationSetId = await recommendationSetRevisionId(state.recommendation_set.recommendation_set_id, drafts);
+        state.recommendation_set.recommendation_set_id = recommendationSetId;
+        state.recommendation_set.drafts = drafts;
+        state.recommendation_set.candidate_audit = state.recommendation_set.candidate_audit.map((candidate) => candidate.draft_id === draftId
+          ? { ...candidate, disposition: "BLOCKED", reason_code: "BLOCKED:AUCTION_PROTOCOL_REVALIDATION_REQUIRED" }
+          : candidate);
+        state.recommendation_set.coverage.blocked_count = state.recommendation_set.candidate_audit.filter((candidate) => candidate.disposition === "BLOCKED").length;
+        state.recommendation_set.viability_outcome = recommendationSetViabilityOutcome(drafts);
+        state.recommendation_set.recommended_shortlist = {
+          source: "AGENT_COMPARATIVE_PRIORITY",
+          draft_ids: drafts.filter((candidate) => candidate.shortlist_eligible).sort((left, right) => Number(left.viability_score?.rank ?? Number.POSITIVE_INFINITY) - Number(right.viability_score?.rank ?? Number.POSITIVE_INFINITY) || left.draft_id.localeCompare(right.draft_id)).map((candidate) => candidate.draft_id),
+          bounded: true,
+        };
+        state.draft = editedDraft;
+        await invalidateDecisionAuthority(state, "DRAFT_MATERIAL_CHANGE", "A material Auction Protocol edit changed exact Campaign revision and package lineage.", editedAt);
+        state.shortlist = await rebaseShortlist({
+          previous: state.shortlist,
+          recommendationSet: state.recommendation_set,
+          shortlistRevisionId: `p0-shortlist-r${current.revision + 1}`,
+          updatedAt: editedAt,
+        });
+      }
+    } else if (action === "revalidate_auction_protocol") {
+      const draftId = requiredInput(payload.draft_id, "Campaign Draft", 255);
+      if (!state.strategy || !state.business_model || !state.recommendation_set || !state.analytics_evidence_snapshot || !state.shortlist) {
+        fail("P0_PREREQUISITE_MISSING", "Auction Protocol revalidation требует current Strategy, Recommendation Set, Evidence Snapshot и shortlist.");
+      }
+      const draft = state.recommendation_set.drafts.find((candidate) => candidate.draft_id === draftId);
+      if (!draft || !await verifyAuctionProtocol(draft.auction_protocol, draft)) fail("P0_AUCTION_PROTOCOL_INVALID", "Exact Auction Protocol не прошёл frozen content и lineage verification.");
+      const persistedBlockers = Array.isArray(draft.publication_blockers) ? draft.publication_blockers : [];
+      if (!persistedBlockers.some((blocker) => record(blocker).code === "AUCTION_PROTOCOL_REVALIDATION_REQUIRED")) {
+        fail("P0_AUCTION_PROTOCOL_REVALIDATION_NOT_REQUIRED", "Current Campaign revision не ожидает Auction Protocol revalidation.");
+      }
+      const blockers = persistedBlockers.filter((blocker) => record(blocker).code !== "AUCTION_PROTOCOL_REVALIDATION_REQUIRED");
+      const publishEligibility = blockers.some((blocker) => record(blocker).code === "DEMAND_EVIDENCE_GAP")
+        ? "BLOCKED_EVIDENCE_GAP" : blockers.length ? "BLOCKED_HARD" : "ELIGIBLE";
+      const readyDraft = {
+        ...draft,
+        publication_blockers: blockers,
+        publish_eligibility: publishEligibility,
+        shortlist_eligible: publishEligibility === "ELIGIBLE",
+      };
+      const rescored = await scoreCampaignDrafts({
+        recommendationSetId: state.recommendation_set.recommendation_set_id,
+        drafts: state.recommendation_set.drafts.map((candidate) => candidate.draft_id === draftId ? readyDraft : candidate),
+        model: state.business_model as unknown as Record<string, unknown>,
+        strategy: state.strategy,
+        analyticsEvidence: state.analytics_evidence_snapshot as unknown as Record<string, unknown>,
+        scoredAt: this.adapters.now(),
+      });
+      state.recommendation_set.drafts = rescored;
+      const revalidatedDraft = rescored.find((candidate) => candidate.draft_id === draftId) ?? null;
+      state.draft = revalidatedDraft;
+      state.recommendation_set.candidate_audit = state.recommendation_set.candidate_audit.map((candidate) => {
+        if (candidate.draft_id !== draftId || !revalidatedDraft) return candidate;
+        return {
+          ...candidate,
+          visibility: revalidatedDraft.visibility,
+          disposition: ["BLOCKED", "INSUFFICIENT_EVIDENCE"].includes(String(revalidatedDraft.viability_status)) ? "BLOCKED" : "VISIBLE",
+          reason_code: ["BLOCKED", "INSUFFICIENT_EVIDENCE"].includes(String(revalidatedDraft.viability_status)) ? `BLOCKED:${revalidatedDraft.viability_status}` : "VISIBLE:GENERATED_DRAFT",
+        };
+      });
+      state.recommendation_set.coverage.blocked_count = state.recommendation_set.candidate_audit.filter((candidate) => candidate.disposition === "BLOCKED").length;
+      state.recommendation_set.viability_outcome = recommendationSetViabilityOutcome(rescored);
+      state.recommendation_set.recommended_shortlist = {
+        source: "AGENT_COMPARATIVE_PRIORITY",
+        draft_ids: rescored.filter((candidate) => candidate.shortlist_eligible).sort((left, right) => Number(left.viability_score?.rank ?? Number.POSITIVE_INFINITY) - Number(right.viability_score?.rank ?? Number.POSITIVE_INFINITY) || left.draft_id.localeCompare(right.draft_id)).map((candidate) => candidate.draft_id),
+        bounded: true,
+      };
+      state.shortlist = await rebaseShortlist({
+        previous: state.shortlist,
+        recommendationSet: state.recommendation_set,
+        shortlistRevisionId: `p0-shortlist-r${current.revision + 1}`,
+        updatedAt: this.adapters.now(),
+      });
     } else if (action === "save_draft") {
       const value = record(payload.value);
       if (!state.strategy || !state.business_model) {
@@ -4097,6 +4342,13 @@ export class P0Application {
           publish_projection: projection,
           publish_fingerprint: await fingerprintDirectProjection(projection),
         } as typeof generated;
+        const reboundProtocol = await reviseAuctionProtocol({
+          previous: generated.auction_protocol,
+          draft: editedDraft,
+          values: generated.auction_protocol as unknown as Record<string, unknown>,
+          registeredAt: editedAt,
+        });
+        editedDraft.auction_protocol = reboundProtocol.protocol;
         const exactDraftRevision = recommendationSet.drafts.map((item) => item.draft_id === draftId ? editedDraft : item);
         const rescoredRecommendationSetId = await recommendationSetRevisionId(recommendationSet.recommendation_set_id, exactDraftRevision);
         const rescored = await scoreCampaignDrafts({
@@ -4227,6 +4479,8 @@ export class P0Application {
           draft_id: removed.draft_id,
           draft_revision_id: removed.draft_revision_id,
           publish_fingerprint: removed.publish_fingerprint,
+          auction_protocol_revision_id: removed.auction_protocol_revision_id,
+          auction_protocol_content_hash: removed.auction_protocol_content_hash,
           strategy_revision_id: removed.strategy_revision_id,
           capability_profile_id: removed.capability_profile_id,
           capability_profile_version: removed.capability_profile_version,

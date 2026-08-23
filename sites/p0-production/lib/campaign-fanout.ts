@@ -2,6 +2,7 @@ import { buildAdText, buildAdTitle } from "./ad-copy.ts";
 import { buildPublishProjection } from "./campaign-draft.ts";
 import { DIRECT_V501_DRAFT_FIELD_REGISTRY } from "./campaign-draft-fields.ts";
 import { evaluateBrandClaimsContract } from "./campaign-creation-profile.ts";
+import { buildAuctionProtocol, type AuctionProtocol } from "./auction-protocol.ts";
 import {
   resolveCuratedPlaybookReleases,
   type CompetitiveSampleRule,
@@ -503,6 +504,7 @@ export type CampaignDraftCandidate = Record<string, unknown> & {
   publish_projection: Record<string, unknown>;
   publish_fingerprint: string;
   treatment_fingerprint: string;
+  auction_protocol: AuctionProtocol;
   visibility: "VISIBLE" | "HIDDEN";
   viability_status?: "VIABLE" | "TESTABLE_WITH_GAPS" | "INSUFFICIENT_EVIDENCE" | "BLOCKED";
   viability_score?: ViabilityScoreResult;
@@ -961,7 +963,7 @@ export async function buildCampaignRecommendationSet({
         unsupported_fields: capability.unsupported_fields,
         capability_selection: capability,
         protocol_budget_readiness: {
-          status: "CANVAS_COMPARISON_READY",
+          status: "PREREGISTERED",
           comparator_draft_id: rule ? comparator?.draft_id ?? null : draftId,
           one_factor_attribution: rule ? actualChangedFields.length > 0 && undeclaredChanges.length === 0 && missingDeclaredChanges.length === 0 : false,
           weekly_budget_micro_rub: record(projectionSearch.WbMaximumClicks).WeeklySpendLimit ?? null,
@@ -969,16 +971,10 @@ export async function buildCampaignRecommendationSet({
             start: projectionCampaign.StartDate ?? null,
             end: projectionCampaign.EndDate ?? null,
           },
-          future_immutable_gate: "AUCTION_PROTOCOL_PREREGISTRATION_PENDING",
+          future_immutable_gate: null,
         },
-        readiness_gaps: [
-          {
-            code: "AUCTION_PROTOCOL_PREREGISTRATION_PENDING",
-            description: "Точный Auction Protocol ещё не пререгистрирован; Draft может сравниваться и входить в shortlist, но не должен называться VIABLE до отдельной immutable protocol revision.",
-            required: false,
-          },
-
-        ],
+        readiness_gaps: [],
+        auction_protocol: null as unknown as AuctionProtocol,
         visibility,
         suppression_reason: suppressionReason,
         duplicate_of: duplicateOf,
@@ -986,6 +982,12 @@ export async function buildCampaignRecommendationSet({
         publish_fingerprint: publishFingerprint,
         treatment_fingerprint: treatmentFingerprint,
       } as CampaignDraftCandidate;
+      draft.auction_protocol = await buildAuctionProtocol({
+        draft,
+        measurementGoal: text(qualifiedResult),
+        evidenceSnapshotId: text(analyticsEvidence?.snapshot_id) || "EVIDENCE_SNAPSHOT_UNAVAILABLE",
+        registeredAt: generatedAt,
+      });
       compiled.push(draft);
       if (!rule) comparator = draft;
     }
@@ -1004,6 +1006,8 @@ export async function buildCampaignRecommendationSet({
       draft_id: draft.draft_id,
       draft_revision_id: draft.draft_revision_id,
       publish_fingerprint: draft.publish_fingerprint,
+      auction_protocol_revision_id: draft.auction_protocol.protocol_revision_id,
+      auction_protocol_content_hash: draft.auction_protocol.content_hash,
       capability_profile_id: draft.capability_profile_id,
       capability_profile_version: draft.capability_profile_version,
       conditional_selection: draft.capability_selection,

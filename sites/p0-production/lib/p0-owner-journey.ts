@@ -175,6 +175,22 @@ export type OwnerJourneyProjection = {
     evidenceCoverage: string;
     sensitivity: string;
     reasons: string[];
+    auctionProtocol: {
+      control: string;
+      testedChange: string;
+      biddingStrategy: string;
+      bidCeiling: string;
+      queryMatching: string;
+      autotargetingPolicy: string;
+      trafficSplit: string;
+      testBudget: string;
+      testPeriod: string;
+      measurementGoal: string;
+      successThreshold: string;
+      stopCondition: string;
+      attribution: string;
+      evidenceStatus: string;
+    };
     publishPreview: {
       titles: string[];
       texts: string[];
@@ -222,6 +238,7 @@ type ActionKind =
   | "confirm-goal"
   | "confirm-business-model"
   | "approve-strategy"
+  | "revalidate-auction-protocol"
   | "prepare-package"
   | "review-package"
   | "authorize-and-create"
@@ -390,6 +407,33 @@ function correctionWithStatus(state: InternalState, status: string) {
   return state.package_corrections.find((item) => item.status === status) ?? null;
 }
 
+function protocolFields(drafts: Record<string, unknown>[]): OwnerActionField[] {
+  return drafts.flatMap((draft, index) => {
+    const protocol = record(draft.auction_protocol);
+    const bidding = record(protocol.bidding);
+    const split = record(protocol.traffic_split);
+    const period = record(protocol.test_period);
+    const name = ownerText(draft.campaign_name, `Кампания ${index + 1}`, 180);
+    const key = (field: string) => `test${index + 1}_${field}`;
+    return [
+      { key: key("control"), label: `${name} · с чем сравниваем`, control: "textarea", value: ownerText(protocol.control, "", 1_000), required: true },
+      { key: key("change"), label: `${name} · проверяемое изменение`, control: "textarea", value: ownerText(protocol.tested_change, "", 1_000), required: true },
+      { key: key("bidding"), label: `${name} · подход к ставкам`, control: "textarea", value: ownerText(bidding.strategy, "", 300), required: true },
+      { key: key("ceiling"), label: `${name} · предел ставки, ₽`, control: "number", value: Number(bidding.ceiling_rub), required: true },
+      { key: key("matching"), label: `${name} · сопоставление запросов`, control: "textarea", value: ownerText(protocol.query_matching, "", 500), required: true },
+      { key: key("autotargeting"), label: `${name} · автотаргетинг`, control: "textarea", value: ownerText(protocol.autotargeting_policy, "", 500), required: true },
+      { key: key("comparatorTraffic"), label: `${name} · доля сравнения, %`, control: "number", value: Number(split.comparator_percent), required: true },
+      { key: key("treatmentTraffic"), label: `${name} · доля изменения, %`, control: "number", value: Number(split.treatment_percent), required: true },
+      { key: key("budget"), label: `${name} · бюджет теста, ₽`, control: "number", value: Number(protocol.test_budget_rub), required: true },
+      { key: key("start"), label: `${name} · начало теста`, control: "date", value: ownerText(period.start_date, "", 10), required: true },
+      { key: key("end"), label: `${name} · окончание теста`, control: "date", value: ownerText(period.end_date, "", 10), required: true },
+      { key: key("goal"), label: `${name} · измеряемый результат`, control: "textarea", value: ownerText(protocol.measurement_goal, "", 1_000), required: true },
+      { key: key("success"), label: `${name} · условие успеха`, control: "textarea", value: ownerText(protocol.success_threshold, "", 1_000), required: true },
+      { key: key("stop"), label: `${name} · условие остановки`, control: "textarea", value: ownerText(protocol.stop_condition, "", 1_000), required: true },
+    ] as OwnerActionField[];
+  });
+}
+
 function orderedShortlistCandidates(view: InternalView) {
   const recommendationSet = record(view.state.recommendation_set);
   const recommendedIds = list(record(recommendationSet.recommended_shortlist).draft_ids).map(String);
@@ -434,6 +478,19 @@ function actionDescriptor(view: InternalView): InternalActionDescriptor | null {
       label: "Утвердить стратегию",
       description: "Одно решение фиксирует полный бизнес-смысл стратегии.",
       fields: strategyFields(state),
+    };
+  }
+
+  const protocolRevalidation = list(record(state.recommendation_set).drafts).map(record).find((draft) =>
+    list(draft.publication_blockers).map(record).some((blocker) => blocker.code === "AUCTION_PROTOCOL_REVALIDATION_REQUIRED")
+  );
+  if (protocolRevalidation) {
+    return {
+      kind: "revalidate-auction-protocol",
+      target: String(protocolRevalidation.draft_id ?? ""),
+      label: "Повторно проверить изменённый тест",
+      description: "Материальная правка уже создала новую версию кампании. Агент заново проверит score и все бизнес-ограничения до нового решения.",
+      fields: [],
     };
   }
 
@@ -484,24 +541,30 @@ function actionDescriptor(view: InternalView): InternalActionDescriptor | null {
         kind: "prepare-package",
         label: "Проверить состав и порядок набора",
         description: "Агент предложил порядок. Укажите 0, чтобы исключить вариант, или поменяйте номера; заблокированные кампании недоступны.",
-        fields: candidates.map((candidate, index) => ({
-          key: `campaign_${index + 1}`,
-          label: ownerText(drafts.find((draft) => draft.draft_id === candidate.draft_id)?.campaign_name, `Кампания ${index + 1}`, 255),
-          control: "number" as const,
-          value: selectedOrder.get(candidate.draft_id) ?? (candidate.status === "REMOVED" ? 0 : index + 1),
-          required: true,
-          help: "0 — исключить; положительное число — место в пакете.",
-        })),
+        fields: [
+          ...candidates.map((candidate, index) => ({
+            key: `campaign_${index + 1}`,
+            label: ownerText(drafts.find((draft) => draft.draft_id === candidate.draft_id)?.campaign_name, `Кампания ${index + 1}`, 255),
+            control: "number" as const,
+            value: selectedOrder.get(candidate.draft_id) ?? (candidate.status === "REMOVED" ? 0 : index + 1),
+            required: true,
+            help: "0 — исключить; положительное число — место в пакете.",
+          })),
+          ...protocolFields(candidates.map((candidate) => drafts.find((draft) => draft.draft_id === candidate.draft_id) ?? {})),
+        ],
       };
     }
     return null;
   }
   if (!state.human_decision_gate && allowed(view, "confirm_package")) {
+    const drafts = list(record(state.recommendation_set).drafts).map(record);
     return {
       kind: "authorize-and-create",
       label: "Подтвердить и создать без запуска",
-      description: "Одно решение разрешает только показанный пакет. Кампании останутся без показов и расходов.",
-      fields: [],
+      description: "Одно решение разрешает только показанный пакет и точные протоколы тестов. Кампании останутся без показов и расходов.",
+      fields: protocolFields((state.shortlist?.selections ?? []).map((selection) =>
+        drafts.find((draft) => draft.draft_id === selection.draft_id) ?? {}
+      )),
     };
   }
   return null;
@@ -913,6 +976,11 @@ function campaignOptions(view: InternalView): OwnerJourneyProjection["campaignOp
       const blockerReasons = list(eligibility.blockers).map((reason) => ownerText(record(reason).remediation, "", 240)).filter(Boolean);
       const gapReasons = [...list(gaps.required), ...list(gaps.optional)].map((reason) => ownerText(record(reason).description, "", 240)).filter(Boolean);
       const reasons = (score.score === null || score.score === undefined ? [...blockerReasons, ...gapReasons] : [...comparativeReasons, ...gapReasons]).slice(0, 3);
+      const protocol = record(draft.auction_protocol);
+      const protocolBidding = record(protocol.bidding);
+      const protocolSplit = record(protocol.traffic_split);
+      const protocolPeriod = record(protocol.test_period);
+      const attribution = record(protocol.attribution);
       return {
         name: ownerText(draft.campaign_name, `Кампания ${index + 1}`, 255),
         audience: ownerText(answerValue(state, "target_audience"), "Целевая аудитория уточняется", 500),
@@ -926,6 +994,25 @@ function campaignOptions(view: InternalView): OwnerJourneyProjection["campaignOp
         evidenceCoverage: `${Number(coverage.percent ?? 0)}%`,
         sensitivity: score.score_lower === null || score.score_lower === undefined ? "Недоступна до оценки" : `${score.score_lower}–${score.score_upper}`,
         reasons,
+        auctionProtocol: {
+          control: ownerText(protocol.control),
+          testedChange: ownerText(protocol.tested_change),
+          biddingStrategy: ownerText(protocolBidding.strategy),
+          bidCeiling: `${Number(protocolBidding.ceiling_rub).toLocaleString("ru-RU")} ₽`,
+          queryMatching: ownerText(protocol.query_matching),
+          autotargetingPolicy: ownerText(protocol.autotargeting_policy),
+          trafficSplit: `${Number(protocolSplit.comparator_percent)}% сравнение · ${Number(protocolSplit.treatment_percent)}% изменение`,
+          testBudget: `${Number(protocol.test_budget_rub).toLocaleString("ru-RU")} ₽`,
+          testPeriod: `${ownerText(protocolPeriod.start_date, "Недоступно", 20)} — ${ownerText(protocolPeriod.end_date, "Недоступно", 20)}`,
+          measurementGoal: ownerText(protocol.measurement_goal),
+          successThreshold: ownerText(protocol.success_threshold),
+          stopCondition: ownerText(protocol.stop_condition),
+          attribution: attribution.status === "ONE_FACTOR" ? "Однофакторное сравнение"
+            : attribution.status === "COMPARATOR_ONLY" ? "Контроль для сравнения"
+              : attribution.status === "MULTI_FACTOR" ? "Многофакторная гипотеза — результат нельзя приписать одному изменению"
+                : "Несопоставимая гипотеза — причинная атрибуция запрещена",
+          evidenceStatus: "Предположение теста отделено от зафиксированных фактов рекламной системы",
+        },
         publishPreview: buildOwnerPublishPreview(record(draft.publish_projection)),
         selected,
         agentRecommended: recommendedIds.has(String(draft.draft_id)),
@@ -1352,6 +1439,35 @@ export class P0OwnerJourney {
     const command = async (payload: Record<string, unknown> & { action: string }) => {
       view = await this.application.command(ownerKey, { ...payload, expected_revision: view.revision });
     };
+    const saveProtocols = async (drafts: Record<string, unknown>[]) => {
+      let materialChange = false;
+      for (const [index, draft] of drafts.entries()) {
+        const key = (field: string) => `test${index + 1}_${field}`;
+        await command({
+          action: "save_auction_protocol",
+          value: {
+            draft_id: draft.draft_id,
+            control: required(values, key("control")),
+            tested_change: required(values, key("change")),
+            bidding: { strategy: required(values, key("bidding")), ceiling_rub: required(values, key("ceiling")) },
+            query_matching: required(values, key("matching")),
+            autotargeting_policy: required(values, key("autotargeting")),
+            traffic_split: {
+              comparator_percent: required(values, key("comparatorTraffic")),
+              treatment_percent: required(values, key("treatmentTraffic")),
+            },
+            test_budget_rub: required(values, key("budget")),
+            test_period: { start_date: required(values, key("start")), end_date: required(values, key("end")) },
+            measurement_goal: required(values, key("goal")),
+            success_threshold: required(values, key("success")),
+            stop_condition: required(values, key("stop")),
+          },
+        });
+        materialChange ||= record(view.state.draft?.protocol_edit_result).material_change === true;
+        if (materialChange) break;
+      }
+      return materialChange;
+    };
 
     if (descriptor.kind === "analyze-business") {
       await command({ action: "analyze_site", url: required(values, "website") });
@@ -1399,8 +1515,17 @@ export class P0OwnerJourney {
           core_message: required(values, "message"),
         },
       });
+    } else if (descriptor.kind === "revalidate-auction-protocol") {
+      await command({ action: "revalidate_auction_protocol", draft_id: descriptor.target });
     } else if (descriptor.kind === "prepare-package") {
       const candidates = orderedShortlistCandidates(view);
+      const candidateDrafts = candidates.map((candidate) =>
+        list(record(view.state.recommendation_set).drafts).map(record).find((draft) => draft.draft_id === candidate.draft_id) ?? {}
+      );
+      if (await saveProtocols(candidateDrafts)) {
+        const agent = this.agentProjection ? await this.agentProjection(ownerKey) : null;
+        return project(ownerKey, view, agent, accessState && this.accessReadiness ? this.accessReadiness.project(accessState) : null);
+      }
       const desired = candidates.map((candidate, index) => ({
         ...candidate,
         order: Number(values[`campaign_${index + 1}`] ?? descriptor.fields[index]?.value),
@@ -1423,6 +1548,13 @@ export class P0OwnerJourney {
     } else if (descriptor.kind === "review-package") {
       await command({ action: "review_package" });
     } else if (descriptor.kind === "authorize-and-create") {
+      const selectedDrafts = (view.state.shortlist?.selections ?? []).map((selection) =>
+        list(record(view.state.recommendation_set).drafts).map(record).find((draft) => draft.draft_id === selection.draft_id) ?? {}
+      );
+      if (await saveProtocols(selectedDrafts)) {
+        const agent = this.agentProjection ? await this.agentProjection(ownerKey) : null;
+        return project(ownerKey, view, agent, accessState && this.accessReadiness ? this.accessReadiness.project(accessState) : null);
+      }
       const review = view.state.package_review!;
       await command({
         action: "confirm_package",

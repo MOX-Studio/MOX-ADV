@@ -297,7 +297,30 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 self.assertGreaterEqual(page.locator(".owner-campaigns article").count(), 2)
                 self.assertTrue(page.get_by_text(re.compile(r"TESTABLE_WITH_GAPS")).first.is_visible())
                 self.assertTrue(page.get_by_text(re.compile(r"только сравнительный приоритет, не прогноз")).first.is_visible())
+                protocol_previews = page.get_by_label("Заранее зафиксированный протокол теста")
+                self.assertGreaterEqual(protocol_previews.count(), 2)
+                self.assertIn("Условие успеха", protocol_previews.first.inner_text())
+                self.assertIn("Условие остановки", protocol_previews.first.inner_text())
+                self.assertIn("Предположение теста отделено", protocol_previews.first.inner_text())
                 checkpoint()
+
+                test_budget = page.get_by_label(re.compile(r"бюджет теста, ₽")).first
+                original_test_budget = int(test_budget.input_value())
+                test_budget.fill(str(original_test_budget - 1))
+                page.get_by_role(
+                    "button", name="Проверить состав и порядок набора", exact=True
+                ).click()
+                page.get_by_role(
+                    "button", name="Повторно проверить изменённый тест", exact=True
+                ).wait_for()
+                self.assertEqual(0, page.get_by_text("9/9 бизнес-проверок пройдено", exact=True).count())
+                checkpoint()
+                page.get_by_role(
+                    "button", name="Повторно проверить изменённый тест", exact=True
+                ).click()
+                page.get_by_role(
+                    "button", name="Проверить состав и порядок набора", exact=True
+                ).wait_for()
 
                 page.get_by_role(
                     "button", name="Проверить состав и порядок набора", exact=True

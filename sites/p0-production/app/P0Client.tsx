@@ -189,6 +189,23 @@ export default function P0Client() {
               <header><span>{campaign.status} · {campaign.readiness}</span>{campaign.selected ? <b>Выбрана владельцем</b> : campaign.agentRecommended && <b>Рекомендация агента</b>}</header>
               <h3>{campaign.name}</h3>
               <dl><div><dt>Предложение</dt><dd>{campaign.offer}</dd></div><div><dt>Аудитория</dt><dd>{campaign.audience}</dd></div><div><dt>Куда ведём</dt><dd>{campaign.destination}</dd></div><div><dt>Сравнительный приоритет</dt><dd>{campaign.comparativeScore}</dd></div><div><dt>Покрытие доказательств</dt><dd>{campaign.evidenceCoverage}</dd></div><div><dt>Чувствительность</dt><dd>{campaign.sensitivity}</dd></div></dl>
+              <section className="owner-publish-preview" aria-label="Заранее зафиксированный протокол теста">
+                <h4>Как будет проверяться гипотеза</h4>
+                <dl>
+                  <div><dt>Сравнение</dt><dd>{campaign.auctionProtocol.control}</dd></div>
+                  <div><dt>Проверяемое изменение</dt><dd>{campaign.auctionProtocol.testedChange}</dd></div>
+                  <div><dt>Ставки и предел</dt><dd>{campaign.auctionProtocol.biddingStrategy} · {campaign.auctionProtocol.bidCeiling}</dd></div>
+                  <div><dt>Запросы</dt><dd>{campaign.auctionProtocol.queryMatching}</dd></div>
+                  <div><dt>Автотаргетинг</dt><dd>{campaign.auctionProtocol.autotargetingPolicy}</dd></div>
+                  <div><dt>Распределение</dt><dd>{campaign.auctionProtocol.trafficSplit}</dd></div>
+                  <div><dt>Бюджет и период</dt><dd>{campaign.auctionProtocol.testBudget} · {campaign.auctionProtocol.testPeriod}</dd></div>
+                  <div><dt>Измеряемый результат</dt><dd>{campaign.auctionProtocol.measurementGoal}</dd></div>
+                  <div><dt>Условие успеха</dt><dd>{campaign.auctionProtocol.successThreshold}</dd></div>
+                  <div><dt>Условие остановки</dt><dd>{campaign.auctionProtocol.stopCondition}</dd></div>
+                  <div><dt>Честность вывода</dt><dd>{campaign.auctionProtocol.attribution}</dd></div>
+                </dl>
+                <p>{campaign.auctionProtocol.evidenceStatus}</p>
+              </section>
               <section className="owner-publish-preview" aria-label="Точный предпросмотр публикации">
                 <h4>Что увидят клиенты</h4>
                 <div><strong>Заголовки</strong><ul>{campaign.publishPreview.titles.map((title) => <li key={title}>{title}</li>)}</ul></div>

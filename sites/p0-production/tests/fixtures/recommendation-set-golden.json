@@ -1,6 +1,6 @@
 {
   "schema_version": "campaign-recommendation-set-v4",
-  "recommendation_set_id": "recommendation-set-f6b4a0ebdc6fd805a359",
+  "recommendation_set_id": "recommendation-set-d67f0c55279218bfba93",
   "capability_profile": "p0-campaign-creation-profile-v1@1.0.0",
   "playbook_release": "test-curated-release-default@1.0.0",
   "coverage": {

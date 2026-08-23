@@ -966,7 +966,7 @@ test("Strategy and Model material changes cascade while technical normalization 
   assert.equal(result.state.strategy.lineage.previous_strategy_revision_id, original.strategy);
   assert.notEqual(result.state.recommendation_set.recommendation_set_id, original.recommendation);
   assert.equal(result.state.draft, null);
-  assert.equal(result.state.shortlist.schema_version, "p0-shortlist-v2");
+  assert.equal(result.state.shortlist.schema_version, "p0-shortlist-v3");
   assert.deepEqual(result.state.shortlist.selections, []);
   assert.equal(result.state.last_cascade.trigger, "STRATEGY");
   assert.deepEqual(result.state.last_cascade.affected_steps, ["recommendation_set", "campaign_drafts", "shortlist", "confirmation"]);
@@ -1139,7 +1139,7 @@ test("one query/command contract drives and persists the current five-step path"
   );
   const afterBlockedWrite = await restarted.query("owner");
   assert.equal(afterBlockedWrite.revision, 6);
-  assert.equal(afterBlockedWrite.state.shortlist.schema_version, "p0-shortlist-v2");
+  assert.equal(afterBlockedWrite.state.shortlist.schema_version, "p0-shortlist-v3");
   assert.deepEqual(afterBlockedWrite.state.shortlist.selections, []);
   assert.equal(afterBlockedWrite.state.campaign, null);
 });
@@ -1979,6 +1979,110 @@ async function reviewAndConfirm(application, result, draftIds) {
   });
 }
 
+function auctionProtocolValue(draft, overrides = {}) {
+  const protocol = draft.auction_protocol;
+  return {
+    draft_id: draft.draft_id,
+    control: protocol.control,
+    tested_change: protocol.tested_change,
+    bidding: structuredClone(protocol.bidding),
+    query_matching: protocol.query_matching,
+    autotargeting_policy: protocol.autotargeting_policy,
+    traffic_split: structuredClone(protocol.traffic_split),
+    test_budget_rub: protocol.test_budget_rub,
+    test_period: structuredClone(protocol.test_period),
+    measurement_goal: protocol.measurement_goal,
+    success_threshold: protocol.success_threshold,
+    stop_condition: protocol.stop_condition,
+    ...overrides,
+  };
+}
+
+test("every selected Campaign revision freezes a complete honest Auction Protocol in exact authority and P1 lineage", async (t) => {
+  const value = await packageFixture(t);
+  const eligible = value.result.state.recommendation_set.drafts.filter((draft) => draft.shortlist_eligible && draft.visibility === "VISIBLE");
+  const improvement = eligible.find((draft) => draft.variant.kind === "IMPROVEMENT");
+  assert.ok(improvement);
+  const protocol = improvement.auction_protocol;
+  assert.ok(protocol.control && protocol.tested_change);
+  assert.ok(protocol.bidding.strategy && protocol.bidding.ceiling_rub > 0);
+  assert.ok(protocol.query_matching && protocol.autotargeting_policy);
+  assert.equal(protocol.traffic_split.comparator_percent + protocol.traffic_split.treatment_percent, 100);
+  assert.ok(protocol.test_budget_rub > 0 && protocol.test_period.start_date && protocol.test_period.end_date);
+  assert.ok(protocol.measurement_goal && protocol.success_threshold && protocol.stop_condition);
+  assert.equal(protocol.attribution.status, "ONE_FACTOR");
+  assert.equal(protocol.attribution.material_families.length, 1);
+  assert.equal(protocol.knowledge_status, "PREREGISTERED_HYPOTHESIS_NOT_PROVIDER_FACT");
+  assert.equal(protocol.provider_facts.source, "FROZEN_DRAFT_PROJECTION");
+  assert.equal(protocol.test_assumptions.source, "OWNER_REVIEWED_HYPOTHESIS");
+  assert.equal(protocol.p1_lineage.draft_revision_id, improvement.draft_revision_id);
+  assert.equal(protocol.p1_lineage.authority_effect, "NONE");
+
+  const confirmed = await reviewAndConfirm(value.application, value.result, [improvement.draft_id]);
+  const selection = confirmed.state.human_decision_gate.authority.ordered_selections[0];
+  assert.equal(selection.auction_protocol_revision_id, protocol.protocol_revision_id);
+  assert.equal(selection.auction_protocol_content_hash, protocol.content_hash);
+  assert.deepEqual(confirmed.state.human_decision_gate.authority.frozen_auction_protocols, [protocol]);
+  assert.equal(value.externalWrites(), 0);
+});
+
+test("Auction Protocol normalization is a no-op while a material owner edit creates a new Campaign revision and invalidates score, preflight and authority", async (t) => {
+  const value = await packageFixture(t);
+  const selected = value.result.state.recommendation_set.drafts.find((draft) => draft.shortlist_eligible && draft.visibility === "VISIBLE");
+  let result = await reviewAndConfirm(value.application, value.result, [selected.draft_id]);
+  const gateBefore = result.state.human_decision_gate.gate_id;
+  const unrelatedBefore = Object.fromEntries(result.state.recommendation_set.drafts.filter((draft) => draft.draft_id !== selected.draft_id).map((draft) => [draft.draft_id, draft.draft_revision_id]));
+
+  result = await value.application.command("owner", {
+    action: "save_auction_protocol",
+    expected_revision: result.revision,
+    value: auctionProtocolValue(selected, { control: `  ${selected.auction_protocol.control.replaceAll(" ", "   ")}  ` }),
+  });
+  assert.equal(result.state.draft.protocol_edit_result.material_change, false);
+  assert.equal(result.state.draft.draft_revision_id, selected.draft_revision_id);
+  assert.equal(result.state.human_decision_gate.gate_id, gateBefore);
+
+  result = await value.application.command("owner", {
+    action: "save_auction_protocol",
+    expected_revision: result.revision,
+    value: auctionProtocolValue(result.state.draft, { test_budget_rub: result.state.draft.auction_protocol.test_budget_rub - 1 }),
+  });
+  const edited = result.state.draft;
+  assert.equal(edited.protocol_edit_result.material_change, true);
+  assert.notEqual(edited.draft_revision_id, selected.draft_revision_id);
+  assert.notEqual(edited.auction_protocol.protocol_revision_id, selected.auction_protocol.protocol_revision_id);
+  assert.equal(edited.auction_protocol.previous_protocol_revision_id, selected.auction_protocol.protocol_revision_id);
+  assert.equal(edited.viability_score, undefined);
+  assert.equal(edited.shortlist_eligible, false);
+  assert.equal(result.state.package_review, null);
+  assert.equal(result.state.human_decision_gate, null);
+  assert.equal(result.state.shortlist.selections.some((item) => item.draft_id === selected.draft_id), false);
+  assert.equal(result.state.last_decision_invalidation.reason_code, "DRAFT_MATERIAL_CHANGE");
+  assert.deepEqual(Object.fromEntries(result.state.recommendation_set.drafts.filter((draft) => draft.draft_id !== selected.draft_id).map((draft) => [draft.draft_id, draft.draft_revision_id])), unrelatedBefore);
+
+  result = await value.application.command("owner", {
+    action: "revalidate_auction_protocol",
+    expected_revision: result.revision,
+    draft_id: selected.draft_id,
+  });
+  assert.ok(result.state.draft.viability_score);
+  assert.equal(result.state.draft.publication_blockers.some((blocker) => blocker.code === "AUCTION_PROTOCOL_REVALIDATION_REQUIRED"), false);
+  assert.equal(value.externalWrites(), 0);
+});
+
+test("persisted Auction Protocol tampering is rejected before owner projection, package authority or provider use", async (t) => {
+  const value = await packageFixture(t);
+  const row = await value.store.load("owner");
+  const corrupted = JSON.parse(row.value_json);
+  corrupted.recommendation_set.drafts[0].auction_protocol.stop_condition = "Изменено ответом модели после approval";
+  await value.store.seed("owner", { ...row, value_json: JSON.stringify(corrupted) });
+  await assert.rejects(
+    new P0Application({ store: value.store, adapters: value.adapter }).query("owner"),
+    (error) => error instanceof P0ApplicationError && error.code === "P0_MIGRATION_LINEAGE_INVALID" && /Auction Protocol/u.test(error.message),
+  );
+  assert.equal(value.externalWrites(), 0);
+});
+
 function completePackageGraph({ campaignId, adGroupIds, keywordIds, adIds, campaignState = "SUSPENDED" }) {
   const groups = adGroupIds.map((adGroupId) => ({ Id: adGroupId, CampaignId: campaignId }));
   const keywords = keywordIds.map((keywordId, index) => ({ Id: keywordId, AdGroupId: adGroupIds[index] }));
@@ -2039,7 +2143,7 @@ test("ordered multi-Draft shortlist supports add/remove/positional restore, exac
   const [first, second] = eligible;
   const recommendationBefore = JSON.stringify(result.state.recommendation_set);
   const evidenceBefore = JSON.stringify(result.state.analytics_evidence_snapshot);
-  assert.equal(result.state.shortlist.schema_version, "p0-shortlist-v2");
+  assert.equal(result.state.shortlist.schema_version, "p0-shortlist-v3");
   assert.deepEqual(result.state.shortlist.selections, []);
 
   const staleBeforeAdd = await value.application.query("owner");
@@ -3556,7 +3660,7 @@ test("active playbook rollback persists a visible exact-lineage notice with trut
   assert.equal(previousDraftIds.every((draftId) => notice.changes.some((change) => change.previous_draft_id === draftId)), true);
   assert.equal(result.state.recommendation_set.drafts.every((draft) => notice.changes.some((change) => change.current_draft_id === draft.draft_id)), true);
   assert.equal(result.state.draft, null);
-  assert.equal(result.state.shortlist.schema_version, "p0-shortlist-v2");
+  assert.equal(result.state.shortlist.schema_version, "p0-shortlist-v3");
   assert.deepEqual(result.state.shortlist.selections, []);
   assert.equal(result.state.recommendation_set.playbook_release.release_id, "fixture-release-rollback");
 });
@@ -3601,7 +3705,7 @@ test("every editable Direct field round-trips into a material immutable Draft re
     }
     assert.equal(result.state.recommendation_set.coverage.generated_count, result.state.recommendation_set.coverage.visible_count + result.state.recommendation_set.coverage.hidden_count);
     assert.equal(result.state.recommendation_set.coverage.generated_count, result.state.recommendation_set.candidate_audit.length);
-    assert.equal(result.state.shortlist.schema_version, "p0-shortlist-v2");
+    assert.equal(result.state.shortlist.schema_version, "p0-shortlist-v3");
     assert.deepEqual(result.state.shortlist.selections, []);
   }
 });
@@ -3922,7 +4026,11 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
   assert.equal(projection.campaignOptions.every((campaign) => /^\d+%$/u.test(campaign.evidenceCoverage)), true);
   assert.equal(projection.campaignOptions.every((campaign) => campaign.reasons.length <= 3), true);
   assert.equal(projection.primaryAction.fields.length >= 2, true);
-  const ownerShortlistOrder = Object.fromEntries(projection.primaryAction.fields.map((field, index) => [field.key, index < 2 ? String(2 - index) : "0"]));
+  const campaignOrderFields = projection.primaryAction.fields.filter((field) => field.key.startsWith("campaign_"));
+  const ownerShortlistOrder = {
+    ...values(projection),
+    ...Object.fromEntries(campaignOrderFields.map((field, index) => [field.key, index < 2 ? String(2 - index) : "0"])),
+  };
   projection = await journey.submit(ownerKey, {
     handle: projection.primaryAction.handle,
     values: ownerShortlistOrder,

@@ -1,4 +1,5 @@
 import { evaluateBrandClaimsContract } from "./campaign-creation-profile.ts";
+import { auctionProtocolBusinessCompletenessBlockers } from "./auction-protocol.ts";
 import { strategyAnswerValue, strategyPeriod } from "./campaign-strategy.ts";
 
 const SCORE_CONTRACT_VERSION = "viability-score/1.0.0";
@@ -538,6 +539,12 @@ function evaluateEligibility(
   const safety = record(projection.safety);
   if (safety.must_end_non_serving !== true || safety.resume_allowed !== false || safety.network_serving !== false) {
     blockers.push(blocker("NON_SERVING_SAFETY_INVALID", "/draft/publish_projection/safety", "Draft обязан завершаться без показов, расходов и resume capability."));
+  }
+  for (const protocolIssue of auctionProtocolBusinessCompletenessBlockers(draft.auction_protocol)) {
+    blockers.push(blocker("AUCTION_PROTOCOL_INVALID", "/draft/auction_protocol", protocolIssue));
+  }
+  if (record(draft.auction_protocol).evidence_snapshot_id !== evidence?.snapshot_id) {
+    blockers.push(blocker("AUCTION_PROTOCOL_EVIDENCE_LINEAGE_MISMATCH", "/draft/auction_protocol/evidence_snapshot_id", "Пересобрать Auction Protocol из exact Analytics Evidence Snapshot."));
   }
   const bidding = record(record(record(campaign.UnifiedCampaign).BiddingStrategy).Search);
   const weeklySpend = numberOrNull(record(bidding.WbMaximumClicks).WeeklySpendLimit);
@@ -1126,6 +1133,8 @@ export async function recommendationSetRevisionId(baseRecommendationSetId: strin
       draft_id: boundedText(draft.draft_id, 255),
       draft_revision_id: boundedText(draft.draft_revision_id, 255),
       publish_fingerprint: boundedText(draft.publish_fingerprint, 255),
+      auction_protocol_revision_id: boundedText(record(draft.auction_protocol).protocol_revision_id, 255),
+      auction_protocol_content_hash: boundedText(record(draft.auction_protocol).content_hash, 255),
       cohort: capabilityCohortDescriptor(draft),
     })).sort((left, right) => left.draft_id.localeCompare(right.draft_id)),
   });
@@ -1194,6 +1203,8 @@ export async function scoreCampaignDrafts<T extends DraftCandidate>({
       contract: SCORE_CONTRACT_VERSION,
       recommendation_set_id: fixedRecommendationSetId,
       draft_revision_id: item.draft.draft_revision_id,
+      auction_protocol_revision_id: record(item.draft.auction_protocol).protocol_revision_id,
+      auction_protocol_content_hash: record(item.draft.auction_protocol).content_hash,
       model: safeModel(model),
       strategy: safeStrategy(strategy),
       eligibility: item.eligibility,
