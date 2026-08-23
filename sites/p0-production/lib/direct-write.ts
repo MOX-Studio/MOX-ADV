@@ -441,6 +441,33 @@ async function readAndVerifyGraph(
   return semanticGraph(projection, ids, { campaign, adGroup, keyword, ad });
 }
 
+export async function reconcileCorrectedCampaignUpdate(
+  config: DirectConfig,
+  projection: DirectProjection,
+  providerIds: ProviderGraphIds,
+  ambiguousOperation: string,
+  fetcher: Fetcher = fetch,
+) {
+  if (!new Set(["Campaigns.update", "AdGroups.update", "Keywords.update", "Ads.update"]).has(ambiguousOperation)) {
+    throw new DirectWriteError(
+      "P0_CORRECTION_RECONCILIATION_INVALID",
+      "Only an exact known correction update can use corrected graph reconciliation.",
+      { requires_reconciliation: true, ambiguous_operation: ambiguousOperation },
+    );
+  }
+  try {
+    await readAndVerifyGraph(config, projection, providerIds, fetcher);
+  } catch (error) {
+    throw new DirectWriteError(
+      "P0_CORRECTION_RECONCILIATION_REQUIRED",
+      "Official readback did not prove that the ambiguous corrected update reached the exact suspended graph; blind retry remains forbidden.",
+      { requires_reconciliation: true, ambiguous_operation: ambiguousOperation },
+      { cause: error },
+    );
+  }
+  return { completed_update: ambiguousOperation, campaign_state: "SUSPENDED" as const };
+}
+
 export async function pollSuspendedCampaignModeration(
   config: DirectConfig,
   projection: DirectProjection,

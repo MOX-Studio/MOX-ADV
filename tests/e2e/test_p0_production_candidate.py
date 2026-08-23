@@ -335,7 +335,7 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                     "button", name="Подтвердить точный пакет", exact=True
                 ).click()
                 page.get_by_role(
-                    "button", name="Подготовить исправление", exact=True
+                    "button", name="Подтвердить исправление", exact=True
                 ).wait_for(timeout=20_000)
                 self.assertTrue(
                     page.get_by_text("Создана и оставлена без показов", exact=True).is_visible()
@@ -343,15 +343,13 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 self.assertTrue(
                     page.get_by_text("Нужно исправить формулировку", exact=True).is_visible()
                 )
+                self.assertTrue(
+                    page.get_by_text(
+                        re.compile(r"Подайте заявку на участие без гарантии результата")
+                    ).first.is_visible()
+                )
                 checkpoint()
 
-                page.get_by_role("button", name="Подготовить исправление", exact=True).click()
-                correction = page.get_by_label("Исправленный текст")
-                correction.wait_for()
-                correction.fill("Подайте заявку на участие без гарантии результата.")
-                page.get_by_role(
-                    "button", name="Сохранить исправленную формулировку", exact=True
-                ).click()
                 page.get_by_role(
                     "button", name="Подтвердить исправление", exact=True
                 ).wait_for()

@@ -11,6 +11,7 @@ export type P0AgentObjectiveKind = "COORDINATE_OWNER_JOURNEY";
 export type P0AgentToolPermission =
   | "P0_APPLICATION_READ"
   | "P0_PROVIDER_READ"
+  | "P0_LOCAL_DRAFT_WRITE"
   | "P0_APPROVED_DISPATCH"
   | "P0_OBSERVATION_RECORD";
 
@@ -239,6 +240,7 @@ const DEFAULT_BUDGETS: P0AgentBudgetLimits = {
 const TOOL_PERMISSIONS = new Set<P0AgentToolPermission>([
   "P0_APPLICATION_READ",
   "P0_PROVIDER_READ",
+  "P0_LOCAL_DRAFT_WRITE",
   "P0_APPROVED_DISPATCH",
   "P0_OBSERVATION_RECORD",
 ]);

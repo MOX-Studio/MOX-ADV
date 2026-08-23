@@ -3066,6 +3066,74 @@ test("package dispatch continues after contained system failure but stops unsafe
   });
 });
 
+test("agent-owned dispatch resumes one exact reconciliation checkpoint before continuing independent items", async (t) => {
+  const value = await packageFixture(t);
+  const selected = value.result.state.recommendation_set.drafts.filter((draft) => draft.shortlist_eligible && draft.visibility === "VISIBLE").slice(0, 2);
+  let result = await reviewAndConfirm(value.application, value.result, selected.map((draft) => draft.draft_id));
+  const calls = [];
+  let reconciled = false;
+  value.adapter.createPackageItemOutcome = async ({ item_execution_id, selection }) => {
+    calls.push(selection.draft_id);
+    if (selection.draft_id === selected[0].draft_id && !reconciled) {
+      reconciled = true;
+      return {
+        execution_id: item_execution_id,
+        status: "RECONCILIATION_REQUIRED",
+        error_code: "P0_DIRECT_OUTCOME_AMBIGUOUS",
+        error_message: "Campaigns.suspend acknowledgement was lost.",
+        requires_reconciliation: true,
+        containment: "RECONCILIATION_REQUIRED",
+        account_lock: "HELD_FOR_RECONCILIATION",
+      };
+    }
+    if (selection.draft_id === selected[0].draft_id) {
+      return moderationOutcome(item_execution_id, {
+        campaignId: "801",
+        adGroupIds: ["802"],
+        ads: [{ adId: "804", adGroupId: "802", status: "MODERATION", statusClarification: null }],
+      });
+    }
+    return {
+      execution_id: item_execution_id,
+      status: "PROVIDER_REJECTED",
+      rejected: true,
+      provider_issues: [{ operation: "Campaigns.add", severity: "ERROR", code: 5001, message: "Rejected", details: "Known item rejection" }],
+      containment: "NOT_CREATED",
+      account_lock: "RELEASED",
+    };
+  };
+  result = await value.application.command("owner", {
+    action: "dispatch_package",
+    expected_revision: result.revision,
+    package_id: result.state.human_decision_gate.package_id,
+    gate_id: result.state.human_decision_gate.gate_id,
+  });
+  assert.deepEqual(calls, [selected[0].draft_id]);
+  assert.equal(result.state.package_execution.items[0].status, "RECONCILIATION_REQUIRED");
+  assert.equal(result.workflow.allowed_commands.includes("dispatch_package"), true);
+  const blockedOwner = await new P0OwnerJourney(value.application, { agentProjection: async () => null }).query("owner");
+  assert.equal(blockedOwner.businessOutcome.status, "blocked");
+  assert.match(blockedOwner.businessOutcome.headline, /безопасной сверки/u);
+  assert.equal(blockedOwner.cards.some((card) => card.kind === "problem" && /не считается успехом/u.test(card.body)), true);
+  assert.doesNotMatch(JSON.stringify(blockedOwner), /P0_DIRECT_OUTCOME_AMBIGUOUS|provider_ids|error_code|status_clarification/iu);
+
+  const contract = await value.application.agentContract("owner", "COORDINATE_OWNER_JOURNEY");
+  const continued = await value.application.executeAgentTool({
+    owner_key: "owner",
+    run_id: "reconciliation-run",
+    objective: contract.objective,
+    authority: contract.authority,
+    call: { id: "reconcile", name: "p0_dispatch_approved_package", arguments: { expected_revision: result.revision } },
+    observation_sequence: 1,
+  });
+  assert.equal(continued.observation.facts.dispatch_status, "CONTINUED_WITH_EXISTING_AUTHORITY");
+  result = await value.application.query("owner");
+  assert.deepEqual(calls, [selected[0].draft_id, selected[0].draft_id, selected[1].draft_id]);
+  assert.equal(result.state.package_execution.items[0].status, "MODERATION_PENDING");
+  assert.equal(result.state.package_execution.items[1].status, "PROVIDER_REJECTED");
+  assert.equal(result.state.package_execution.verdict, "PENDING");
+});
+
 test("package dispatch blocks the whole set before durable intent when current account binding changed", async (t) => {
   const value = await packageFixture(t);
   const selected = value.result.state.recommendation_set.drafts.filter((draft) => draft.shortlist_eligible && draft.visibility === "VISIBLE").slice(0, 2);
@@ -3376,6 +3444,77 @@ test("rejected item correction requires a material Draft revision, fresh review 
       && error.code === "P0_MIGRATION_LINEAGE_INVALID"
       && /correction/iu.test(error.message),
   );
+});
+
+test("agent prepares a rejected Campaign correction through the existing editor and review before returning an owner decision", async (t) => {
+  const value = await packageFixture(t);
+  const draft = value.result.state.recommendation_set.drafts.find((item) => item.shortlist_eligible && item.visibility === "VISIBLE");
+  let result = await reviewAndConfirm(value.application, value.result, [draft.draft_id]);
+  value.adapter.createPackageItemOutcome = async ({ item_execution_id }) => moderationOutcome(item_execution_id, {
+    ads: [{
+      adId: "704",
+      adGroupId: "702",
+      status: "REJECTED",
+      statusClarification: "Исправьте формулировку объявления",
+      providerIssues: [{ operation: "Ads.get", severity: "ERROR", code: "STATUS_REJECTED", message: "Ad rejected", details: "Policy detail" }],
+    }],
+  });
+  result = await value.application.command("owner", {
+    action: "dispatch_package",
+    expected_revision: result.revision,
+    package_id: result.state.human_decision_gate.package_id,
+    gate_id: result.state.human_decision_gate.gate_id,
+  });
+  const immutableInitialExecution = JSON.stringify(result.state.package_execution);
+  const contract = await value.application.agentContract("owner", "COORDINATE_OWNER_JOURNEY");
+  const before = await value.application.executeAgentTool({
+    owner_key: "owner",
+    run_id: "correction-run",
+    objective: contract.objective,
+    authority: contract.authority,
+    call: { id: "read-rejection", name: "p0_read_owner_journey", arguments: { expected_revision: result.revision } },
+    observation_sequence: 1,
+  });
+  assert.equal(before.observation.facts.next_boundary, "SAFE_WORK");
+  assert.equal(before.observation.facts.correction_preparation_ready, true);
+  assert.equal(before.observation.facts.prepared_correction_context.current_ad_text, draft.ad_text);
+  assert.doesNotMatch(JSON.stringify(before.observation.facts.prepared_correction_context), /provider_ids|campaign_id|ad_id/iu);
+
+  const prepared = await value.application.executeAgentTool({
+    owner_key: "owner",
+    run_id: "correction-run",
+    objective: contract.objective,
+    authority: contract.authority,
+    call: {
+      id: "prepare-correction",
+      name: "p0_prepare_rejected_correction",
+      arguments: {
+        expected_revision: result.revision,
+        corrected_ad_text: "Оставьте заявку на участие после проверки условий",
+      },
+    },
+    observation_sequence: 2,
+  });
+  assert.equal(prepared.observation.facts.correction_status, "PREPARED_DECISION");
+  assert.equal(prepared.observation.facts.next_boundary, "HUMAN_DECISION_GATE");
+
+  const current = await value.application.query("owner");
+  const correction = current.state.package_corrections[0];
+  assert.equal(correction.status, "HUMAN_GATE_REQUIRED");
+  assert.equal(correction.corrected_draft.ad_text, "Оставьте заявку на участие после проверки условий");
+  assert.notEqual(correction.corrected_draft.draft_revision_id, draft.draft_revision_id);
+  assert.ok(correction.package_review);
+  assert.equal(correction.human_decision_gate, null);
+  assert.equal(JSON.stringify(current.state.package_execution), immutableInitialExecution);
+
+  const journey = new P0OwnerJourney(value.application, { agentProjection: async () => null });
+  const owner = await journey.query("owner");
+  assert.equal(owner.primaryAction.label, "Подтвердить исправление");
+  assert.equal(owner.primaryAction.fields.length, 0);
+  assert.equal(owner.cards.some((card) => card.kind === "problem" && /формулиров/u.test(card.body)), true);
+  assert.equal(owner.cards.some((card) => card.kind === "human-decision-gate" && /Оставьте заявку на участие после проверки условий/u.test(JSON.stringify(card.facts))), true);
+  assert.equal(owner.campaignOptions.some((campaign) => campaign.publishPreview.texts.includes("Оставьте заявку на участие после проверки условий")), true);
+  assert.doesNotMatch(JSON.stringify(owner), /701|702|704|provider_ids|status_clarification|Ads\.get|STATUS_REJECTED|Policy detail/iu);
 });
 
 test("unknown or reconciliation-required package outcomes never enter content correction", async (t) => {
@@ -3838,9 +3977,9 @@ test("authoritative application owns the agent objective, typed tool schema, per
   const initial = await value.application.agentContract("owner", "COORDINATE_OWNER_JOURNEY");
   assert.equal(initial.schema_version, "p0-agent-application-contract-v1");
   assert.equal(initial.objective.kind, "COORDINATE_OWNER_JOURNEY");
-  assert.deepEqual(initial.policy.allowed_tools, ["p0_read_owner_journey", "p0_read_bounded_competitor_research", "p0_audit_direct_account", "p0_continue_due_safe_work", "p0_dispatch_approved_package", "p0_record_owner_journey_assessment"]);
-  assert.deepEqual(initial.policy.allowed_permissions, ["P0_APPLICATION_READ", "P0_PROVIDER_READ", "P0_APPROVED_DISPATCH", "P0_OBSERVATION_RECORD"]);
-  assert.deepEqual(initial.tools.map((tool) => tool.name), ["p0_read_owner_journey", "p0_read_bounded_competitor_research", "p0_audit_direct_account", "p0_continue_due_safe_work", "p0_dispatch_approved_package", "p0_record_owner_journey_assessment"]);
+  assert.deepEqual(initial.policy.allowed_tools, ["p0_read_owner_journey", "p0_read_bounded_competitor_research", "p0_audit_direct_account", "p0_continue_due_safe_work", "p0_prepare_rejected_correction", "p0_dispatch_approved_package", "p0_record_owner_journey_assessment"]);
+  assert.deepEqual(initial.policy.allowed_permissions, ["P0_APPLICATION_READ", "P0_PROVIDER_READ", "P0_LOCAL_DRAFT_WRITE", "P0_APPROVED_DISPATCH", "P0_OBSERVATION_RECORD"]);
+  assert.deepEqual(initial.tools.map((tool) => tool.name), ["p0_read_owner_journey", "p0_read_bounded_competitor_research", "p0_audit_direct_account", "p0_continue_due_safe_work", "p0_prepare_rejected_correction", "p0_dispatch_approved_package", "p0_record_owner_journey_assessment"]);
   assert.ok(initial.tools.every((tool) => tool.input_schema.additionalProperties === false));
   assert.equal(initial.authority.application_revision, 0);
   assert.match(initial.authority.authority_digest, /^sha256:[a-f0-9]{64}$/u);

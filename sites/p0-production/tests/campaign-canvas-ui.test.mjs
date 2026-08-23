@@ -41,8 +41,9 @@ test("safe continuation and approved dispatch remain agent-owned without technic
   assert.match(ownerSource, /this\.agentProjection \? initial : await this\.continueSafeWork/u);
   assert.match(applicationSource, /p0_continue_due_safe_work/u);
   assert.match(applicationSource, /p0_dispatch_approved_package/u);
+  assert.match(applicationSource, /p0_prepare_rejected_correction/u);
   assert.match(applicationSource, /No exact persisted Human Decision Gate authorizes dispatch/u);
-  assert.doesNotMatch(ownerSource, /create-authorized-package/u);
+  assert.doesNotMatch(ownerSource, /create-authorized-package|Подготовить исправление|Сохранить исправленную формулировку/u);
   assert.doesNotMatch(clientSource, /Проверить запланированный элемент|Повторить запрос|Сверить идентификаторы|Продолжить создание без запуска/u);
 });
 

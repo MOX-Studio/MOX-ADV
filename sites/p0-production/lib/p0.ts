@@ -19,6 +19,7 @@ import {
   correctSuspendedCampaignAndResubmitModeration,
   DirectWriteError,
   pollSuspendedCampaignModeration,
+  reconcileCorrectedCampaignUpdate,
   type DirectProjection,
 } from "./direct-write.ts";
 import {
@@ -1148,6 +1149,23 @@ async function resubmitCorrectedPackageItemOutcome({
   };
   await saveJournal(String(journal.status), record(journal.progress));
   try {
+    const completedUpdates = Array.isArray(journal.completed_updates) ? journal.completed_updates.map(String) : [];
+    const ambiguousOperation = String(record(journal.progress).ambiguous_operation ?? "");
+    if (ambiguousOperation.endsWith(".update") && !completedUpdates.includes(ambiguousOperation)) {
+      const reconciled = await reconcileCorrectedCampaignUpdate(
+        config,
+        projection,
+        { campaignId, adGroupId, keywordId, adId },
+        ambiguousOperation,
+        fetch,
+      );
+      completedUpdates.push(reconciled.completed_update);
+      journal = { ...journal, completed_updates: structuredClone(completedUpdates) };
+      await saveJournal("CORRECTED_UPDATE_RECONCILED", {
+        ...record(journal.progress),
+        completed_updates: completedUpdates,
+      });
+    }
     const result = await correctSuspendedCampaignAndResubmitModeration(
       config,
       projection,
@@ -1156,7 +1174,7 @@ async function resubmitCorrectedPackageItemOutcome({
       fetch,
       saveJournal,
       {
-        completedUpdates: Array.isArray(journal.completed_updates) ? journal.completed_updates.map(String) : [],
+        completedUpdates,
         moderationIntentPersisted: journal.moderation_intent_persisted === true,
       },
     );

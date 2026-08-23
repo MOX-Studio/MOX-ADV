@@ -153,17 +153,17 @@ import {
 } from "./measurement-destination-readiness.ts";
 
 export const P0_APPLICATION_CONTRACT = "mox-adv.p0.application";
-export const P0_APPLICATION_CONTRACT_VERSION = "1.21.0";
+export const P0_APPLICATION_CONTRACT_VERSION = "1.22.0";
 export const P0_DOCUMENT_SCHEMA = "p0-application-document-v15";
 const P0_LEGACY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4", "p0-application-document-v5", "p0-application-document-v6", "p0-application-document-v7", "p0-application-document-v8", "p0-application-document-v9", "p0-application-document-v10", "p0-application-document-v11", "p0-application-document-v12", "p0-application-document-v13", "p0-application-document-v14"]);
 const P0_PRE_PACKAGE_AUTHORITY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4"]);
 export const P0_CONTEXT_SCHEMA = "p0-context-v2";
 const P0_LEGACY_CONTEXT_SCHEMA = "p0-context-v1";
 export const P0_CONTEXT_PREFLIGHT_MAX_AGE_MS = 5 * 60_000;
-export const P0_AGENT_POLICY_VERSION = "p0-agent-policy-v4";
+export const P0_AGENT_POLICY_VERSION = "p0-agent-policy-v5";
 export const P0_AGENT_OBJECTIVE: P0AgentApplicationContract["objective"] = {
   kind: "COORDINATE_OWNER_JOURNEY",
-  statement: "Coordinate bounded safe research and queued reads for the current P0 owner journey, preserving application truth and stopping only at a Critical Decision or Material Uncertainty.",
+  statement: "Coordinate bounded safe research, queued reads, approved dispatch, and local correction preparation for the current P0 owner journey, preserving application truth and stopping only at a Critical Decision or Material Uncertainty.",
 };
 export const P0_AGENT_TOOL_DEFINITIONS: P0AgentApplicationContract["tools"] = [
   {
@@ -215,6 +215,20 @@ export const P0_AGENT_TOOL_DEFINITIONS: P0AgentApplicationContract["tools"] = [
         expected_revision: { type: "integer", minimum: 0 },
       },
       required: ["expected_revision"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "p0_prepare_rejected_correction",
+    description: "Prepare one material business-copy correction for the next fully-accounted moderation rejection through the existing Draft editor and package review; performs no provider write and grants no authority.",
+    permission: "P0_LOCAL_DRAFT_WRITE",
+    input_schema: {
+      type: "object",
+      properties: {
+        expected_revision: { type: "integer", minimum: 0 },
+        corrected_ad_text: { type: "string", minLength: 1, maxLength: 1_000 },
+      },
+      required: ["expected_revision", "corrected_ad_text"],
       additionalProperties: false,
     },
   },
@@ -610,7 +624,7 @@ export const P0_COMMAND_TRUTH_TABLE = {
   dispatch_package: (state: P0Document) => Boolean(
     state.package_review
       && state.human_decision_gate
-      && (!state.package_execution || state.package_execution.items.some((item) => item.status === "QUEUED" || item.status === "DISPATCHING"))
+      && (!state.package_execution || state.package_execution.items.some((item) => ["QUEUED", "DISPATCHING", "RECONCILIATION_REQUIRED"].includes(item.status)))
       && !state.campaign
       && !state.external_write_intent,
   ),
@@ -632,7 +646,7 @@ export const P0_COMMAND_TRUTH_TABLE = {
   confirm_package_correction: (state: P0Document) => state.package_corrections.some((correction) => correction.status === "HUMAN_GATE_REQUIRED"),
   resubmit_package_correction: (state: P0Document) => state.package_corrections.some((correction) => correction.status === "READY_TO_RESUBMIT" || (
     correction.status === "RESUBMISSION_PENDING"
-      && correction.execution?.items.some((item) => item.status === "QUEUED" || item.status === "DISPATCHING")
+      && correction.execution?.items.some((item) => ["QUEUED", "DISPATCHING", "RECONCILIATION_REQUIRED"].includes(item.status))
   )),
   poll_package_correction_moderation: (state: P0Document) => state.package_corrections.some((correction) =>
     correction.status === "RESUBMISSION_PENDING"
@@ -1745,7 +1759,7 @@ async function buildMaterialDraftCorrection(
   const editedDraft = {
     ...sourceDraft,
     ...materialLineage,
-    source: "OWNER_CORRECTED_AFTER_PROVIDER_REJECTION",
+    source: "REVIEWED_CORRECTION_AFTER_PROVIDER_REJECTION",
     edited_at: editedAt,
     capability_selection: preservedCapability.capability_selection,
     unsupported_fields: preservedCapability.capability_selection.unsupported_fields,
@@ -2765,17 +2779,40 @@ function pendingAgentSafeWork(state: P0Document) {
 
 function approvedAgentDispatch(state: P0Document) {
   if (state.package_review && state.human_decision_gate
-    && (!state.package_execution || state.package_execution.items.some((item) => ["QUEUED", "DISPATCHING"].includes(item.status)))) {
+    && (!state.package_execution || state.package_execution.items.some((item) => ["QUEUED", "DISPATCHING", "RECONCILIATION_REQUIRED"].includes(item.status)))) {
     return { kind: "PACKAGE" as const, correction_id: null };
   }
   const correction = state.package_corrections.find((item) => item.status === "READY_TO_RESUBMIT"
-    || (item.status === "RESUBMISSION_PENDING" && item.execution?.items.some((entry) => ["QUEUED", "DISPATCHING"].includes(entry.status))));
+    || (item.status === "RESUBMISSION_PENDING" && item.execution?.items.some((entry) => ["QUEUED", "DISPATCHING", "RECONCILIATION_REQUIRED"].includes(entry.status))));
   return correction ? { kind: "CORRECTION" as const, correction_id: correction.correction_id } : null;
+}
+
+function agentCorrectionPreparation(state: P0Document) {
+  const inProgress = state.package_corrections.find((correction) =>
+    correction.status === "EDITING" || correction.status === "PACKAGE_REVIEW_REQUIRED"
+  );
+  if (inProgress) {
+    return {
+      item: inProgress.source.item_snapshot,
+      draft: inProgress.source.draft_snapshot,
+      correction: inProgress,
+    };
+  }
+  if (!state.package_execution || state.package_execution.verdict === "PENDING") return null;
+  const item = state.package_execution.items.find((candidate) => candidate.status === "REJECTED_NEEDS_EDIT"
+    && candidate.ownership === "PROVIDER"
+    && candidate.account_lock === "RELEASED"
+    && candidate.accountability.provider_outcome_accounted
+    && !state.package_corrections.some((correction) => correction.source.item_execution_id === candidate.item_execution_id));
+  const draft = item
+    ? state.recommendation_set?.drafts.find((candidate) => candidate.draft_id === item.selection.draft_id)
+    : null;
+  return item && draft ? { item, draft, correction: null } : null;
 }
 
 function agentNextBoundary(state: P0Document) {
   if (agentHumanDecisionBoundary(state)) return "HUMAN_DECISION_GATE" as const;
-  if (approvedAgentDispatch(state) || pendingAgentSafeWork(state)) return "SAFE_WORK" as const;
+  if (approvedAgentDispatch(state) || pendingAgentSafeWork(state) || agentCorrectionPreparation(state)) return "SAFE_WORK" as const;
   const packageComplete = Boolean(state.package_execution?.items.length)
     && state.package_execution!.items.every((item) => !["QUEUED", "DISPATCHING", "MODERATION_PENDING", "OUTCOME_UNKNOWN"].includes(item.status));
   if (packageComplete) return "JOURNEY_COMPLETE" as const;
@@ -2878,7 +2915,7 @@ export class P0Application {
     const directAvailable = !scope || scope.direct === "AVAILABLE";
     const providerReadAvailable = !scope || scope.direct === "AVAILABLE" || scope.metrika === "AVAILABLE";
     const tools = P0_AGENT_TOOL_DEFINITIONS.filter((tool) => {
-      if (tool.name === "p0_audit_direct_account" || tool.name === "p0_dispatch_approved_package") return directAvailable;
+      if (["p0_audit_direct_account", "p0_prepare_rejected_correction", "p0_dispatch_approved_package"].includes(tool.name)) return directAvailable;
       if (tool.name === "p0_continue_due_safe_work") return providerReadAvailable;
       return true;
     });
@@ -3000,6 +3037,7 @@ export class P0Application {
       const planRegions = Array.isArray(planScope.regions) ? planScope.regions : [];
       const planDevices = Array.isArray(planScope.devices) ? planScope.devices : [];
       const planSeeds = Array.isArray(plan.seeds) ? plan.seeds : [];
+      const correctionPreparation = agentCorrectionPreparation(state);
       facts = {
         revision: stored.revision,
         owner_stage: journeyStage,
@@ -3043,6 +3081,15 @@ export class P0Application {
         human_decision_reason: agentHumanDecisionBoundary(state),
         queued_safe_work: Boolean(pendingAgentSafeWork(state)),
         approved_dispatch_ready: Boolean(approvedAgentDispatch(state)),
+        correction_preparation_ready: Boolean(correctionPreparation),
+        prepared_correction_context: correctionPreparation ? {
+          current_ad_text: String(correctionPreparation.draft.ad_text ?? ""),
+          business_problem: "The advertising system did not accept this wording; prepare a materially corrected business formulation without changing the approved offer or authority.",
+          moderation_reasons: correctionPreparation.item.moderation.ad_outcomes
+            .filter((item) => item.status === "REJECTED")
+            .map((item) => String(item.status_clarification ?? ""))
+            .filter(Boolean),
+        } : null,
         package_outcome: state.package_execution?.verdict ?? null,
       } as unknown as Record<string, JsonValue>;
       summary = `Authoritative owner journey at ${journeyStage} preserves scoped demand and one compatible source-labelled cost range or explicit unavailable; next boundary is ${facts.next_boundary}.`;
@@ -3152,6 +3199,87 @@ export class P0Application {
         };
       }
       trust = "UNTRUSTED_EVIDENCE";
+    } else if (input.call.name === "p0_prepare_rejected_correction") {
+      if (JSON.stringify(Object.keys(argumentsValue).sort()) !== JSON.stringify(["corrected_ad_text", "expected_revision"])) {
+        fail("P0_AGENT_TOOL_INPUT_INVALID", "Correction preparation input не соответствует closed schema.");
+      }
+      const preparation = agentCorrectionPreparation(state);
+      if (!preparation) {
+        fail("P0_AGENT_CORRECTION_NOT_READY", "No fully-accounted moderation rejection is ready for local correction preparation.");
+      }
+      const correctedAdText = artifactText(argumentsValue.corrected_ad_text, 1_000);
+      if (!correctedAdText) fail("P0_AGENT_CORRECTION_INPUT_INVALID", "Corrected business wording is empty.");
+      if (cleanText(String(preparation.draft.ad_text ?? ""), 1_000) === correctedAdText) {
+        fail("P0_CORRECTION_MATERIAL_CHANGE_REQUIRED", "Correction preparation must materially change the rejected business wording.");
+      }
+      let next = stored;
+      let correctionId = preparation.correction?.correction_id ?? "";
+      if (!preparation.correction) {
+        next = await this.command(input.owner_key, {
+          action: "start_package_correction",
+          expected_revision: next.revision,
+          item_execution_id: preparation.item.item_execution_id,
+        });
+        correctionId = next.state.package_corrections.find((item) => item.source.item_execution_id === preparation.item.item_execution_id)?.correction_id ?? "";
+      }
+      let correction = next.state.package_corrections.find((item) => item.correction_id === correctionId);
+      if (!correction) fail("P0_AGENT_CORRECTION_NOT_READY", "Durable focused correction was not initialized.");
+      if (correction.status === "EDITING") {
+        const sourceDraft = record(correction.source.draft_snapshot);
+        const correctionValue = {
+          draft_id: sourceDraft.draft_id,
+          ...Object.fromEntries(DIRECT_V501_DRAFT_FIELD_REGISTRY.fields
+            .filter((field) => field.editable && field.input_name)
+            .map((field) => {
+              const inputName = String(field.input_name);
+              return [inputName, inputName === "ad_text" ? correctedAdText : sourceDraft[inputName]];
+            })),
+        };
+        next = await this.command(input.owner_key, {
+          action: "save_package_correction",
+          expected_revision: next.revision,
+          correction_id: correctionId,
+          value: correctionValue,
+        });
+        correction = next.state.package_corrections.find((item) => item.correction_id === correctionId);
+      }
+      if (correction?.status === "PACKAGE_REVIEW_REQUIRED") {
+        next = await this.command(input.owner_key, {
+          action: "review_package_correction",
+          expected_revision: next.revision,
+          correction_id: correctionId,
+        });
+        correction = next.state.package_corrections.find((item) => item.correction_id === correctionId);
+      }
+      if (correction?.status !== "HUMAN_GATE_REQUIRED") {
+        fail("P0_AGENT_CORRECTION_NOT_READY", "Corrected Draft did not reach a prepared owner decision.");
+      }
+      const nextContract = await this.agentContract(input.owner_key, input.objective.kind);
+      return {
+        observation: {
+          schema_version: "p0-agent-observation-v1",
+          sequence: input.observation_sequence,
+          tool_call_id: cleanText(input.call.id, 255),
+          tool_name: definition.name,
+          trust: "TRUSTED_APPLICATION",
+          summary: "Trusted application created one material corrected Draft through the existing editor and review and stopped before renewed authority.",
+          facts: {
+            revision: next.revision,
+            correction_status: "PREPARED_DECISION",
+            next_boundary: agentNextBoundary(next.state),
+          },
+          source_references: [{
+            source_kind: "P0_APPLICATION_STATE",
+            locator: `p0-application:revision:${next.revision}`,
+            observed_at: next.updated_at,
+          }],
+          application_revision: nextContract.authority.application_revision,
+          authority_digest: nextContract.authority.authority_digest,
+          prior_outcomes_digest: nextContract.authority.prior_outcomes_digest,
+          observed_at: timestamp,
+        },
+        contract: nextContract,
+      };
     } else if (input.call.name === "p0_dispatch_approved_package") {
       if (JSON.stringify(Object.keys(argumentsValue)) !== JSON.stringify(["expected_revision"])) {
         fail("P0_AGENT_TOOL_INPUT_INVALID", "Approved dispatch input не соответствует closed schema.");
@@ -4658,11 +4786,14 @@ export class P0Application {
       }
       for (const plan of plans) {
         const currentItem = state.package_execution.items.find((item) => item.item_execution_id === plan.item_execution_id);
-        if (!currentItem || !["QUEUED", "DISPATCHING"].includes(currentItem.status)) continue;
-        if (packageExecutionBlocksFollowingItems(state.package_execution)) break;
-        const itemStartedAt = this.adapters.now();
-        state.package_execution = await beginPackageItemDispatch(state.package_execution, plan.item_execution_id, itemStartedAt);
-        await persistPackageCheckpoint(itemStartedAt);
+        if (!currentItem || !["QUEUED", "DISPATCHING", "RECONCILIATION_REQUIRED"].includes(currentItem.status)) continue;
+        const reconciling = currentItem.status === "RECONCILIATION_REQUIRED";
+        if (packageExecutionBlocksFollowingItems(state.package_execution) && !reconciling) break;
+        if (!reconciling) {
+          const itemStartedAt = this.adapters.now();
+          state.package_execution = await beginPackageItemDispatch(state.package_execution, plan.item_execution_id, itemStartedAt);
+          await persistPackageCheckpoint(itemStartedAt);
+        }
         let outcome: PackageItemExternalOutcome;
         try {
           outcome = await this.adapters.createPackageItemOutcome({
@@ -4968,12 +5099,15 @@ export class P0Application {
       }
       for (const plan of plans) {
         const currentItem = correction.execution?.items.find((item) => item.item_execution_id === plan.item_execution_id);
-        if (!currentItem || !["QUEUED", "DISPATCHING"].includes(currentItem.status)) continue;
-        if (packageExecutionBlocksFollowingItems(correction.execution!)) break;
-        const itemStartedAt = this.adapters.now();
-        const dispatching = await beginPackageItemDispatch(correction.execution!, plan.item_execution_id, itemStartedAt);
-        correction = await recordCorrectionExecution(correction, dispatching, itemStartedAt);
-        await checkpointCorrection(correctionIndex, correction, itemStartedAt, "P0 изменился в другой вкладке. Correction checkpoint не сохранён.");
+        if (!currentItem || !["QUEUED", "DISPATCHING", "RECONCILIATION_REQUIRED"].includes(currentItem.status)) continue;
+        const reconciling = currentItem.status === "RECONCILIATION_REQUIRED";
+        if (packageExecutionBlocksFollowingItems(correction.execution!) && !reconciling) break;
+        if (!reconciling) {
+          const itemStartedAt = this.adapters.now();
+          const dispatching = await beginPackageItemDispatch(correction.execution!, plan.item_execution_id, itemStartedAt);
+          correction = await recordCorrectionExecution(correction, dispatching, itemStartedAt);
+          await checkpointCorrection(correctionIndex, correction, itemStartedAt, "P0 изменился в другой вкладке. Correction checkpoint не сохранён.");
+        }
         let outcome: PackageItemExternalOutcome;
         try {
           const input = {

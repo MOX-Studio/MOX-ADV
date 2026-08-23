@@ -11,6 +11,7 @@ import {
   createSuspendedCampaign,
   DirectWriteError,
   pollSuspendedCampaignModeration,
+  reconcileCorrectedCampaignUpdate,
 } from "../lib/direct-write.ts";
 
 function jsonResponse(result, status = 200) {
@@ -262,6 +263,17 @@ test("updates the exact suspended provider graph and resubmits only the correcte
   assert.deepEqual(calls.filter((call) => call.operation.endsWith(".update")).map((call) => call.operation), ["ads.update"]);
   assert.equal(calls.find((call) => call.operation === "ads.update").params.Ads[0].Id, 401);
   assert.ok(calls.findIndex((call) => call.operation === "ads.moderate") > calls.findIndex((call) => call.operation === "ads.get"));
+
+  const reconciliationStart = calls.length;
+  const reconciled = await reconcileCorrectedCampaignUpdate(
+    { token: "secret", account: "moxstudio" },
+    corrected,
+    { campaignId: "101", adGroupId: "201", keywordId: "301", adId: "401" },
+    "Ads.update",
+    fetcher,
+  );
+  assert.equal(reconciled.completed_update, "Ads.update");
+  assert.equal(calls.slice(reconciliationStart).every((call) => call.operation.endsWith(".get")), true);
 });
 
 test("an ambiguous correction update holds reconciliation and is never retried or moderated", async () => {

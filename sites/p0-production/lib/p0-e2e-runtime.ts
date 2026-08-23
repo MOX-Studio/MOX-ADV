@@ -893,9 +893,39 @@ function withFixtureEvidence(
   };
 }
 
+async function prepareFixtureCorrection(
+  fixture: ReturnType<typeof fixtureApplication>,
+  ownerKey: string,
+) {
+  const current = await fixture.application.query(ownerKey);
+  const rejected = current.state.package_execution?.items.some((item) => item.status === "REJECTED_NEEDS_EDIT")
+    && current.state.package_corrections.length === 0;
+  if (!rejected) return false;
+  const contract = await fixture.application.agentContract(ownerKey, "COORDINATE_OWNER_JOURNEY");
+  await fixture.application.executeAgentTool({
+    owner_key: ownerKey,
+    run_id: "deterministic-e2e-correction-agent",
+    objective: contract.objective,
+    authority: contract.authority,
+    call: {
+      id: "prepare-rejected-correction",
+      name: "p0_prepare_rejected_correction",
+      arguments: {
+        expected_revision: current.revision,
+        corrected_ad_text: "Подайте заявку на участие без гарантии результата.",
+      },
+    },
+    observation_sequence: 1,
+  });
+  return true;
+}
+
 export async function fixtureOwnerOverview(scenario: string, key: string) {
   const fixture = fixtureApplication(scenario, key);
-  return fixture.ownerJourney.query(`e2e:${scenario}:${key}`);
+  const ownerKey = `e2e:${scenario}:${key}`;
+  let value = await fixture.ownerJourney.query(ownerKey);
+  if (await prepareFixtureCorrection(fixture, ownerKey)) value = await fixture.ownerJourney.query(ownerKey);
+  return value;
 }
 
 export async function fixtureSubmitOwnerAction(
@@ -904,10 +934,12 @@ export async function fixtureSubmitOwnerAction(
   payload: Record<string, unknown>,
 ) {
   const fixture = fixtureApplication(scenario, key);
-  const value = await fixture.ownerJourney.submit(
-    `e2e:${scenario}:${key}`,
+  const ownerKey = `e2e:${scenario}:${key}`;
+  let value = await fixture.ownerJourney.submit(
+    ownerKey,
     payload as OwnerActionSubmission,
   );
+  if (await prepareFixtureCorrection(fixture, ownerKey)) value = await fixture.ownerJourney.query(ownerKey);
   fixture.advanceClock(61_000);
   return value;
 }

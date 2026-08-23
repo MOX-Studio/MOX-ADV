@@ -252,8 +252,6 @@ type ActionKind =
   | "edit-package"
   | "review-package"
   | "authorize-and-create"
-  | "start-correction"
-  | "save-correction"
   | "authorize-correction";
 
 type InternalActionDescriptor = {
@@ -516,22 +514,6 @@ function actionDescriptor(view: InternalView): InternalActionDescriptor | null {
     };
   }
 
-  const editingCorrection = correctionWithStatus(state, "EDITING");
-  if (editingCorrection) {
-    return {
-      kind: "save-correction",
-      target: editingCorrection.correction_id,
-      label: "Сохранить исправленную формулировку",
-      description: "Меняется только отклонённая бизнес-формулировка; исходный результат остаётся в истории.",
-      fields: [{
-        key: "adText",
-        label: "Исправленный текст",
-        control: "textarea",
-        value: ownerText(record(editingCorrection.source.draft_snapshot).ad_text, "", 1_000),
-        required: true,
-      }],
-    };
-  }
   const correctionGate = correctionWithStatus(state, "HUMAN_GATE_REQUIRED");
   if (correctionGate) {
     return {
@@ -542,16 +524,10 @@ function actionDescriptor(view: InternalView): InternalActionDescriptor | null {
       fields: [],
     };
   }
-  const rejected = state.package_execution?.items.find((item) => item.status === "REJECTED_NEEDS_EDIT"
-    && !state.package_corrections.some((correction) => correction.source.item_execution_id === item.item_execution_id));
-  if (rejected) {
-    return {
-      kind: "start-correction",
-      target: rejected.item_execution_id,
-      label: "Подготовить исправление",
-      description: "Агент откроет только существенную формулировку, которую нужно исправить.",
-      fields: [],
-    };
+  if (state.package_execution?.items.some((item) => item.status === "REJECTED_NEEDS_EDIT"
+    && !state.package_corrections.some((correction) => correction.source.item_execution_id === item.item_execution_id))
+    || state.package_corrections.some((correction) => correction.status === "EDITING" || correction.status === "PACKAGE_REVIEW_REQUIRED")) {
+    return null;
   }
 
   if (!state.package_review) {
@@ -992,7 +968,13 @@ function appliedPractice(state: InternalState): OwnerJourneyProjection["appliedP
 function campaignOptions(view: InternalView): OwnerJourneyProjection["campaignOptions"] {
   const state = view.state;
   const recommendationSet = record(state.recommendation_set);
-  const drafts = list(recommendationSet.drafts);
+  const correctedDrafts = new Map(state.package_corrections
+    .filter((correction) => correction.corrected_draft)
+    .map((correction) => [correction.corrected_draft!.draft_id, correction.corrected_draft]));
+  const drafts = list(recommendationSet.drafts).map((value) => {
+    const draft = record(value);
+    return correctedDrafts.get(String(draft.draft_id ?? "")) ?? value;
+  });
   const recommendedIds = new Set(list(record(recommendationSet.recommended_shortlist).draft_ids).map(String));
   return drafts
     .filter((value) => record(value).visibility !== "HIDDEN")
@@ -1147,6 +1129,18 @@ function outcome(view: InternalView, stage: OwnerJourneyStageId, unknowns: strin
   const executionComplete = Boolean(state.package_execution?.items.length)
     && state.package_execution!.items.every((item) => item.status === "DIRECT_ACCEPTED" || correctedItemIds.has(item.item_execution_id));
   if (executionComplete) return { status: "complete", headline: "Создание завершено без запуска показов", summary: "Каждый результат учтён отдельно; расходы и показы не начинались." };
+  if (state.package_corrections.some((correction) => correction.status === "HUMAN_GATE_REQUIRED")) {
+    return { status: "ready", headline: "Исправление подготовлено к решению", summary: "Исходный отказ сохранён отдельно; новая формулировка ещё не получила полномочие и не отправлялась повторно." };
+  }
+  if (state.package_execution?.items.some((item) => item.status === "REJECTED_NEEDS_EDIT")) {
+    return { status: "working", headline: "Формулировку нужно исправить", summary: "Агент готовит исправленную кампанию и вернётся только с новым бизнес-решением." };
+  }
+  if (state.package_execution?.items.some((item) => item.status === "RECONCILIATION_REQUIRED" || item.status === "OUTCOME_UNKNOWN")) {
+    return { status: "blocked", headline: "Создание остановлено до безопасной сверки", summary: "Неоднозначный результат не считается успехом. Агент продолжит только проверяемую сверку и не повторит запись вслепую." };
+  }
+  if (state.package_execution?.items.some((item) => item.status === "SYSTEM_FAILED" || item.status === "PROVIDER_REJECTED")) {
+    return { status: "blocked", headline: "Часть кампаний безопасно не создана", summary: "Каждый результат сохранён отдельно; подтверждённые остановленные кампании не смешаны с отказами или сбоями." };
+  }
   return { status: state.human_decision_gate ? "working" : "ready", headline: "Пакет готов к точному решению", summary: "Проверьте бизнес-состав пакета. Техническое продолжение останется работой агента." };
 }
 
@@ -1161,6 +1155,9 @@ function recommendation(view: InternalView, stage: OwnerJourneyStageId): OwnerJo
   }
   if (stage === "strategy") return { headline: "Утвердить подготовленную стратегию", rationale: "Агент заполнил discoverable факты; от владельца требуется только материальное бизнес-решение." };
   if (stage === "campaigns") return { headline: "Принять готовые к проверке варианты", rationale: "Жёсткие ограничения применены до сравнительной оценки; заблокированные варианты не попадут в пакет." };
+  if (state.package_corrections.some((correction) => correction.status === "HUMAN_GATE_REQUIRED")) {
+    return { headline: "Подтвердить подготовленное исправление", rationale: "Новая формулировка прошла тот же бизнес-редактор и полную проверку, но исходный отказ и новое решение остаются раздельными." };
+  }
   return { headline: "Подтвердить точный пакет", rationale: "Решение выдаст одноразовое полномочие только на показанные кампании; отдельное исполнение останется работой агента." };
 }
 
@@ -1194,21 +1191,48 @@ function cards(
       ],
     });
   }
+  const rejectedItem = state.package_execution?.items.find((item) => item.status === "REJECTED_NEEDS_EDIT");
+  if (rejectedItem) {
+    result.push({
+      kind: "problem",
+      title: "Формулировка не принята",
+      body: "Рекламная система не приняла формулировку. Исходный результат сохранён отдельно, показы не запускались, а агент готовит исправленную кампанию через ту же полную проверку.",
+    });
+  }
+  if (state.package_execution?.items.some((item) => item.status === "RECONCILIATION_REQUIRED" || item.status === "OUTCOME_UNKNOWN")) {
+    result.push({
+      kind: "problem",
+      title: "Нужна безопасная сверка результата",
+      body: "Результат внешней записи неоднозначен и не считается успехом. Повторная запись запрещена, пока агент не подтвердит фактическое состояние.",
+    });
+  } else if (state.package_execution?.items.some((item) => item.status === "SYSTEM_FAILED" || item.status === "PROVIDER_REJECTED")) {
+    result.push({
+      kind: "problem",
+      title: "Одна из кампаний безопасно не создана",
+      body: "Сбой или явный отказ учтён отдельно и не изменил результаты остальных кампаний; показы и расходы не начинались.",
+    });
+  }
   for (const item of unknowns.slice(0, 3)) result.push({ kind: "problem", title: "Существенное неизвестное", body: item });
   const descriptor = actionDescriptor(view);
   const gateKinds: ActionKind[] = ["confirm-goal", "confirm-business-model", "approve-strategy", "authorize-and-create", "authorize-correction"];
   if (descriptor && gateKinds.includes(descriptor.kind)) {
     const current = recommendation(view, stage);
+    const correctionDecision = descriptor.kind === "authorize-correction";
+    const preparedCorrection = correctionDecision
+      ? state.package_corrections.find((correction) => correction.correction_id === descriptor.target)
+      : null;
     result.push({
       kind: "human-decision-gate",
-      title: "Нужно существенное решение владельца",
+      title: correctionDecision ? "Подготовлено решение по исправлению" : "Нужно существенное решение владельца",
       body: descriptor.description,
       facts: [
         { label: "Рекомендация", value: current?.headline ?? descriptor.label },
-        { label: "Основание", value: current?.rationale ?? "Агент использовал все доступные разрешённые evidence." },
-        { label: "Уверенность", value: unknowns.length ? "Ограничена указанными существенными неизвестными" : "Достаточна для подготовленного решения" },
-        { label: "Альтернатива", value: "Скорректировать показанный бизнес-смысл без расширения полномочий" },
-        { label: "Последствие", value: descriptor.description },
+        { label: "Основание", value: correctionDecision
+          ? `Исправленная формулировка: ${ownerText(preparedCorrection?.corrected_draft?.ad_text, "Подготовленное исправление", 1_000)}`
+          : current?.rationale ?? "Агент использовал все доступные разрешённые evidence." },
+        { label: "Уверенность", value: correctionDecision ? "Исправление проверено, но итог повторной модерации определяет рекламная система" : unknowns.length ? "Ограничена указанными существенными неизвестными" : "Достаточна для подготовленного решения" },
+        { label: "Альтернатива", value: correctionDecision ? "Сохранить исходный отказ и не отправлять исправление" : "Скорректировать показанный бизнес-смысл без расширения полномочий" },
+        { label: "Последствие", value: correctionDecision ? "После отдельного точного решения агент повторно отправит только исправленную кампанию; показы и расходы не начнутся" : descriptor.description },
       ],
     });
   } else if (!agent && stage !== "goal") {
@@ -1637,23 +1661,6 @@ export class P0OwnerJourney {
         package_review_id: review.package_review_id,
         package_id: review.package_id,
       });
-    } else if (descriptor.kind === "start-correction") {
-      await command({ action: "start_package_correction", item_execution_id: descriptor.target });
-    } else if (descriptor.kind === "save-correction") {
-      const correction = view.state.package_corrections.find((item) => item.correction_id === descriptor.target)!;
-      const draft = record(correction.source.draft_snapshot);
-      const fields = list(record(view.state.recommendation_set?.field_registry).fields)
-        .map(record)
-        .filter((field) => field.editable === true && typeof field.input_name === "string");
-      const correctionValue = {
-        draft_id: draft.draft_id,
-        ...Object.fromEntries(fields.map((field) => {
-          const inputName = String(field.input_name);
-          return [inputName, inputName === "ad_text" ? required(values, "adText") : draft[inputName]];
-        })),
-      };
-      await command({ action: "save_package_correction", correction_id: descriptor.target, value: correctionValue });
-      await command({ action: "review_package_correction", correction_id: descriptor.target });
     } else if (descriptor.kind === "authorize-correction") {
       let correction = view.state.package_corrections.find((item) => item.correction_id === descriptor.target)!;
       if (correction.status === "HUMAN_GATE_REQUIRED") {
