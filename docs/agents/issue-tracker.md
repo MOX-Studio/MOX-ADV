@@ -16,6 +16,19 @@ Use the `gh` CLI for all operations.
 Infer the repository from `git remote -v`.
 The `gh` CLI does this automatically when run inside the clone.
 
+## Delivery type labels
+
+Assign the structural type from the issue's product scope:
+
+| Scope | Title prefix | GitHub label |
+| --- | --- | --- |
+| Application product module, such as P0–P3 | `[MODULE]` | `type:module` |
+| User-testable delivery slice inside a module | `[FEATURE]` | `type:feature` |
+| Executable implementation slice inside a feature | `[TASK]` | `type:task` |
+| Integrated acceptance of a feature | `[CHECKPOINT]` | `type:checkpoint` |
+
+An application module always receives `[MODULE]` and `type:module`, regardless of whether it is currently the parent of tasks or checkpoints. Use `[FEATURE]` and `type:feature` only for a user-testable slice within that module.
+
 ## Pull requests as a triage surface
 
 **PRs as a request surface: no.**
@@ -63,6 +76,6 @@ When a map has no open in-scope decisions or fog:
 1. Run `to-spec` on the map issue to publish one implementation-ready spec.
 2. Run `to-tickets` on the accepted spec to publish approved vertical implementation slices with native blockers and `ready-for-agent`.
 3. Run `/ready` and select one frontier ticket per fresh session.
-4. Ready executes the ticket directly, verifies acceptance criteria, commits with the exact issue reference, and closes it automatically so blocked tickets can enter the frontier.
+4. Ready executes the ticket in a temporary local branch created through `/worktree`, verifies acceptance criteria, squash-lands an exact-reference commit on the originating branch, closes the worktree and temporary branch, and only then closes the issue so blocked tickets can enter the frontier.
 
 Implementation tickets reference the spec, not the Wayfinder map, and never carry `wayfinder:*` labels. Do not put execution overrides in Wayfinder map Notes. See `docs/agents/delivery-workflow.md` for the complete stage boundaries and short paths.

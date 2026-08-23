@@ -48,6 +48,7 @@ import {
   ensureP0DirectAuditTables,
 } from "./p0-direct-audit-d1-store.ts";
 import { OpenAIResponsesModelAdapter } from "./openai-responses-model.ts";
+import { resolveHostnameWithDnsJson } from "./public-dns.ts";
 import { researchPublicFirstPartySite } from "./site-research.ts";
 import { cleanText } from "./text.ts";
 import {
@@ -683,25 +684,7 @@ async function readContext(ownerKey = "p0-context"): Promise<P0Context> {
 }
 
 async function resolveHostname(hostname: string) {
-  const responses = await Promise.all(["A", "AAAA"].map(async (type) => {
-    const query = new URLSearchParams({ name: hostname, type });
-    const response = await fetch(`https://cloudflare-dns.com/dns-query?${query}`, {
-      headers: { Accept: "application/dns-json" },
-      redirect: "error",
-    });
-    if (!response.ok) throw new Error("DNS safety preflight недоступен.");
-    const payload = await response.json() as {
-      Status?: number;
-      Answer?: Array<{ type?: number; data?: string }>;
-    };
-    if (payload.Status !== 0 && payload.Status !== 3) throw new Error("DNS safety preflight вернул ошибку.");
-    const expectedType = type === "A" ? 1 : 28;
-    return (payload.Answer ?? [])
-      .filter((item) => item.type === expectedType)
-      .map((item) => String(item.data ?? ""))
-      .filter(Boolean);
-  }));
-  return responses.flat();
+  return resolveHostnameWithDnsJson(hostname, fetch);
 }
 
 async function researchSite(rawUrl: string) {

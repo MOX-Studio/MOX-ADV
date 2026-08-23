@@ -10,6 +10,7 @@ import {
 } from "../lib/campaign-canvas";
 import { weeklyBudgetValidationMessage } from "../lib/direct-limits";
 import { landingAdvisoryPriorities } from "../lib/landing-advisory";
+import { directPreflightRefreshState } from "../lib/p0-preflight-refresh";
 import { MarketEvidenceDisclosure } from "./MarketEvidenceDisclosure";
 import { ProductFocusDisclosure } from "./ProductFocusDisclosure";
 import {
@@ -72,6 +73,9 @@ export default function P0Client() {
   const [step, setStep] = useState(0);
   const [busy, setBusy] = useState("Загружаю реальные подключения…");
   const [error, setError] = useState("");
+  const directAuditStatus = payload?.context?.direct?.audit?.status;
+  const directAuditNextRetryAt = payload?.context?.direct?.audit?.next_retry_at;
+  const directAuditPending = directAuditStatus === "PENDING";
 
   useEffect(() => {
     request("/api/p0")
@@ -83,6 +87,32 @@ export default function P0Client() {
       .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
       .finally(() => setBusy(""));
   }, []);
+
+  useEffect(() => {
+    const refresh = directPreflightRefreshState({
+      status: directAuditStatus,
+      next_retry_at: directAuditNextRetryAt,
+    });
+    if (!refresh.pending || refresh.delay_ms === null) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setError("");
+      request("/api/p0")
+        .then((value) => {
+          if (cancelled) return;
+          const next = value as Payload;
+          setPayload(next);
+          setStep(next.workflow.current_step);
+        })
+        .catch((reason) => {
+          if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
+        });
+    }, refresh.delay_ms);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [directAuditNextRetryAt, directAuditStatus]);
 
   const maxStep = useMemo(
     () => (payload ? Math.max(step, payload.workflow.maximum_reachable_step) : 0),
@@ -131,13 +161,12 @@ export default function P0Client() {
       <div className="site-shell">
         <header className="topbar">
           <Link className="brand" href="/"><span>M</span>MOX-ADV</Link>
-          <nav aria-label="Основная навигация"><Link className="active" href="/">Стратегия</Link><span>Рабочий модуль · P0</span></nav>
+          <nav aria-label="Основная навигация"><Link className="active" href="/">Стратегия</Link></nav>
           <div className="ready"><i />Подключение</div>
         </header>
         <main className="page">
           <section className="hero">
-            <div><p className="eyebrow">GPT SITES · РАБОЧИЙ МОДУЛЬ · P0</p><h1>Стратегия и создание кампании</h1><p>Агент выполняет всю безопасную работу. Человеку остаются критические решения и существенная неопределённость.</p></div>
-            <strong className="real-badge">ТОЛЬКО РЕАЛЬНЫЕ ДАННЫЕ</strong>
+            <h1>Стратегия и создание кампании</h1>
           </section>
           <section className="loading-product"><strong>Подключаю рабочий контекст</strong><p>{error || busy}</p></section>
         </main>
@@ -155,14 +184,13 @@ export default function P0Client() {
     <div className="site-shell">
       <header className="topbar">
         <Link className="brand" href="/"><span>M</span>MOX-ADV</Link>
-        <nav aria-label="Основная навигация"><Link className="active" href="/">Стратегия</Link><span>Рабочий модуль · P0</span></nav>
-        <div className={`ready ${payload.context_preflight.ready ? "" : "blocked"}`}><i />{payload.context_preflight.ready ? "Подключения API подтверждены" : "Предварительная проверка заблокирована"}</div>
+        <nav aria-label="Основная навигация"><Link className="active" href="/">Стратегия</Link></nav>
+        <div className={`ready ${payload.context_preflight.ready ? "" : "blocked"}`}><i />{payload.context_preflight.ready ? "Подключения API подтверждены" : directAuditPending ? "Direct API завершает проверку" : "Предварительная проверка заблокирована"}</div>
       </header>
 
       <main className="page">
         <section className="hero">
-          <div><p className="eyebrow">GPT SITES · РАБОЧИЙ МОДУЛЬ · P0</p><h1>Стратегия и создание кампании</h1><p>Агент выполняет всю безопасную работу. Человеку остаются критические решения и существенная неопределённость.</p></div>
-          <strong className="real-badge">ТОЛЬКО РЕАЛЬНЫЕ ДАННЫЕ</strong>
+          <h1>Стратегия и создание кампании</h1>
         </section>
 
         {payload.fixture_acceptance_evidence && <FixtureAcceptanceEvidence evidence={payload.fixture_acceptance_evidence} />}
@@ -179,25 +207,15 @@ export default function P0Client() {
 
         <div className="workspace">
           <aside className="agent-pane">
-            <div className="agent-head"><span>ИИ</span><div><strong>Агент кампании</strong><small>GPT Sites · только рабочие данные</small></div></div>
-            <section className="agent-message"><strong>{steps[step]?.label}</strong><p>{[
-              "Проверяю точные подключения API, исследую безопасный сайт и предлагаю одну предварительную бизнес-цель.",
-              "Показываю готовую модель с доказательствами и уверенностью.",
-              "Готовлю стратегию; владелец задаёт только денежные и временные границы.",
-              "Компилирую точную проекцию публикации без молчаливо отброшенных полей.",
-              "Внешняя запись остаётся закрытой, пока рабочие проверки не готовы.",
-            ][step]}</p></section>
+            <div className="agent-head"><span>ИИ</span><strong>Агент кампании</strong></div>
             <section className="connections"><h3>Подключённые данные</h3>
-              <Connection label="Яндекс Директ" ready={direct.ready === true} detail={direct.ready ? `${direct.account} · привязка подтверждена · ${direct.campaigns_total} кампаний` : direct.blockers?.[0]} />
-              <Connection label="Яндекс Метрика" ready={metrika.ready === true} detail={metrika.ready ? `Счётчик ${metrika.counter_id} · цель ${metrika.goal_id} · API` : metrika.blockers?.[0]} />
+              <Connection label="Яндекс Директ" ready={direct.ready === true} detail={direct.ready ? undefined : direct.blockers?.[0]} />
+              <Connection label="Яндекс Метрика" ready={metrika.ready === true} detail={metrika.ready ? undefined : metrika.blockers?.[0]} />
               <Connection label="Последний реальный срез" ready={Boolean(performance)} detail={performance ? `${performance.period_start} — ${performance.period_end} · ${performance.display_metrics.goal_visits} целей` : "Нет подтверждённого среза"} />
             </section>
-            <section className="write-boundary"><span>Контрольное решение человека</span><strong>{payload.state.package_execution ? `Пакет · ${machineLabel(payload.state.package_execution.status)}` : payload.decision_readiness.confirmed ? "Полномочие подтверждено" : payload.state.package_review ? "Пакет проверен" : "Требуется проверка пакета"}</strong><small>{payload.state.package_execution ? `${payload.state.package_execution.dispatched_count}/${payload.state.package_execution.selected_count} независимых исполнений сохранено; атомарная транзакция: нет.` : payload.decision_readiness.confirmed ? "Полномочие готово к независимой отправке элементов." : localizedText(payload.decision_readiness.blockers[0]) || "Точный пакет готов к подтверждению."}</small></section>
           </aside>
 
           <section className="artifact">
-            {payload.state.last_cascade?.recomputation_status === "PENDING" && <div className="recomputation-pending" role="status"><strong>Идёт пересчёт зависимых данных</strong><p>Подтверждение и все изменения заблокированы. Обновите данные после завершения пересчёта.</p></div>}
-            {payload.state.last_cascade?.recomputation_status === "REQUIRED" && <div className="recomputation-pending" role="status"><strong>Пересчёт зависимых данных обязателен</strong><p>Существенное изменение контекста или модели уже отменило стратегию, черновики, список и подтверждение. Завершите следующие шаги заново.</p></div>}
             {step === 0 && <ContextStep payload={payload} busy={Boolean(busy)} apply={apply} />}
             {step === 1 && <ModelStep payload={payload} apply={apply} back={() => setStep(0)} />}
             {step === 2 && <StrategyStep payload={payload} apply={apply} back={() => setStep(1)} />}
@@ -224,15 +242,15 @@ function FixtureAcceptanceEvidence({ evidence }: { evidence: Record<string, any>
 }
 
 function Connection({ label, ready, detail }: { label: string; ready: boolean; detail?: string }) {
-  return <div className={`connection ${ready ? "" : "blocked"}`}><i /><div><strong>{label}</strong><small>{detail || "Не готово"}</small></div></div>;
+  return <div className={`connection ${ready ? "" : "blocked"}`}><i /><div><strong>{label}</strong>{detail && <small>{detail}</small>}</div></div>;
 }
 
-function ArtifactHead({ eyebrow, title, copy, badge = "РЕАЛЬНЫЕ ДАННЫЕ" }: { eyebrow: string; title: string; copy: string; badge?: string }) {
-  return <header className="artifact-head"><div><p className="eyebrow">{eyebrow}</p><h2>{title}</h2><p>{copy}</p></div><strong>{badge}</strong></header>;
+function ArtifactHead({ eyebrow, title, copy, badge = "РЕАЛЬНЫЕ ДАННЫЕ" }: { eyebrow: string; title: string; copy?: string; badge?: string }) {
+  return <header className="artifact-head"><div><p className="eyebrow">{eyebrow}</p><h2>{title}</h2>{copy && <p>{copy}</p>}</div>{badge && <strong>{badge}</strong>}</header>;
 }
 
-function Actions({ revision, label, disabled, back, submit }: { revision: number; label: string; disabled?: boolean; back?: () => void; submit?: boolean }) {
-  return <footer className="actions"><span>Ревизия {revision} · только рабочие данные</span>{back && <button type="button" className="secondary" onClick={back}>Назад</button>}<button type={submit ? "submit" : "button"} disabled={disabled}>{label}</button></footer>;
+function Actions({ label, disabled, back, submit }: { label: string; disabled?: boolean; back?: () => void; submit?: boolean }) {
+  return <footer className="actions">{back && <button type="button" className="secondary" onClick={back}>Назад</button>}<button type={submit ? "submit" : "button"} disabled={disabled}>{label}</button></footer>;
 }
 
 function ContextStep({ payload, busy, apply }: { payload: Payload; busy: boolean; apply: (action: string, value?: Record<string, unknown>, extra?: Record<string, unknown>) => Promise<void> }) {
@@ -240,6 +258,7 @@ function ContextStep({ payload, busy, apply }: { payload: Payload; busy: boolean
   const contextState = payload.state.context_state;
   const goal = contextState?.business_goal_decision?.value || contextState?.provisional_business_goal?.value || "";
   const preflight = payload.context_preflight;
+  const directAuditPending = payload.context?.direct?.audit?.status === "PENDING";
   function submitResearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     void apply("analyze_site", undefined, { url: fieldValue(event.currentTarget, "url") });
@@ -252,22 +271,17 @@ function ContextStep({ payload, busy, apply }: { payload: Payload; busy: boolean
     });
   }
   return <>
-    <ArtifactHead eyebrow="Шаг 1 · предварительная проверка рабочего контура" title="Контекст и предварительная бизнес-цель" copy="До полной аналитики модуль проверяет точные подключения официальных API, безопасно исследует собственный сайт и просит одно явное решение владельца." badge={preflight.ready ? "ПОДКЛЮЧЕНИЯ ПОДТВЕРЖДЕНЫ" : "БЕЗОПАСНО ЗАБЛОКИРОВАНО"} />
-    <div className="context-strip"><Metric label="Директ" value={payload.context.direct.ready ? payload.context.direct.account : "Не готов"} copy={payload.context.direct.ready ? `Метод clients.get подтвердил аккаунт · ${payload.context.direct.campaigns_total} кампаний` : preflight.blockers[0]} /><Metric label="Метрика" value={payload.context.metrika.ready ? `Счётчик ${payload.context.metrika.counter_id}` : "Не готова"} copy={payload.context.metrika.ready ? `Цель ${payload.context.metrika.goal_id} подтверждена управляющим API` : preflight.blockers[0]} /><Metric label="Сайт" value={analysis ? analysis.title || analysis.url : "Нужен публичный HTTPS URL"} copy={analysis ? `${analysis.research?.pages_analyzed || 1} страниц собственного сайта · ограниченное исследование` : "Частные и локальные адреса, а также небезопасные перенаправления отклоняются"} /></div>
-    {!preflight.ready && <div className="preflight-blocked"><strong>Продолжение заблокировано</strong><ul>{preflight.blockers.map((item) => <li key={item}>{localizedText(item)}</li>)}</ul><small>Учётные данные остаются только на сервере и не передаются в это состояние.</small></div>}
+    <ArtifactHead eyebrow="Шаг 1 · предварительная проверка рабочего контура" title="Контекст и предварительная бизнес-цель" badge={preflight.ready ? "ПОДКЛЮЧЕНИЯ ПОДТВЕРЖДЕНЫ" : directAuditPending ? "ПРОВЕРКА DIRECT ВЫПОЛНЯЕТСЯ" : "БЕЗОПАСНО ЗАБЛОКИРОВАНО"} />
+    <div className="context-strip"><Metric label="Директ" value={payload.context.direct.ready ? payload.context.direct.account : directAuditPending ? "Проверяю отчёты" : "Не готов"} copy={payload.context.direct.ready ? `Метод clients.get подтвердил аккаунт · ${payload.context.direct.campaigns_total} кампаний` : directAuditPending ? "Direct API формирует итоговые отчёты; страница обновится автоматически" : preflight.blockers[0]} /><Metric label="Метрика" value={payload.context.metrika.ready ? `Счётчик ${payload.context.metrika.counter_id}` : "Не готова"} copy={payload.context.metrika.ready ? `Цель ${payload.context.metrika.goal_id} подтверждена управляющим API` : preflight.blockers[0]} /><Metric label="Сайт" value={analysis ? analysis.title || analysis.url : "Нужен публичный HTTPS URL"} copy={analysis ? `${analysis.research?.pages_analyzed || 1} страниц собственного сайта · ограниченное исследование` : "Частные и локальные адреса, а также небезопасные перенаправления отклоняются"} /></div>
     <form className="form" onSubmit={submitResearch}>
-      <label className="wide"><span>Публичный сайт бизнеса</span><input type="text" inputMode="url" name="url" required defaultValue={analysis?.url || ""} placeholder="example.ru или https://example.ru/" /><small>HTTPS добавляется технически; адреса с учётными данными, частные, локальные и служебные адреса, небезопасные перенаправления и превышение лимитов отклоняются до исследования.</small></label>
-      {analysis && <div className="material-impact"><strong>До существенного изменения контекста</strong><p>Будут затронуты: {payload.context_change_policy.affected_steps.map((item) => item.label).join(" → ")}. Подтверждение заблокируется до пересчёта. Пробелы и техническая нормализация URL сами по себе ничего не отменяют.</p></div>}
-      <div className="agent-work"><strong>Что агент сделает сам до полной аналитики</strong><p>Проверит точные полномочия аккаунта, счётчика и цели через официальные API, обойдёт не более шести страниц собственного сайта в заданных пределах и предложит ровно одну цель на основе доказательств.</p></div>
-      <Actions revision={payload.revision} label={analysis ? "Повторно проверить контекст" : "Проверить контекст и предложить цель"} disabled={busy || !preflight.ready} submit />
+      <label className="wide"><span>Публичный сайт бизнеса</span><input type="text" inputMode="url" name="url" required defaultValue={analysis?.url || ""} placeholder="example.ru или https://example.ru/" /></label>
+      <Actions label={analysis ? "Повторно проверить контекст" : "Проверить контекст и предложить цель"} disabled={busy || !preflight.ready} submit />
     </form>
     {contextState && <form key={`${payload.revision}-${contextState.status}`} className="goal-decision" onSubmit={submitGoal}>
-      <header><div><p className="eyebrow">Одна предварительная бизнес-цель</p><h3>{contextState.status === "GOAL_CONFIRMED" ? "Решение владельца сохранено" : "Подтвердите или исправьте до полной аналитики"}</h3></div><strong>{contextState.status === "GOAL_CONFIRMED" ? "ПОДТВЕРЖДЕНО ВЛАДЕЛЬЦЕМ" : "ПРЕДВАРИТЕЛЬНО"}</strong></header>
-      <label><span>Бизнес-цель</span><textarea name="goal" required maxLength={500} defaultValue={goal} /></label>
-      <blockquote>{contextState.provisional_business_goal.rationale}</blockquote>
+      <textarea aria-label="Бизнес-цель" name="goal" required maxLength={500} defaultValue={goal} />
       {contextState.status === "GOAL_CONFIRMED" && <div className="material-impact"><strong>Перед изменением подтверждённой цели</strong><p>Существенная правка затронет: {payload.context_change_policy.affected_steps.map((item) => item.label).join(" → ")}. Техническая нормализация пробелов не отменяет решения.</p></div>}
       {contextState.last_material_change && <p className="invalidation-note">Происхождение зависимых данных сохранено в истории проверки; стратегия, набор рекомендаций, черновики кампаний, список и подтверждение отменены.</p>}
-      <Actions revision={payload.revision} label={contextState.status === "GOAL_CONFIRMED" ? "Сохранить цель контекста" : "Подтвердить цель и продолжить анализ"} disabled={busy || !preflight.ready} submit />
+      <Actions label={contextState.status === "GOAL_CONFIRMED" ? "Сохранить цель контекста" : "Подтвердить цель и продолжить анализ"} disabled={busy || !preflight.ready} submit />
     </form>}
   </>;
 }
@@ -297,34 +311,10 @@ function evidenceValue(value: unknown) {
   return typeof value === "object" ? JSON.stringify(value) : String(value);
 }
 
-function EvidenceClaimDisclosure({ claim, records }: { claim: Record<string, any>; records: Record<string, any>[] }) {
-  const linkedRecords = records.filter((record) => (claim.evidence_ids || []).includes(record.evidence_id));
-  return <details className="evidence-claim">
-    <summary aria-label={`Раскрыть утверждение ${claim.predicate}`}><strong>{claim.predicate}</strong><span>{machineLabel(claim.classification)} · {machineLabel(claim.confidence?.tier)}</span></summary>
-    <div className="evidence-claim-body">
-      <p><strong>Нормализованное утверждение:</strong> {evidenceValue(claim.normalized?.value ?? claim.value).slice(0, 500)}</p>
-      <dl className="claim-confidence"><div><dt>Качество</dt><dd>{machineLabel(claim.confidence?.quality)}</dd></div><div><dt>Свежесть</dt><dd>{machineLabel(claim.confidence?.freshness)}</dd></div><div><dt>Согласованность</dt><dd>{machineLabel(claim.confidence?.consistency)}</dd></div><div><dt>Покрытие</dt><dd>{machineLabel(claim.confidence?.coverage)}</dd></div><div><dt>Неопределённость</dt><dd>{claim.confidence?.uncertainty?.length || 0}</dd></div></dl>
-      <code>{claim.claim_id}</code>
-      {linkedRecords.map((record) => <details className="evidence-record" key={record.evidence_id}>
-        <summary aria-label={`Раскрыть запись доказательства ${record.evidence_id}`}><strong>Запись доказательства · {record.source_kind}</strong><span>{record.observed_at || "дата наблюдения недоступна"}</span></summary>
-        <div>
-          {record.raw?.quote && <blockquote>«{record.raw.quote}»</blockquote>}
-          <p><strong>Ограниченное исходное значение</strong><code>{evidenceValue(record.raw?.value)}</code></p>
-          <p><strong>Исходный указатель</strong><code>{evidenceValue(record.source_locator)}</code></p>
-          <p><strong>Метаданные преобразований</strong><code>{evidenceValue(record.transforms)}</code></p>
-          <p><strong>Версии и хеши</strong><code>{evidenceValue({ versions: record.versions, extraction: record.extraction, raw_sha256: record.raw?.sha256, record_hash: record.record_hash })}</code></p>
-        </div>
-      </details>)}
-    </div>
-  </details>;
-}
-
 function AnalyticsEvidencePanel({ evidence }: { evidence: Record<string, any> }) {
   const summary = evidence.summary || {};
   const confidence = evidence.confidence || {};
   const sources = Array.isArray(evidence.sources) ? evidence.sources : [];
-  const claims = Array.isArray(evidence.claims) ? evidence.claims : [];
-  const records = Array.isArray(evidence.evidence) ? evidence.evidence : [];
   const uncertainties = Array.isArray(confidence.uncertainty) ? confidence.uncertainty : [];
   const blockers = Array.isArray(summary.hard_blockers) ? summary.hard_blockers : [];
   const conflicts = Array.isArray(evidence.conflicts) ? evidence.conflicts : [];
@@ -336,15 +326,12 @@ function AnalyticsEvidencePanel({ evidence }: { evidence: Record<string, any> })
     <div className="evidence-kpis"><Metric label="Источники" value={`${summary.sources_verified || 0} проверено · ${summary.sources_partial || 0} частично`} copy={`${summary.sources_unavailable || 0} недоступно из ${summary.sources_total || 0}`} /><Metric label="Утверждения" value={String(summary.claims_supported || 0)} copy="Каждое связано с записью доказательства" /><Metric label="Стоимость до запуска" value={prelaunchCost.status === "AVAILABLE" ? String(prelaunchCost.compact_source || "Подходящий источник") : "Недоступна"} copy={prelaunchCost.status === "AVAILABLE" ? `${prelaunchCost.range?.low}–${prelaunchCost.range?.high} ${prelaunchCost.currency} · НДС ${prelaunchCost.vat_treatment}` : "Нет подходящего сопоставимого источника"} /></div>
     {marketEvidence && <MarketEvidenceDisclosure evidence={marketEvidence} context="model" />}
     <dl className="confidence-vector" aria-label="Измерения уверенности"><div><dt>Качество</dt><dd>{machineLabel(confidence.quality)}</dd></div><div><dt>Свежесть</dt><dd>{machineLabel(confidence.freshness)}</dd></div><div><dt>Согласованность</dt><dd>{machineLabel(confidence.consistency)}</dd></div><div><dt>Покрытие</dt><dd>{machineLabel(confidence.coverage)}</dd></div><div><dt>Неопределённость</dt><dd>{uncertainties.length}</dd></div></dl>
-    <div className="evidence-source-grid">{sources.map((source: Record<string, any>) => <details key={source.source_id} className={`evidence-source ${String(source.status || "").toLowerCase()}`}><summary><span /><div><strong>{localizedText(source.title)}</strong><small>{sourceStatusLabel(source.status)}</small></div></summary><div className="evidence-source-body">{source.facts?.length > 0 && <ul>{source.facts.map((fact: string) => <li key={fact}>{localizedText(fact)}</li>)}</ul>}{source.limitations?.length > 0 && <ul className="limitations">{source.limitations.map((item: string) => <li key={item}>{localizedText(item)}</li>)}</ul>}<code>{source.source_kind} · {source.observed_at || "дата наблюдения недоступна"}</code></div></details>)}</div>
+    <div className="evidence-source-grid">{sources.map((source: Record<string, any>) => <article key={source.source_id} className={`evidence-source ${String(source.status || "").toLowerCase()}`}><span /><div><strong>{localizedText(source.title)}</strong><small>{sourceStatusLabel(source.status)}</small></div></article>)}</div>
     {blockers.length > 0 && <section className="evidence-blockers" aria-labelledby="evidence-hard-blockers"><strong id="evidence-hard-blockers">Жёсткие блокирующие причины оцениваются отдельно от балла</strong><ul>{blockers.map((item: string) => <li key={item}>{localizedText(item)}</li>)}</ul></section>}
     <div className="evidence-separate-grid">
       <section className="evidence-missing" aria-labelledby="evidence-missing-title"><strong id="evidence-missing-title">Недостающие доказательства</strong>{gaps.length ? <ul>{gaps.map((gap: Record<string, any>) => <li key={gap.gap_id}><b>{gap.material ? "СУЩЕСТВЕННО" : "ПРОБЕЛ"}</b>{localizedText(gap.description)}</li>)}</ul> : <p>Не зафиксировано.</p>}</section>
       <section className="evidence-conflicts" aria-labelledby="evidence-conflicts-title"><strong id="evidence-conflicts-title">Противоречия</strong>{conflicts.length ? <ul>{conflicts.map((conflict: Record<string, any>) => <li key={conflict.conflict_id}><b>{conflict.material ? "СУЩЕСТВЕННО" : machineLabel(conflict.relation)}</b>{localizedText(conflict.predicate)} · {localizedText(conflict.resolution)}</li>)}</ul> : <p>Неразрешённых конфликтов нет.</p>}</section>
     </div>
-    {uncertainties.length > 0 && <div className="evidence-uncertainty"><strong>Неопределённость раскрыта, а не заполнена догадкой</strong><ul>{uncertainties.slice(0, 5).map((item: string) => <li key={item}>{localizedText(item)}</li>)}</ul></div>}
-    <details className="evidence-index"><summary aria-label="Раскрыть указатель доказательств">Указатель доказательств · утверждение → запись доказательства → ограниченный исходный указатель и значение · {claims.length} утверждений · {records.length} записей</summary><div>{claims.map((claim: Record<string, any>) => <EvidenceClaimDisclosure key={claim.claim_id} claim={claim} records={records} />)}</div></details>
-    <footer><code>{String(evidence.snapshot_id || "")}</code><span>создано {evidence.generated_at}</span><span>актуально на {evidence.as_of}</span><span>{evidence.schema_version}</span></footer>
   </section>;
 }
 
@@ -397,13 +384,12 @@ function ModelStep({ payload, apply, back }: { payload: Payload; apply: (action:
     void apply("save_business_model", Object.fromEntries(["product", "audience", "value", "qualified_result", "exclusions"].map((name) => [name, fieldValue(form, name)])));
   }
   return <>
-    <ArtifactHead eyebrow="Шаг 2 · проверяемая модель данных" title="Собрана базовая модель бизнеса" copy="Это проверяемая сводка из разрешённых источников, а не нейросетевой вывод. Исправьте только неверный факт." badge="ИЗВЛЕЧЁННЫЕ ДАННЫЕ" />
+    <ArtifactHead eyebrow="Шаг 2 · проверяемая модель данных" title="Собрана базовая модель бизнеса" badge="" />
     {productFocus && <ProductFocusDisclosure focus={productFocus} onSelect={selectFocus} />}
     <BusinessModelSummary model={model} />
     <LandingAdvisoryPanel run={payload.state.landing_advisory_run || null} />
     {analyticsEvidence && <AnalyticsEvidencePanel evidence={analyticsEvidence} />}
     <div className="research-strip"><Metric label="Исследовано" value={`${research.pages_analyzed || 1} страниц`} copy="Публичный HTTPS собственного сайта" /><Metric label="Источники" value={String(research.sources?.length || 0)} copy={(research.sources || []).join(" · ")} /><Metric label="Сделано агентом" value={`${research.completed_fields?.length || 0} / 5 полей`} copy="Человеку — подтверждение и разногласия" /></div>
-    {model.assumptions?.length > 0 && <div className="assumption"><strong>Где нужна проверка</strong><span>{model.assumptions.map((item: string) => localizedText(item)).join(" · ")}</span></div>}
     {payload.state.strategy && <div className="material-impact"><strong>До существенного изменения модели</strong><p>Стратегия, набор рекомендаций, черновики кампаний, список и подтверждение будут отменены. Пробелы и техническая нормализация значений не запускают каскад.</p></div>}
     <form className="form two" onSubmit={submit}>
       <Field wide label="Рекламируемое предложение" name="product" value={model.product}><Evidence model={model} field="product" /></Field>
@@ -411,7 +397,7 @@ function ModelStep({ payload, apply, back }: { payload: Payload; apply: (action:
       <Field label="Ценность для покупателя" name="value" value={model.value}><Evidence model={model} field="value" /></Field>
       <Field label="Квалифицированный результат" name="qualified_result" value={model.qualified_result}><Evidence model={model} field="qualified_result" /></Field>
       <Field label="Исключения из результата" name="exclusions" value={model.exclusions}><Evidence model={model} field="exclusions" /></Field>
-      <div className="wide"><Actions revision={payload.revision} label="Подтвердить модель бизнеса" back={back} submit /></div>
+      <div className="wide"><Actions label="Подтвердить модель бизнеса" back={back} submit /></div>
     </form>
   </>;
 }
@@ -656,7 +642,7 @@ function DraftStep({ payload, apply, back, openReview }: { payload: Payload; app
           {selected.market_evidence && <MarketEvidenceDisclosure evidence={selected.market_evidence} context="draft" />}
           <form key={`${selected.draft_id}-${selected.draft_revision_id}-${payload.revision}`} className="drawer-form" onSubmit={submit}>
             <DraftFieldRegistryDisclosure registry={recommendationSet.field_registry} draft={selected} />
-            <Actions revision={payload.revision} label={selectedShortlistEligible ? "Сохранить существенную редакцию" : "Сохранить проверочные правки без готовности к публикации"} submit />
+            <Actions label={selectedShortlistEligible ? "Сохранить существенную редакцию" : "Сохранить проверочные правки без готовности к публикации"} submit />
           </form>
         </div>
       </aside>
@@ -787,7 +773,7 @@ function ConfirmationStep({ payload, apply, busy, back }: { payload: Payload; ap
     return <>
       <ArtifactHead eyebrow="Шаг 5 · контрольное решение человека" title="Проверка пакета недоступна" copy="Вернитесь к полотну кампаний, сформируйте непустой упорядоченный список и откройте точную проверку из постоянной нижней панели." badge="БЕЗОПАСНО ЗАБЛОКИРОВАНО" />
       <ul className="blockers">{payload.decision_readiness.blockers.map((item, index) => <li key={item}><span>{index + 1}</span>{localizedText(item)}</li>)}</ul>
-      <Actions revision={payload.revision} label="Вернуться к списку" disabled back={back} />
+      <Actions label="Вернуться к списку" disabled back={back} />
     </>;
   }
   const binding = authority.direct_account_binding || {};

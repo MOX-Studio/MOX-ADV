@@ -14,7 +14,7 @@ Wayfinder → to-spec → to-tickets → /ready
 1. **Wayfinder** resolves product, research, prototype, and prerequisite decisions until the map is clear.
 2. **to-spec** collapses the cleared map into one implementation-ready spec issue.
 3. **to-tickets** turns the accepted spec into approved tracer-bullet implementation tickets with native blocking edges.
-4. **/ready** selects and claims one frontier ticket, executes it directly in the current session, runs focused and final validation, self-reviews the diff, commits to the current branch, and closes the exact ticket automatically.
+4. **/ready** selects and claims one frontier ticket, creates a temporary local `ready/<issue-number>` branch through `/worktree`, executes and validates the ticket there, squash-lands one exact-reference commit on the originating branch, closes the worktree and local branch, and then closes the exact ticket automatically.
 
 Run `to-spec` and `to-tickets` in the same context window when practical so a large spec does not need to be fetched again.
 
@@ -48,9 +48,9 @@ Implementation tickets reference the spec as their parent. They are not children
 
 ### /ready: one ticket per session
 
-Invoke `/ready` and select one unblocked implementation ticket in a fresh session. Ready consumes accepted decisions and executes the ticket directly; it does not reopen product discovery or reslice the backlog. If the ticket is too large for one context window, leave it open and return it to `to-tickets` for a smaller vertical breakdown.
+Invoke `/ready` and select one unblocked implementation ticket in a fresh session. Ready consumes accepted decisions and executes the ticket in its temporary worktree without another planning or execution handoff; it does not reopen product discovery or reslice the backlog. If the ticket is too large for one context window, leave it open and return it to `to-tickets` for a smaller vertical breakdown.
 
-Ready works on the current branch. In this repository that is `main` unless the user explicitly requests a branch. It owns claim, focused implementation, tests, final validation, self-review, exact-reference commit, and fail-closed automatic issue closure without an intermediate execution command.
+The branch active when `/ready` is invoked is the originating branch; in this repository it is normally `main`. Selecting a Ready ticket explicitly authorizes one temporary local `ready/<issue-number>` branch in a leased Treehouse worktree. Ready creates no remote branch, performs implementation, tests, final validation, and self-review only in that worktree, then squash-lands the verified tree as one commit with the exact issue reference on the unchanged originating branch. It returns the lease and deletes the temporary local branch before fail-closed automatic issue closure. Any landing or cleanup failure leaves the issue open and preserves recoverable work.
 
 ## Short paths
 

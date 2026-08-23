@@ -1,307 +1,594 @@
-# Roadmap: MOX-ADV P0 Completion
+# План развития P0: AI-агент для стратегии и создания рекламных кампаний
 
-## Цель
+**Статус:** проект для согласования владельцем
 
-Завершить существующий P0 production candidate как AI-first модуль: агент автономно собирает разрешённые evidence, предлагает рекламный фокус и цель, формирует утверждаемую Strategy, создаёт конечное редактируемое полотно Campaign Drafts, оценивает их pre-launch viability, готовит exact package и умеет безопасно создать его через официальный Direct API без запуска показов.
+**Модуль:** только P0 «Стратегия и создание рекламных кампаний»
 
-План развивает текущий authoritative application contract и существующие safety/evidence/canvas/package seams. Он не создаёт новую реализацию P0.
+**Пользователь:** владелец или сотрудник бизнеса без профессиональных знаний в интернет-рекламе
+**Главный принцип:** человек видит работу агента, принимает только бизнес-решения и исправляет то, где агент не может безопасно продолжить сам.
 
-## Scope boundary
+## 1. Решение
 
-**Внутри:** четыре сабмодуля P0, deterministic product MVP acceptance и отдельно разрешённая live acceptance.
-**Снаружи:** P1 optimization/winner selection, P2 monitoring, P3 SEO, landing development, Dashboard integration, VK, serving/spend.
+P0 не должен быть инженерной консолью Яндекс Директа и не должен пытаться вместить весь будущий MOX-ADV.
 
-Подробный scope cut: `.planning/PROJECT.md`.
-Проверяемые требования: `.planning/REQUIREMENTS.md`.
-
-## Порядок и gates
+P0 должен провести человека по одному понятному пути:
 
 ```text
-Phase 1 Analytics
-→ Phase 2 Formalization
-→ Phase 3 Strategy
-→ Phase 4 Realization
-→ Phase 5 Deterministic MVP Acceptance
-→ Phase 6 Authorized Live Evidence
+цель бизнеса
+→ самостоятельное исследование агентом
+→ проблемы и вопросы, которые агент не смог разрешить
+→ готовая маркетинговая стратегия
+→ несколько существенно разных рекламных кампаний
+→ ручные корректировки и shortlist
+→ проверка
+→ безопасное создание без запуска показов
 ```
 
-- Следующая phase начинается только после executable acceptance предыдущей.
-- Каждый plan ниже — самостоятельный vertical slice для одного fresh implementation session после публикации через `to-tickets`.
-- Каждый slice сохраняет accepted baseline и добавляет tests на authoritative seam до UI wiring.
-- Provider unavailability может завершить evidence slice честным `UNAVAILABLE`; silent omission и fabricated certainty не являются успешным исходом.
-- Phase 5 даёт product MVP verdict. Phase 6 требует отдельного человеческого разрешения и доказывает production behavior, но не превращает pre-launch viability в actual effectiveness.
+Внутренняя система может оставаться сложной: хранить доказательства, версии, точные проекции, ограничения, журналы и результаты API. Владелец видит только бизнес-смысл этой работы.
+
+## 2. Ценность для пользователя
+
+После прохождения P0 пользователь должен понимать:
+
+1. Что агент уже узнал о бизнесе.
+2. Что агент сейчас делает.
+3. Что агент рекомендует рекламировать и почему.
+4. Какие данные остаются неизвестными.
+5. Где без решения человека нельзя безопасно продолжить.
+6. Как выглядит итоговая стратегия.
+7. Какие кампании предлагает агент и чем они отличаются.
+8. Какие варианты лучше подготовлены к тестовому запуску.
+9. Что именно будет создано после подтверждения.
+10. Что созданные кампании не начнут тратить деньги автоматически.
+
+## 3. Граница P0
+
+### Входит
+
+- сбор контекста компании, продуктов и услуг;
+- выбор рекламного фокуса;
+- ранняя редактируемая цель кампании;
+- наблюдения о конкурентах;
+- исследование спроса, сезонности и сопоставимой стоимости;
+- аудит текущего продвижения в Direct;
+- проверка измеримости результата в Metrika;
+- анализ существующей посадочной страницы;
+- формирование одной полной Campaign Strategy;
+- создание конечного Recommendation Set из нескольких Campaign Drafts;
+- Pre-launch Viability Score и причины оценки;
+- ручное редактирование, исключение и shortlist;
+- проверка выбранного пакета;
+- создание выбранных кампаний через официальный API в подтверждённо остановленном состоянии;
+- отправка объявлений на модерацию без включения показов.
+
+### Не входит
+
+- управление и оптимизация после запуска;
+- фактический выбор победителей по расходам и конверсиям;
+- мониторинг рекламы и SEO;
+- изменение текстов внешнего сайта;
+- разработка или публикация лендинга;
+- SEO-статьи и внешние публикации;
+- покупные статьи и ссылки;
+- VK и другие рекламные каналы;
+- включение показов и расход бюджета.
+
+Эти направления могут присутствовать в общей навигации только как «В разработке». Они не должны создавать ложное ощущение работающих функций.
+
+## 4. Что вырезать из текущего пользовательского интерфейса в первую очередь
+
+Это первый implementation slice. Он меняет owner-facing interface, но сохраняет внутренний safety/evidence harness.
+
+| Текущий мусор | Действие | Что увидит пользователь вместо него |
+|---|---|---|
+| ID, хеши, fingerprints, revision IDs | Удалить из owner UI | Понятное название объекта и время последнего изменения, только если это важно |
+| Названия API-методов и endpoints | Удалить | «Данные Direct получены», «Частотность пока недоступна» |
+| Schema versions, capability profile IDs, tool versions | Удалить | Поддерживается ли нужная функция и как это влияет на кампанию |
+| JSON pointers, payload fields, micros | Удалить | Поля в рублях и на языке бизнеса |
+| Внутренние коды `EVIDENCE_GAP`, `PLAYBOOK_RELEASE_UNAVAILABLE` и подобные | Удалить | Причина, влияние и конкретный следующий шаг |
+| Полный алгоритм и веса viability score | Удалить | Балл, диапазон неопределённости и 2–3 главные причины |
+| Сводки количества claims, sources, records | Свернуть до бизнес-вывода | «Данных достаточно», «Не хватает данных о спросе», «Источники противоречат друг другу» |
+| Инженерный редактор точной Direct projection | Заменить бизнес-редактором | Предложение, аудитория, запросы, объявление, бюджет, география, посадочная, измерение |
+| Системные поля стратегии и размещения, которые пользователь не должен выбирать | Не показывать | Рекомендация агента и объяснение применённого решения |
+| Фиксированная пустая анкета | Убрать | Заполненная агентом Strategy и последовательность только нерешённых вопросов |
+| Кнопки обслуживания вроде проверки playbook или provider state | Убрать | Агент выполняет безопасную проверку сам и сообщает только результат или проблему |
+| Техническая история, journals и raw diagnostics | Удалить из owner UI | Краткая история бизнес-изменений и их последствий |
+| Бейджи «реальные данные», enum-статусы и смешанная русско-английская терминология | Удалить | Единый русский язык и честные статусы «готово / работаю / нужен ответ / проблема» |
+
+### Что нельзя удалять из внутренней системы
+
+Следующие возможности не являются мусором. Они остаются внутри production module и developer/operator diagnostics:
+
+- provenance и Analytics Evidence Snapshot;
+- immutable revisions и invalidation cascade;
+- точная Direct projection и semantic readback;
+- policy, capability и schema validation;
+- authority и Human Decision Gates;
+- durable checkpoints, retries и reconciliation;
+- полный журнал внешних записей;
+- блокировка unsupported или unsafe действий;
+- обязательный `SUSPENDED` и отсутствие `resume`.
+
+Правило удаления простое:
+
+> Если информация нужна разработчику для доказательства корректности, но не меняет решение владельца бизнеса, она не принадлежит owner-facing P0.
+
+## 5. Целевой пользовательский путь
+
+Сохраняется пять понятных этапов, но меняется их содержание и язык.
+
+### Этап 1. Цель
+
+Пользователь указывает сайт или компанию и описывает желаемый бизнес-результат.
+
+Агент:
+
+- проверяет доступные подключения;
+- предлагает уточнённую формулировку цели;
+- объясняет, какой результат будет считаться квалифицированным;
+- начинает исследование без требования заполнить техническую анкету.
+
+Человек может изменить цель, но не выбирает тип кампании, API strategy, attribution enum или технические настройки.
+
+### Этап 2. Что узнал агент
+
+Пользователь видит не отчёт из десятков технических секций, а ход работы:
+
+- изучаю компанию и предложения;
+- сравниваю возможные рекламные фокусы;
+- исследую конкурентов;
+- проверяю спрос и сезонность;
+- анализирую текущий Direct;
+- проверяю измерение результата;
+- анализирую посадочную страницу.
+
+У каждой работы есть четыре состояния:
+
+- **Работаю** — действие продолжается;
+- **Готово** — показан вывод и его значение для стратегии;
+- **Нужен ответ** — подготовлен Human Decision Gate;
+- **Проблема** — показаны влияние, действия агента и безопасный следующий шаг.
+
+Итог этапа:
+
+- рекомендуемый рекламный фокус;
+- сохранённые альтернативы;
+- максимум три важных замечания к посадочной;
+- список действительно материальных пробелов.
+
+### Этап 3. Стратегия
+
+Агент показывает готовую Campaign Strategy, а не пустую форму.
+
+Пользователь редактирует бизнес-решения:
+
+- цель;
+- продукт или услугу;
+- аудиторию;
+- предложение;
+- квалифицированный результат;
+- исключения;
+- географию и период;
+- посадочную страницу;
+- бюджет;
+- целевую стоимость результата;
+- основное сообщение.
+
+Перед существенным изменением интерфейс сообщает:
+
+- что изменится;
+- какие кампании будут пересобраны;
+- какие предыдущие решения перестанут быть актуальными.
+
+Итог этапа — одна утверждённая Campaign Strategy revision.
+
+### Этап 4. Кампании
+
+Агент создаёт конечное полотно Campaign Drafts. Каждая карточка — одна будущая кампания.
+
+Карточка отвечает на вопросы:
+
+- Для кого эта кампания?
+- Что мы предлагаем?
+- На каком спросе она основана?
+- Чем она отличается от других вариантов?
+- Почему агент рекомендует или не рекомендует её?
+- Какие данные неизвестны?
+- Что нужно исправить до создания?
+
+Пользователь может:
+
+- открыть бизнес-редактор кампании;
+- менять все поля, которые влияют на бизнес-смысл или публикуемый текст;
+- исключить или вернуть вариант;
+- увидеть последствия правки;
+- запросить пересборку затронутого варианта;
+- сформировать shortlist.
+
+Системные transport/provider поля остаются внутри модуля и не становятся пользовательскими настройками.
+
+### Этап 5. Проверка и создание
+
+Пользователь видит:
+
+- какие кампании выбраны;
+- аудиторию, предложение и посадочную каждой;
+- недельный и общий бюджет;
+- основные ограничения и известные риски;
+- что агент создаст в Direct;
+- что кампании останутся остановленными.
+
+После одного exact package approval агент:
+
+1. создаёт каждую кампанию независимо;
+2. немедленно останавливает её;
+3. подтверждает остановленное состояние;
+4. создаёт поддерживаемые дочерние объекты;
+5. проверяет фактический результат;
+6. отправляет объявления на модерацию;
+7. показывает бизнес-статус каждого варианта.
+
+## 6. Контракт взаимодействия с агентом
+
+### Агент делает сам
+
+- собирает доступные факты;
+- планирует безопасное исследование;
+- читает разрешённые источники;
+- продолжает asynchronous reads и отчёты;
+- формирует модель бизнеса;
+- предлагает цель и фокус;
+- готовит Strategy;
+- создаёт и проверяет Campaign Drafts;
+- применяет активный curated playbook;
+- объясняет неизвестное и противоречия;
+- выполняет подтверждённую техническую работу.
+
+### Человек решает
+
+- какой бизнес-результат нужен;
+- какое предложение и аудитория допустимы;
+- географию, сроки, бюджет и экономические ограничения;
+- спорный фокус при материально равных вариантах;
+- юридические или репутационные вопросы;
+- утверждение полной Strategy;
+- утверждение точного пакета внешней записи.
+
+### Система гарантирует
+
+- модель не расширяет собственные полномочия;
+- факты, гипотезы и решения не смешиваются;
+- неизвестное не превращается в ноль или уверенный вывод;
+- пользовательская правка пересчитывает только затронутые результаты;
+- unsafe или unsupported действия блокируются;
+- внешние записи воспроизводимы и сверяются;
+- P0 не включает показы и расходы.
+
+## 7. Формат проблемы, которую должен решать человек
+
+Каждый Human Decision Gate или problem card содержит:
+
+1. **Что произошло.** Одно предложение на языке бизнеса.
+2. **Почему это важно.** Как проблема влияет на Strategy или кампании.
+3. **Что уже сделал агент.** Какие безопасные способы разрешения использованы.
+4. **Рекомендация агента.** Один preferred вариант.
+5. **Альтернативы.** Только materially different варианты.
+6. **Последствия.** Что изменится после выбора.
+7. **Одно требуемое действие.** Ответ, выбор или authority.
+
+Raw provider error сохраняется внутри, но не показывается владельцу.
+
+## 8. Исследовательский подход
+
+Мы не будем строить крупные функции на основании интуиции или одного LLM-ответа. Для каждого существенного решения используется один цикл:
+
+```text
+вопрос
+→ первичные источники
+→ несколько гипотез решения
+→ дешёвый prototype или fixture
+→ пользовательская / экспертная / agent-eval проверка
+→ зафиксированное решение
+→ implementation slice
+→ повторная проверка на реальном сценарии
+```
+
+### Правила исследования
+
+- Начинать с официальной документации, source code, спецификаций и first-party API.
+- Вторичные статьи использовать только для поиска первичного источника или гипотезы.
+- Open-source проект не становится dependency только из-за популярности.
+- Для каждого OSS-кандидата проверять license, activity, tests, security model, authority model и соответствие Yandex.
+- Исследование имеет конкретный вопрос и критерий завершения.
+- Не повторять уже принятое исследование без причины: повтор нужен при изменении провайдера, конфликте evidence или новом продуктовом вопросе.
+- Исследование не считается завершённым, пока оно не меняет решение, contract, prototype или eval.
+
+## 9. Исследовательская программа
+
+### Уже есть как baseline
+
+Эти документы используются как отправная точка, а не переписываются с нуля:
+
+- `docs/research/p0-open-source-research-contour.md`;
+- `docs/research/yandex-direct-metrica-capabilities.md`;
+- `docs/research/p0-yandex-campaign-creation-contour.md`;
+- `docs/research/analytics-evidence-contract.md`;
+- `docs/research/wordstat-cost-and-long-tail-packing.md`;
+- `docs/research/landing-page-advisory-analysis-contract.md`;
+- `docs/research/pre-launch-viability-score.md`;
+- `docs/research/campaign-draft-fan-out-and-direct-mvp.md`;
+- `docs/research/p0-agent-first-completion-gap-analysis.md`.
+
+### Новые обязательные research tracks
+
+| Track | Главный вопрос | Метод | Проверяемый результат |
+|---|---|---|---|
+| Novice UX | Понимает ли непрофессионал работу агента и требуемое решение? | 2–3 UI prototypes, task-based tests с пользователями | Принятая information architecture и vocabulary |
+| Agent activity | Как показывать длительное исследование без технического журнала и ложного прогресса? | Prototype progress timeline + restart/provider-delay scenarios | Activity/progress contract |
+| Strategy quality | Что делает маркетинговую стратегию достаточно полной и применимой? | Primary-source review, экспертная rubric, blinded comparison на fixtures | Versioned Strategy quality rubric |
+| Agent autonomy | Какие вопросы агент обязан разрешать сам, а какие передавать человеку? | Tool-loop evals, unnecessary-question metric, failure scenarios | Typed Human Decision Gate policy |
+| Business focus | Как выбирать продукт/услугу при широком каталоге? | Multi-offer fixtures, opportunity/readiness/evidence comparisons | Focus selection contract |
+| Campaign differentiation | Какие варианты действительно являются разными гипотезами, а не копиями? | Fan-out prototypes, duplicate/delta analysis, expert pairwise review | Versioned fan-out rules |
+| Current Yandex capabilities | Какие кампании и объявления можно безопасно создавать сейчас? | Fresh official API/docs review + account capability fixtures | Current capability matrix и ResponsiveAd profile |
+| Viability | Насколько полезен pre-launch rank и не вводит ли он в заблуждение? | Golden vectors, sensitivity tests, expert ordering; позже leakage-safe backtest | Score contract, limitations и release criteria |
+| Landing analysis | Какие рекомендации воспроизводимы и полезны до запуска? | Deterministic checks + blinded neural review + user comprehension | Top-3 correction contract |
+| Open-source reuse | Что можно адаптировать, а что опасно интегрировать? | Source/license/test/security audit | Adopt / adapt / reject decision records |
+
+## 10. Набор экспериментальных сценариев
+
+Минимальный eval corpus должен включать разные типы бизнеса:
+
+1. Локальная услуга с одним основным предложением.
+2. Компания с несколькими услугами и разной экономикой.
+3. B2B с длинным циклом и offline-qualified результатом.
+4. Интернет-магазин с широким каталогом.
+5. Новый бизнес с почти отсутствующей историей Direct/Metrika.
+6. Существующий рекламодатель с конфликтующими данными сайта и аккаунта.
+7. Бизнес с неподходящей или отсутствующей посадочной страницей.
+
+Для каждого сценария сохраняются:
+
+- ожидаемые факты и допустимые неизвестные;
+- бизнес-решения, которые должен принять человек;
+- вопросы, которые агент не должен задавать;
+- минимально приемлемая Strategy;
+- ожидаемые materially distinct Campaign Drafts;
+- hard blockers;
+- допустимые outcomes при unavailable providers.
+
+После deterministic corpus проводится отдельная проверка на одном незнакомом реальном бизнесе. Fixture не должен становиться page-specific replay.
+
+## 11. Метрики экспериментов
+
+### Понимание человеком
+
+На каждом крупном UX checkpoint минимум 4 из 5 пользователей без подсказки должны суметь:
+
+- объяснить текущую цель;
+- сказать, что агент сейчас делает;
+- понять, почему агент просит решение;
+- внести требуемую корректировку;
+- объяснить различие двух Campaign Drafts;
+- понять, что произойдёт после подтверждения.
+
+### Качество агента
+
+- ноль обязательных вопросов о discoverable facts;
+- каждое material утверждение имеет допустимый источник или label «гипотеза»;
+- неизвестное не превращается в факт;
+- tool и authority violations блокируются;
+- исследование останавливается с понятной причиной;
+- Strategy проходит versioned completeness rubric;
+- Campaign Drafts имеют material delta;
+- хотя бы один acceptance fixture даёт defensible `VIABLE` Draft;
+- restart/compaction не теряет objective и checkpoints.
+
+### Качество owner UI
+
+- owner-facing rendered HTML не содержит technical IDs, hashes, schemas, API methods, raw payloads, journals и internal codes;
+- каждый экран отвечает «что узнал агент / что рекомендует / почему важно / нужен ли ответ / что дальше»;
+- ни одна primary action не требует рекламного или API-жаргона;
+- основной путь проходит в viewport 1920×1080 без horizontal overflow и недоступных controls.
+
+### Безопасность создания
+
+- exact package authority инвалидируется после material edit;
+- каждый item имеет независимый outcome;
+- campaign подтверждённо `SUSPENDED` до дочерних записей;
+- ambiguous write не повторяется вслепую;
+- `Campaigns.resume` отсутствует;
+- impressions и spend равны нулю в P0 acceptance.
+
+## 12. План фаз
+
+### Phase 0 — Очистить owner-facing P0
+
+**Цель:** сначала убрать технический шум и закрепить небольшой owner interface, за которым может развиваться сложная реализация.
+
+**Работы:**
+
+1. Составить автоматический denylist технической лексики owner UI.
+2. Удалить перечисленный в разделе 4 мусор со всех пяти этапов.
+3. Переименовать этапы и статусы на язык пользователя.
+4. Ввести единые Agent Activity, Finding, Problem и Human Decision Gate cards.
+5. Заменить инженерный Campaign Draft drawer на business editor projection.
+6. Перевести provider/system errors в business impact + next action.
+7. Сохранить технические данные только во внутренних redacted artifacts и developer diagnostics.
+
+**Exit gate:** текущий deterministic сценарий проходит через UI, пользователь не видит технических идентификаторов и может объяснить текущее состояние, проблему и следующий шаг.
+
+### Phase 1 — Исследовательская и экспериментальная основа
+
+**Цель:** создать воспроизводимый способ проверять решения, а не оценивать результат «на глаз».
+
+**Работы:**
+
+1. Зафиксировать eval corpus из раздела 10.
+2. Создать Strategy quality rubric и Campaign Draft review rubric.
+3. Создать шаблон research decision record.
+4. Провести novice UX prototypes для agent activity, Strategy и campaign canvas.
+5. Провести freshness review текущего Yandex creation profile.
+6. Зафиксировать release gates для внешних skills/OSS и curated playbook.
+
+**Exit gate:** все крупные продуктовые неизвестные имеют research/prototype ticket, metric и owner decision; принятые решения готовы к `to-spec`.
+
+### Phase 2 — Настоящий агент и аналитика
+
+**Цель:** агент автономно получает достаточно evidence для выбора рекламного фокуса и подготовки Strategy.
+
+**Работы:**
+
+1. Один provider-neutral neural loop `model → typed tool → validated observation`.
+2. Durable objective, checkpoints, budgets, stop reasons и restart.
+3. Каталог materially distinct продуктов/услуг и focus cards.
+4. Bounded competitor observations.
+5. Полный релевантный Direct audit и asynchronous reports.
+6. Multi-seed Wordstat, seasonality, comparable cost и auction hypotheses.
+7. Metrika measurement readiness.
+8. Destination classification и top-3 landing corrections.
+9. Первый active official-source curated playbook.
+10. Owner-facing activity и problem cards для всех долгих работ.
+
+**Exit gate:** на незнакомом бизнесе агент выдаёт Strategy-ready Analytics Evidence Snapshot либо один подготовленный Material Uncertainty Gate.
+
+### Phase 3 — Формализация и маркетинговая стратегия
+
+**Цель:** превратить evidence в полную редактируемую Strategy без пустой анкеты.
+
+**Работы:**
+
+1. Goal-first owner flow.
+2. Agent-filled canonical Strategy.
+3. Adaptive вопросы только по unresolved material decisions.
+4. Strategy synthesis по принятой quality rubric.
+5. Evidence-driven выбор objective, bidding approach, placements и measurement.
+6. Typed competitor, demand, auction, creative и targeting hypotheses.
+7. Revision cascade и один Strategy approval.
+
+**Exit gate:** пользователь понимает и утверждает одну полную Campaign Strategy; все material поля имеют owner input или допустимое evidence.
+
+### Phase 4 — Полотно рекламных кампаний
+
+**Цель:** реализовать Strategy как несколько понятных, materially distinct и редактируемых Campaign Drafts.
+
+**Работы:**
+
+1. Current Direct capability matrix и current ResponsiveAd/combinatorial profile.
+2. Finite fan-out, control и improvement hypotheses.
+3. Long-tail packing и duplicate suppression.
+4. Hard eligibility до scoring.
+5. Pre-launch Viability Score, rank, evidence coverage и sensitivity.
+6. Novice-first campaign cards и business editor.
+7. Revisions, delta после правок, exclude/restore и shortlist.
+8. Exact internal projection без silent field loss.
+
+**Exit gate:** минимум один realistic fixture создаёт редактируемый `VIABLE` Campaign Draft с полной current Direct projection; пользователь понимает различия вариантов.
+
+### Phase 5 — Проверка и безопасное создание
+
+**Цель:** создать выбранные кампании без включения показов и без потери утверждённых полей.
+
+**Работы:**
+
+1. Business-level package review.
+2. Один exact package Human Decision Gate.
+3. Независимое durable execution каждого Draft.
+4. Create → suspend → readback `SUSPENDED` → children.
+5. Full semantic readback.
+6. Asynchronous moderation, correction и reconciliation.
+7. Business outcome для каждого item.
+
+**Exit gate:** deterministic provider fixtures проходят полный lifecycle; live writes остаются закрыты до отдельного разрешения.
+
+### Phase 6 — Product MVP acceptance
+
+**Цель:** доказать, что P0 полезен владельцу и корректен без production writes.
+
+**Работы:**
+
+1. Agent eval suite на полном corpus.
+2. Novice UX testing полного пути.
+3. Playwright acceptance в 1920×1080 только через UI.
+4. Contract/build/provider-shape/safety tests.
+5. Незнакомый бизнес-сценарий без page-specific replay.
+6. Machine-readable acceptance artifact.
+
+**Exit gate:** выполняются критерии раздела 13.
+
+### Phase 7 — Отдельно разрешённая live acceptance
+
+**Цель:** доказать official-API creation и non-serving outcome.
+
+**Условие входа:** Phase 6 принята и владелец выдал точное разовое authority.
+
+**Exit gate:** каждый созданный item имеет terminal или честный pending/reconciliation outcome; каждая созданная campaign подтверждённо `SUSPENDED`; показов и расходов нет.
+
+## 13. Критерий готовности MVP
+
+P0 готов, когда одновременно выполнено следующее:
+
+1. Непрофессиональный пользователь проходит путь без рекламного/API-жаргона.
+2. Пользователь всегда понимает, что делает агент и что произойдёт дальше.
+3. Агент сам собирает разрешённые discoverable facts.
+4. Человек получает только подготовленные material decisions.
+5. Сформирована одна понятная и редактируемая Campaign Strategy.
+6. Сформировано конечное полотно materially distinct Campaign Drafts.
+7. Каждый Draft можно понять, исправить, исключить или вернуть.
+8. Hard blockers отделены от Pre-launch Viability Score.
+9. Минимум один Draft имеет статус `VIABLE`, достаточное evidence coverage и полную current Direct projection.
+10. Shortlist и package review воспроизводимы.
+11. Полный deterministic acceptance проходит без внешней записи.
+12. Отдельная live acceptance после authority заканчивается non-serving состоянием.
+
+`VIABLE` означает «обоснованно готов к ограниченному тесту», а не «будет прибыльным» и не «победит другие кампании».
+
+## 14. Основные риски и ответы
+
+| Риск | Ответ плана |
+|---|---|
+| Красивый UI скрывает слабую агентскую логику | Strategy/Campaign rubrics, fixtures, agent evals и expert review до acceptance |
+| Исследование становится бесконечным | У каждого track есть вопрос, артефакт, metric и completion criterion |
+| LLM придумывает бизнес-факты | Typed tools, evidence labels, deterministic validation и conflict handling |
+| Пользователь слишком доверяет числовому score | Score называется сравнительным приоритетом, показывает uncertainty и не заменяет hard gates |
+| Кампании отличаются косметически | Material-delta contract, control/improvement hypotheses и duplicate suppression |
+| Yandex меняет API и форматы | Fresh capability snapshot, official-shape fixtures и versioned profile |
+| Open-source зависимость расширяет authority | Source/license/security review; adapt contracts before dependency |
+| Пользователь вынужден разбираться в рекламе | Business vocabulary, prepared decisions и user comprehension tests |
+| Технические данные исчезают вместе с UI | Owner projection отделяется от internal evidence/diagnostics, данные сохраняются |
+| Создание случайно запускает расходы | Mandatory suspend/readback, no resume capability и live acceptance guard |
+
+## 15. Delivery workflow
+
+Этот документ остаётся единственным локальным refinement plan P0.
+
+Для крупных нерешённых направлений:
+
+```text
+Wayfinder research/prototype
+→ принятое решение
+→ to-spec
+→ to-tickets
+→ /ready по одному vertical slice
+```
+
+Правила delivery:
+
+- Phase 0 является первым implementation frontier после согласования плана.
+- Research и prototype tickets принимают решения, но не внедряют production destination.
+- Каждый implementation ticket — один проверяемый vertical slice для свежей сессии.
+- Новая capability не попадает в production только на основании исследования; нужен contract, tests и UI acceptance.
+- Не создаётся вторая реализация P0 и не переписывается существующий deterministic safety harness без доказанной необходимости.
+- Post-launch modules не добавляются в backlog текущего P0.
+
+## 16. Следующие действия после согласования
+
+1. Утвердить scope cut и правило удаления owner-facing technical noise.
+2. Синхронизировать `.planning/PROJECT.md`, `.planning/REQUIREMENTS.md`, `.planning/STATE.md` и GitHub spec с новым порядком фаз.
+3. Создать Phase 0 spec и vertical tickets.
+4. Параллельно открыть decision-only research/prototype map для Phase 1.
+5. После Phase 0 провести первый novice UX checkpoint на очищенном current flow.
+6. Продолжать по фазам только после executable exit gate предыдущей.
 
 ---
 
-## Phase 1 — Data Collection and Analytics
-
-**Goal:** один bounded neural agent автономно собирает достаточное evidence, чтобы рекомендовать рекламный фокус и exact destination, сохраняя application contract единственным источником authority и final truth.
-
-**Requirements:** AGT-01..06, ANL-01..13
-**Entry:** существующий deterministic P0 baseline.
-**Exit gate:** unfamiliar-business run завершается durable Strategy-ready evidence handoff либо одним подготовленным Material Uncertainty Gate; все источники имеют provenance, а неизвестное остаётся unknown.
-
-### 01-01 — Trusted agent runtime and durable run state
-
-**Outcome:** provider-neutral `P0AgentRuntime`, typed tool registry, objective/checkpoint/observation/budget state и resumable loop работают через `p0-application.ts`.
-
-**Implementation seam:**
-- model adapter interface без provider-specific domain logic;
-- tool schemas и permission policy в trusted application layer;
-- D1 run/checkpoint/observation/budget persistence;
-- stop/resume/compaction rules;
-- untrusted-content and prompt-injection boundary.
-
-**Acceptance evidence:** contract tests доказывают bounded tool use, unauthorized-tool denial, budget stop, restart continuation и невозможность модели объявить final truth или расширить authority.
-
-### 01-02 — Product/service inventory and focus opportunity cards
-
-**Depends on:** 01-01.
-
-**Outcome:** агент строит materially distinct offer inventory и рекомендует launch-now focus, сохраняя альтернативы с readiness/evidence gaps.
-
-**Implementation seam:** extend `business-model.ts`, `analytics-evidence.ts` и application state; opportunity, readiness и evidence coverage — отдельные dimensions.
-
-**Acceptance evidence:** fixtures для одного и нескольких продуктов, близких SKU, разных audiences/economics/destinations, tie и insufficient evidence; owner может изменить material focus.
-
-### 01-03 — Bounded public competitor and market observations
-
-**Depends on:** 01-01, 01-02.
-
-**Outcome:** production contour сам формирует bounded competitor candidate set и сохраняет observable products/offers/messages/ad/destination patterns.
-
-**Implementation seam:** typed public-search/read tools поверх allowlisted HTTPS research; source/time/query/region/limitations; saturation/evidence budgets; no credentials/forms.
-
-**Acceptance evidence:** direct competitors, substitutes, no-result, blocked page, conflicting claims и prompt injection; UI никогда не показывает invented competitor spend/conversions/CPA/ROI или «успешность» как факт.
-
-### 01-04 — Complete Direct account and report audit
-
-**Depends on:** 01-01.
-
-**Outcome:** официальный API audit охватывает relevant campaigns, groups, criteria, keywords/autotargeting, ads/assets, settings/restrictions и asynchronous reports/search queries.
-
-**Implementation seam:** paginated `get` adapters до отсутствия `LimitedBy`, persisted report requests/retry timing, bounded summaries + artifact references, exact advertiser/account binding.
-
-**Acceptance evidence:** multi-page official-shape fixtures, HTTP 201/202 queues, partial permissions, long IDs, warnings, rate limits и safe restart; browser cabinet не используется.
-
-### 01-05 — Wordstat, comparable cost and auction evidence
-
-**Depends on:** 01-02, 01-04.
-
-**Outcome:** агент формирует bounded multi-seed research plan; harness собирает top/dynamics/regions, квалифицирует comparable cost и сохраняет auction hypotheses отдельно от observations.
-
-**Implementation seam:** extend `market-evidence.ts`; deterministic scope/dedupe/operator validation; comparable candidates из Direct audit; source-labelled provider/first-party ranges без averaging.
-
-**Acceptance evidence:** region/device/seasonality, missing rows, quota, null AuctionBids, comparable/no-comparable CPC, duplicate queries и lower-bound semantics; zero не подменяет unavailable.
-
-### 01-06 — Metrika readiness, destination classification and landing analysis
-
-**Depends on:** 01-01, 01-02, 01-04.
-
-**Outcome:** P0 проверяет measurement readiness, выбирает exact destination и выдаёт максимум три конкретные landing corrections либо `FUTURE_LANDING_REQUIRED` brief.
-
-**Implementation seam:** typed Metrika readiness tool; production adapter для pinned Lighthouse/axe isolated run; bounded neural visual review; deterministic facts отдельно от hypotheses.
-
-**Acceptance evidence:** exact/wrong counter binding, missing or weak goal, sampling/lag, existing page, dedicated landing, invalid target, future landing, inaccessible page, poor CTA/performance/accessibility; landing output не меняет score напрямую и не изменяет сайт.
-
-### 01-07 — Active official-source playbook and analytics handoff
-
-**Depends on:** 01-03, 01-04, 01-05, 01-06.
-
-**Outcome:** первый approved P0 playbook release активен, а Analytics Evidence Snapshot готов к формализации Strategy.
-
-**Implementation seam:** extend `campaign-playbook.ts`; source/applicability/review/expiry/contradiction/eval metadata; content-addressed handoff с claim→evidence→raw provenance и decision-specific sufficiency.
-
-**Acceptance evidence:** expired, contradicted, quarantined и no-active-release cases fail closed; model observations не становятся rules; complete and partially unavailable evidence имеют честные Strategy-ready/decision-required outcomes.
-
----
-
-## Phase 2 — Questionnaire and Formalization
-
-**Goal:** показать владельцу рекомендованную цель и готовую бизнес-формализацию, спрашивая только то, что агент не может разрешить сам и что materially меняет Strategy/package.
-
-**Requirements:** FRM-01..07
-**Depends on:** Phase 1.
-**Exit gate:** одна complete canonical Strategy revision готова к approval; owner-facing flow не требует discoverable facts и не показывает technical identity.
-
-### 02-01 — Business-only owner projection
-
-**Outcome:** пять экранов отвечают на «что узнал агент / что рекомендует / почему важно / нужно ли решение / что дальше / какой outcome».
-
-**Implementation seam:** business view models поверх authoritative document; technical fields остаются только в redacted internal artifacts; provider failures переводятся в business impact + next safe action.
-
-**Acceptance evidence:** rendered HTML/accessible snapshot не содержит IDs, hashes, schemas, API methods, provider payloads, journals, internal codes и raw diagnostics; audit artifacts сохраняют lineage.
-
-### 02-02 — Goal-first adaptive formalization
-
-**Depends on:** 02-01.
-
-**Outcome:** goal и recommended focus видны в начале; canonical Strategy schema заполнена агентом, а UI задаёт по одному prepared question только для material unresolved values.
-
-**Implementation seam:** fixed internal Strategy schema + adaptive interaction state; recommendation/evidence/confidence/alternatives/consequences; owner edits for all business-owned fields.
-
-**Acceptance evidence:** known values produce no question; budget/economics/qualified-outcome ambiguity produces one decision; goal remains editable; no blank eleven-field form.
-
-### 02-03 — Revision cascade and exact Strategy approval
-
-**Depends on:** 02-02.
-
-**Outcome:** Context/Model/Strategy/Draft changes имеют предсказуемую materiality и invalidation; один Strategy Gate фиксирует complete intent.
-
-**Implementation seam:** preserve compare-and-swap revisions; named recomputation impact before save; Strategy regeneration and shortlist reset; concurrent-tab conflict.
-
-**Acceptance evidence:** material/non-material edits, stale tab, changed focus/goal/budget/destination и approval invalidation; routine evidence update не требует лишнего human gate.
-
----
-
-## Phase 3 — Marketing Strategy Development
-
-**Goal:** превратить принятый focus и evidence в одну полную explainable Strategy и конечный набор typed advertising hypotheses.
-
-**Requirements:** STR-01..06
-**Depends on:** Phase 2.
-**Exit gate:** approved Strategy содержит все business and delivery constraints, explicit fallback при sparse evidence и finite fan-out inputs без post-launch winner claims.
-
-### 03-01 — Focus-aware canonical Strategy synthesis
-
-**Outcome:** агент синтезирует complete Strategy по focus, outcome, offer, audience, demand, positioning, economics, geography, schedule/seasonality, destination и measurement.
-
-**Implementation seam:** provider-neutral structured generation validated against canonical Strategy schema; field-level evidence trace; unsupported values become prepared decisions.
-
-**Acceptance evidence:** unfamiliar business, multiple offers, sparse economics, conflicting owner/site/Direct facts и changed focus; deterministic schema rejects invented/unsupported material values.
-
-### 03-02 — Evidence-driven Yandex strategy and placement decision
-
-**Depends on:** 03-01.
-
-**Outcome:** objective, bidding approach и eligible placements выбираются по Metrika readiness, conversion volume, budget/economics, attribution, demand, seasonality, destination и capability evidence.
-
-**Implementation seam:** versioned playbook decision rules + agent explanation; explicit click/higher-funnel fallback; no one-size-fits-all strategy.
-
-**Acceptance evidence:** sufficient/insufficient conversion volume, missing value, wrong goal semantics, Search-only/Network/Maps eligibility, seasonal and cost-unknown cases.
-
-### 03-03 — Typed hypothesis set and fan-out input
-
-**Depends on:** 03-01, 03-02.
-
-**Outcome:** competitor, demand, auction, creative, targeting и placement hypotheses имеют mechanism, evidence, uncertainty, affected Drafts и verification path; finite axes готовы к realization.
-
-**Implementation seam:** closed hypothesis schemas and one-factor treatment semantics; competitive control only with sufficient public evidence, иначе `STRATEGY_BASELINE_FALLBACK`.
-
-**Acceptance evidence:** no competitors, weak public patterns, auction uncertainty, conflicting evidence и combinatorial alternatives; ни одна hypothesis не называется proven winner/effectiveness.
-
----
-
-## Phase 4 — Marketing Strategy Realization
-
-**Goal:** реализовать approved Strategy как finite editable campaign canvas с current Direct projections, viability, shortlist, exact package authority и safe non-serving execution.
-
-**Requirements:** CAM-01..11, EXE-01..06
-**Depends on:** Phase 3.
-**Exit gate:** минимум один realistic fixture может получить complete `VIABLE` projection; approved package проходит durable create→suspend→readback→children→moderation path без serving.
-
-### 04-01 — Exact Direct capability matrix and current core projection
-
-**Outcome:** exact account/profile matrix выбирает supported/conditional/unavailable/not-implemented features; core creation profile использует current eligible `RESPONSIVE_AD` contour.
-
-**Implementation seam:** replace legacy production `TEXT_AD` profile; combinatorial titles/texts/assets and semantic normalization; targeting/autotargeting, negatives, tracking, goals/attribution, placements, schedule/geography and eligible extensions behind explicit capability checks.
-
-**Acceptance evidence:** supported, conditionally eligible, provider-normalized и unsupported selected fields; no silent drop; current official-shape add/get fixtures and native 64-bit IDs.
-
-### 04-02 — Finite fan-out and viability contract
-
-**Depends on:** 04-01.
-
-**Outcome:** Strategy compiles into materially distinct control/improvement Drafts with complete dispositions, delivery-key packing, hard eligibility и explainable pre-launch viability.
-
-**Implementation seam:** extend `campaign-fanout.ts`, `campaign-viability.ts`, `campaign-draft-fields.ts`; eligibility before score; status quartet; sensitivity/evidence coverage; canonical projection fingerprint.
-
-**Acceptance evidence:** duplicate/overlap, no material delta, long-tail packing/split, insufficient demand/evidence, unsupported capability, ties, hidden reasons и at least one defensibly `VIABLE` fixture.
-
-### 04-03 — Editable campaign canvas, revisions and shortlist
-
-**Depends on:** 04-02.
-
-**Outcome:** ranked cards + right drawer показывают business hypothesis, viability, evidence, frequency/cost и все publishable fields; manual edit revises/rescores; shortlist exact and reversible.
-
-**Implementation seam:** extend existing canvas and decision-gate seams; filters/sort/hidden outcomes; field-level delta; persistent shortlist footer and exact package review.
-
-**Acceptance evidence:** keyboard-accessible 1920×1080 interaction, add/exclude/restore, blocked shortlist denial, edit/revision/fingerprint change, stale Gate invalidation, no technical noise.
-
-### 04-04 — Safe package execution for current projections
-
-**Depends on:** 04-01, 04-03.
-
-**Outcome:** existing per-item execution safely handles the new complete projection and preserves package authority, outcomes, moderation, correction and reconciliation.
-
-**Implementation seam:** adapt existing `campaign-package-execution.ts`, `execution-safety.ts` and provider normalization; persist intent; add→suspend→SUSPENDED readback before children; full graph readback; asynchronous moderation; correction with renewed Gate.
-
-**Acceptance evidence:** all success, provider rejection, contained partial outcome, system failure, PREACCEPTED/MODERATION pending, ambiguous add/readback lock, restart, correction/resubmission, final suspension loss и proof that resume is impossible.
-
----
-
-## Phase 5 — Deterministic P0 Acceptance
-
-**Goal:** принять product MVP без production credentials, external network и real writes.
-
-**Requirements:** ACC-01..05
-**Depends on:** Phase 4.
-**Exit gate:** полный current-module acceptance artifact доказывает четыре сабмодуля, safe agent behavior, business-only UI и минимум один editable `VIABLE` Draft.
-
-### 05-01 — Agent, evidence and safety eval suite
-
-**Outcome:** eval harness измеряет task success, grounding, unnecessary questions, tool selection, permission correctness, false certainty, restart, cost/latency и human intervention rate.
-
-**Acceptance evidence:** unfamiliar business, multiple offers/audiences, sparse/conflicting evidence, malicious page, competitor/Wordstat/cost unavailable, measurement gaps, hidden-tool attempt, oversized result/compaction, moderation rejection и no-resume invariant.
-
-### 05-02 — Full deterministic business UI and MVP verdict
-
-**Depends on:** 05-01.
-
-**Outcome:** Playwright проходит пять шагов в 1920×1080 только через UI и сохраняет machine-readable artifact с evidence/Strategy/Draft/package lineage.
-
-**Acceptance evidence:** build/lint/contracts/provider fixtures green; no console/page/overflow/a11y errors; no technical identity in rendered HTML; editable canvas содержит ≥1 `VIABLE` Draft с complete current projection; shortlist/package review reproducible; no external writes.
-
-**Product milestone:** после этого slice P0 имеет MVP verdict по критерию владельца.
-
----
-
-## Phase 6 — Authorized Live P0 Acceptance
-
-**Goal:** отдельно доказать official-API package creation и terminal non-serving outcomes.
-
-**Requirements:** ACC-06
-**Depends on:** Phase 5 и явное разрешение владельца.
-**Exit gate:** live artifact подтверждает exact authority, provider outcomes и final `SUSPENDED`; любое unknown/reconciliation/non-terminal состояние остаётся PENDING/FAIL.
-
-### 06-01 — One explicitly authorized official-API acceptance
-
-**Outcome:** один exact package проходит через production UI/contract с durable requests/readbacks, moderation и redacted evidence.
-
-**Acceptance evidence:** confirmed business context, account binding, credentials и exact Gate; terminal outcome каждого selected Draft; минимум одна accepted initial campaign при допустимом package verdict; каждая созданная campaign `SUSPENDED`; no resume, impressions or spend.
-
----
-
-## Progress
-
-| Phase | Vertical plans | Status |
-|---|---:|---|
-| 1. Data Collection and Analytics | 7 | Ready to plan |
-| 2. Questionnaire and Formalization | 3 | Blocked by Phase 1 |
-| 3. Marketing Strategy Development | 3 | Blocked by Phase 2 |
-| 4. Marketing Strategy Realization | 4 | Blocked by Phase 3 |
-| 5. Deterministic P0 Acceptance | 2 | Blocked by Phase 4 |
-| 6. Authorized Live P0 Acceptance | 1 | Blocked by Phase 5 + human authority |
-| **Total** | **20** | **0 complete** |
-
-## Delivery handoff
-
-1. Владелец принимает этот refinement plan и scope cut.
-2. План синхронизируется с GitHub spec #100; конкурирующий frontier #116/#117 приостанавливается или пересобирается.
-3. `to-tickets` публикует 20 approved vertical slices или согласованное укрупнение, сохраняя native blockers и один-session sizing.
-4. `implement` выполняет один unblocked slice за fresh session с TDD на указанных seams.
-5. После Phase 5 фиксируется product MVP verdict; Phase 6 запускается только после отдельного разрешения.
-6. Dashboard integration планируется отдельным post-acceptance milestone и не смешивается с текущим P0 completion backlog.
-
----
-*Обновлено: 2026-08-22; требования владельца отсечены до границ текущего модуля и разложены на 20 vertical slices.*
+*План развивает существующий `sites/p0-production/`. Он сохраняет внутреннюю доказуемость и безопасность, но полностью меняет owner-facing приоритет: сначала бизнес-смысл, затем решение человека, а техническая реализация остаётся внутри модуля.*

@@ -110,8 +110,7 @@ test("business projection keeps opportunity, launch readiness and evidence cover
   assert.match(html, /Участие со стендом/);
   assert.match(html, /Партнёрская программа/);
   assert.match(html, /Ближайшая альтернатива/);
-  assert.match(html, /Недостаточно доказательств/);
-  assert.match(html, /Экономика предложения не подтверждена/);
+  assert.doesNotMatch(html, /Материально различимые продукты, услуги и предложения|Карточки не смешивают рыночную возможность|НУЖНО ОДНО РЕШЕНИЕ|Почему этот вариант не выбран автоматически/);
   assert.doesNotMatch(html, /offer:(?:primary|alternative)|sha256:|Campaign Strategy|Campaign Draft|market opportunity|launch readiness|evidence coverage|revision/);
 });
 

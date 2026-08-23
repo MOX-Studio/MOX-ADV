@@ -67,12 +67,7 @@ export function ProductFocusDisclosure({
 
   return <section className="product-focus" aria-labelledby="product-focus-title">
     <header>
-      <div>
-        <p className="eyebrow">Материально различимые продукты, услуги и предложения</p>
-        <h3 id="product-focus-title">Каталог предложений и рекламный фокус</h3>
-        <p>Карточки не смешивают рыночную возможность, готовность к запуску и покрытие доказательств в один непрозрачный балл.</p>
-      </div>
-      <strong>{focus.decision_status === "OWNER_SELECTED" ? "ФОКУС ВЫБРАН ВЛАДЕЛЬЦЕМ" : gate ? "НУЖНО ОДНО РЕШЕНИЕ" : "РЕКОМЕНДАЦИЯ АГЕНТА"}</strong>
+      <h3 id="product-focus-title">Каталог предложений и рекламный фокус</h3>
     </header>
 
     <div className="focus-card-grid">
@@ -81,7 +76,6 @@ export function ProductFocusDisclosure({
         const isSelected = selected === card.offer_id;
         const isRecommended = recommended === card.offer_id;
         const isAlternative = nearest.has(card.offer_id) && !isRecommended;
-        const reasons = Array.isArray(card.reasons) ? card.reasons : [];
         const launchBlocked = card.launch_readiness?.status === "BLOCKED";
         return <article className={`focus-card ${String(card.disposition || "").toLowerCase()} ${isSelected ? "selected" : ""}`} key={card.offer_id}>
           <header>
@@ -90,7 +84,6 @@ export function ProductFocusDisclosure({
               <h4>{offer.label || card.label}</h4>
               <p>{offer.value_proposition || offer.material_axes?.offer || "Ценность предложения требует подтверждения."}</p>
             </div>
-            <strong>{statusLabel(card.disposition)}</strong>
           </header>
           <dl className="focus-material-axes">
             <div><dt>Аудитория</dt><dd>{offer.material_axes?.audience || "Не подтверждена"}</dd></div>
@@ -104,7 +97,6 @@ export function ProductFocusDisclosure({
             <FocusDimension title="Готовность к запуску" kind="readiness" dimension={card.launch_readiness || {}} />
             <FocusDimension title="Покрытие доказательств" kind="coverage" dimension={card.evidence_coverage || {}} />
           </div>
-          {reasons.length > 0 && <details className="focus-reasons"><summary>Почему этот вариант не выбран автоматически</summary><ul>{reasons.map((reason: Record<string, any>, index: number) => <li key={`${index}-${String(reason.detail || "")}`}>{String(reason.detail || "Недостаточно доказательств")}</li>)}</ul></details>}
           <button type="button" disabled={disabled || launchBlocked || (isSelected && focus.decision_status === "OWNER_SELECTED")} onClick={() => onSelect(card.offer_id)}>
             {launchBlocked ? "Сначала устраните блокировку" : isSelected && focus.decision_status === "OWNER_SELECTED" ? "Выбран владельцем" : isSelected ? "Подтвердить этот фокус" : "Выбрать этот фокус"}
           </button>
