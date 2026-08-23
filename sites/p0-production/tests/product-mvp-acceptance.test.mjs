@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import test from "node:test";
 
-import { runP0ProductMvpPilots } from "../lib/p0-product-mvp-pilots.ts";
+import { runP0ProductMvpPilotScenarios } from "../lib/p0-product-mvp-pilots.ts";
 import {
   P0_PRODUCT_MVP_EVAL_IDS,
   P0_PRODUCT_MVP_EXPLAINABILITY_TOPICS,
@@ -19,7 +19,7 @@ async function artifact(value = source) {
   return buildP0ProductMvpAcceptanceArtifact(structuredClone(value));
 }
 
-test("builds the same Product MVP artifact from controlled fixture evidence and separate independent pilot evidence", async () => {
+test("builds the same Product MVP artifact without presenting prepared scenarios as independent pilot evidence", async () => {
   const first = await artifact();
   const second = await artifact();
   assert.deepEqual(first, second);
@@ -28,8 +28,10 @@ test("builds the same Product MVP artifact from controlled fixture evidence and 
   assert.equal(first.human_checkpoint.issue, 176);
   assert.equal(first.human_checkpoint.verdict, "PENDING_HUMAN_VERDICT");
   assert.equal(first.evidence.fixture.kind, "CONTROLLED_FIXTURE_EVIDENCE");
-  assert.equal(first.evidence.pilots.kind, "INDEPENDENT_PILOT_EVIDENCE");
-  assert.notEqual(first.evidence.fixture.scenario_id, first.evidence.pilots.positive.scenario_id);
+  assert.equal(first.evidence.prepared_scenarios.kind, "CONTROLLED_TEST_SCENARIO_EVIDENCE");
+  assert.equal(first.evidence.independent_pilots.status, "PENDING_HUMAN_CHECKPOINT");
+  assert.equal(first.evidence.independent_pilots.evidence, null);
+  assert.notEqual(first.evidence.fixture.scenario_id, first.evidence.prepared_scenarios.positive.scenario_id);
   assert.equal(first.no_write_proof.production_write_attempts, 0);
   assert.equal(first.no_write_proof.live_authority_issued, false);
   assert.deepEqual(first.no_write_proof.provider_mutations, []);
@@ -48,11 +50,14 @@ test("agent eval contour covers every required adversarial and resilience scenar
   await Promise.all(value.agent_evals.map((item) => readFile(new URL(`./${item.executable_test}`, import.meta.url), "utf8")));
 });
 
-test("independent pilots execute deterministically through authoritative pure product contracts without a write capability", async () => {
-  const first = await runP0ProductMvpPilots();
-  const second = await runP0ProductMvpPilots();
+test("prepared pilot scenarios execute deterministically through authoritative pure product contracts without masquerading as pilot evidence", async () => {
+  const first = await runP0ProductMvpPilotScenarios();
+  const second = await runP0ProductMvpPilotScenarios();
   assert.deepEqual(first, second);
-  assert.equal(first.positive.execution_mode, "EXECUTABLE_PURE_PRODUCT_CONTOUR_NO_WRITE");
+  assert.equal(first.kind, "CONTROLLED_TEST_SCENARIO_EVIDENCE");
+  assert.equal(first.positive.evidence_kind, "CONTROLLED_TEST_SCENARIO_EVIDENCE");
+  assert.equal(first.positive.checkpoint_evidence_status, "AWAITING_INDEPENDENT_OBSERVATION");
+  assert.equal(first.positive.execution_mode, "EXECUTABLE_TEST_SCENARIO_NO_WRITE");
   assert.equal(first.positive.business_name, "Контур.Маркет");
   assert.doesNotMatch(JSON.stringify(first.positive.business_model), /выстав/u);
   assert.equal(first.positive.execution_proof.external_write_calls, 0);
@@ -69,10 +74,10 @@ test("independent pilots execute deterministically through authoritative pure pr
   assert.doesNotMatch(runnerSource, /direct-write|P0Application|fetch\s*\(|Campaigns\.(?:add|update|suspend|resume)/u);
 });
 
-test("positive real-business pilot exposes an editable VIABLE Draft only after every hard gate and complete Profile v1 projection", async () => {
+test("prepared positive real-business scenario exposes an editable VIABLE Draft only after every hard gate and complete Profile v1 projection", async () => {
   const value = await artifact();
-  const positive = value.evidence.pilots.positive;
-  assert.equal(positive.real_business, true);
+  const positive = value.evidence.prepared_scenarios.positive;
+  assert.equal(positive.real_business_reference, true);
   assert.equal(positive.derived_from_fixture, false);
   assert.equal(positive.business_model.editable, true);
   assert.equal(positive.business_model.complete, true);
@@ -88,9 +93,9 @@ test("positive real-business pilot exposes an editable VIABLE Draft only after e
   }
 });
 
-test("honesty pilot matrix never produces false VIABLE and prioritizes repair for each material insufficiency", async () => {
+test("prepared honesty scenario matrix never produces false VIABLE and prioritizes repair for each material insufficiency", async () => {
   const value = await artifact();
-  const honesty = value.evidence.pilots.honesty;
+  const honesty = value.evidence.prepared_scenarios.honesty;
   assert.deepEqual(honesty.cases.map((item) => item.insufficient_area), [
     "ECONOMICS", "DEMAND", "MEASUREMENT", "DESTINATION", "CAPABILITY",
   ]);

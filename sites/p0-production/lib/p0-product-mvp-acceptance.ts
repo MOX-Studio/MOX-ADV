@@ -1,4 +1,4 @@
-import { runP0ProductMvpPilots } from "./p0-product-mvp-pilots.ts";
+import { runP0ProductMvpPilotScenarios } from "./p0-product-mvp-pilots.ts";
 
 export const P0_PRODUCT_MVP_HARD_GATES = [
   "LINEAGE",
@@ -195,14 +195,14 @@ function validateAgentEvals(source: JsonRecord) {
   return evaluations.map((evaluation) => ({ ...structuredClone(evaluation), status: "PASSED" as const }));
 }
 
-function validatePositivePilot(pilots: JsonRecord, fixture: JsonRecord) {
-  const positive = record(pilots.positive, "pilots.positive");
-  if (positive.evidence_kind !== "INDEPENDENT_PILOT_EVIDENCE" || positive.real_business !== true || positive.derived_from_fixture !== false
-    || positive.checkpoint_evidence_status !== "PREPARED_FOR_ISSUE_176") {
-    invalid("Positive pilot must be independent real-business pilot evidence, never a fixture substitute.");
+function validatePreparedPositiveScenario(scenarios: JsonRecord, fixture: JsonRecord) {
+  const positive = record(scenarios.positive, "prepared_scenarios.positive");
+  if (positive.evidence_kind !== "CONTROLLED_TEST_SCENARIO_EVIDENCE" || positive.real_business_reference !== true || positive.derived_from_fixture !== false
+    || positive.checkpoint_evidence_status !== "AWAITING_INDEPENDENT_OBSERVATION") {
+    invalid("Prepared positive scenario must remain explicitly separate from independent pilot evidence.");
   }
   text(positive.scenario_id, "positive.scenario_id");
-  if (positive.scenario_id === fixture.scenario_id) invalid("Pilot and fixture scenario identities must differ.");
+  if (positive.scenario_id === fixture.scenario_id) invalid("Prepared pilot and browser fixture scenario identities must differ.");
   const businessModel = record(positive.business_model, "positive.business_model");
   if (businessModel.editable !== true || businessModel.complete !== true || businessModel.provenance_complete !== true) invalid("Positive Business Model is not complete and editable.");
   const fields = record(businessModel.fields, "positive.business_model.fields");
@@ -214,10 +214,13 @@ function validatePositivePilot(pilots: JsonRecord, fixture: JsonRecord) {
   const goal = record(positive.goal, "positive.goal");
   if (goal.editable !== true || !text(goal.value, "positive.goal.value") || list(goal.evidence_refs, "positive.goal.evidence_refs").length < 1) invalid("Positive goal is incomplete.");
   const evidenceQuality = record(positive.evidence_quality, "positive.evidence_quality");
-  if (evidenceQuality.status !== "SUFFICIENT_FOR_SCOPE" || Number(evidenceQuality.coverage_percent) < 80 || list(evidenceQuality.sources, "positive.evidence_quality.sources").length < 3) invalid("Positive evidence quality is insufficient.");
+  if (evidenceQuality.status !== "SCENARIO_SUFFICIENT_NOT_PILOT_EVIDENCE" || Number(evidenceQuality.coverage_percent) < 80
+    || !list(evidenceQuality.sources, "positive.evidence_quality.sources").includes("OPERATOR_SUPPLIED_TEST_SCENARIO")) {
+    invalid("Prepared positive scenario is incomplete or misrepresented as pilot evidence.");
+  }
   const campaigns = list(positive.campaigns, "positive.campaigns").map((value, index) => record(value, `positive.campaigns[${index}]`));
   const viable = campaigns.filter((campaign) => campaign.status === "VIABLE");
-  if (!viable.length) invalid("Positive pilot must produce at least one VIABLE Campaign Draft.");
+  if (!viable.length) invalid("Prepared positive scenario must produce at least one VIABLE Campaign Draft.");
   for (const campaign of viable) {
     if (campaign.editable !== true) invalid("Every positive VIABLE Draft must be editable.");
     const gates = list(campaign.hard_gates, "positive VIABLE hard_gates").map((value, index) => record(value, `hard_gates[${index}]`));
@@ -237,15 +240,15 @@ function validatePositivePilot(pilots: JsonRecord, fixture: JsonRecord) {
   if (packageConfirmation.state !== "PREVIEW_ONLY_NO_LIVE_AUTHORITY" || packageConfirmation.preview_complete !== true) invalid("Positive package confirmation must remain a complete no-authority preview.");
   if (executionProof.external_write_calls !== 0 || executionProof.provider_mutation_capability_present !== false
     || list(executionProof.authoritative_contracts_executed, "positive authoritative contracts").length < 4) {
-    invalid("Positive pilot was not produced by the authoritative no-write product contour.");
+    invalid("Prepared positive scenario was not produced by the authoritative no-write product contour.");
   }
   return structuredClone(positive);
 }
 
-function validateHonestyPilot(pilots: JsonRecord) {
-  const honesty = record(pilots.honesty, "pilots.honesty");
-  if (honesty.evidence_kind !== "INDEPENDENT_PILOT_EVIDENCE" || honesty.derived_from_fixture !== false
-    || honesty.checkpoint_evidence_status !== "PREPARED_FOR_ISSUE_176") invalid("Honesty pilot must be independent pilot evidence prepared for #176.");
+function validatePreparedHonestyScenarios(scenarios: JsonRecord) {
+  const honesty = record(scenarios.honesty, "prepared_scenarios.honesty");
+  if (honesty.evidence_kind !== "CONTROLLED_TEST_SCENARIO_EVIDENCE" || honesty.derived_from_fixture !== false
+    || honesty.checkpoint_evidence_status !== "AWAITING_INDEPENDENT_OBSERVATION") invalid("Prepared honesty scenarios must not claim independent pilot evidence.");
   const cases = list(honesty.cases, "honesty.cases").map((value, index) => record(value, `honesty.cases[${index}]`));
   exactOrder(cases.map((item) => item.insufficient_area), HONESTY_AREAS, "honesty insufficient areas");
   for (const item of cases) {
@@ -295,18 +298,18 @@ export async function buildP0ProductMvpAcceptanceArtifact(sourceValue: unknown) 
   if (!Number.isFinite(Date.parse(String(source.observed_at ?? "")))) invalid("Source observation time is invalid.");
   const fixture = record(source.fixture_evidence, "fixture_evidence");
   if (fixture.kind !== "CONTROLLED_FIXTURE_EVIDENCE") invalid("Fixture evidence must be explicitly labelled.");
-  const pilotDeclaration = record(source.pilots, "pilots");
-  if (pilotDeclaration.kind !== "INDEPENDENT_PILOT_SCENARIOS") invalid("Pilot scenario declaration is invalid.");
-  const executedPilots = await runP0ProductMvpPilots();
-  if (pilotDeclaration.positive_scenario_id !== executedPilots.positive.scenario_id
-    || pilotDeclaration.honesty_scenario_id !== executedPilots.honesty.scenario_id) {
-    invalid("Executed pilot identities differ from the declared independent scenarios.");
+  const pilotPlan = record(source.pilots, "pilots");
+  if (pilotPlan.kind !== "PILOT_CHECKPOINT_PLAN" || pilotPlan.independent_evidence_status !== "PENDING_HUMAN_CHECKPOINT") invalid("Pilot checkpoint plan is invalid.");
+  const executedScenarios = await runP0ProductMvpPilotScenarios();
+  if (pilotPlan.positive_scenario_id !== executedScenarios.positive.scenario_id
+    || pilotPlan.honesty_scenario_id !== executedScenarios.honesty.scenario_id) {
+    invalid("Executed prepared scenario identities differ from the checkpoint plan.");
   }
-  const pilots = executedPilots as unknown as JsonRecord;
+  const scenarios = executedScenarios as unknown as JsonRecord;
   const safety = validateSafety(source);
   const agentEvals = validateAgentEvals(source);
-  const positive = validatePositivePilot(pilots, fixture);
-  const honesty = validateHonestyPilot(pilots);
+  const positive = validatePreparedPositiveScenario(scenarios, fixture);
+  const honesty = validatePreparedHonestyScenarios(scenarios);
   const browser = validateBrowser(source);
   const explainability = validateExplainability(source);
   return {
@@ -317,10 +320,16 @@ export async function buildP0ProductMvpAcceptanceArtifact(sourceValue: unknown) 
     source_digest: await digest(sourceValue),
     evidence: {
       fixture: structuredClone(fixture),
-      pilots: {
-        kind: "INDEPENDENT_PILOT_EVIDENCE",
+      prepared_scenarios: {
+        kind: "CONTROLLED_TEST_SCENARIO_EVIDENCE",
         positive,
         honesty,
+      },
+      independent_pilots: {
+        expected_kind: "INDEPENDENT_PILOT_EVIDENCE",
+        status: "PENDING_HUMAN_CHECKPOINT",
+        checkpoint_issue: 176,
+        evidence: null,
       },
     },
     agent_evals: agentEvals,

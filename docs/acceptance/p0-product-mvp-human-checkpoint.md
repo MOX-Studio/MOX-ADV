@@ -8,7 +8,8 @@ This script prepares checkpoint [#176](https://github.com/ElJeskos/MOX-ADV/issue
 - Use the local Dashboard only at `http://127.0.0.1:8878/` with a `1920×1080` viewport.
 - Drive the Dashboard through its visible UI. Do not call its API directly or manipulate state.
 - The localhost browser run is controlled fixture evidence. It proves deterministic interaction and must not be presented as either independent pilot.
-- Independent pilot identities are declared in `tests/fixtures/product-mvp/product-mvp-source.json`; `lib/p0-product-mvp-pilots.ts` executes them through current pure product contracts, and the generated artifact keeps their outputs in a separate `INDEPENDENT_PILOT_EVIDENCE` partition.
+- `lib/p0-product-mvp-pilots.ts` executes operator-supplied Test Scenarios through current pure product contracts. These prepared outputs prove deterministic product behavior, not independent pilot evidence.
+- The generated artifact must keep `evidence.independent_pilots.status = PENDING_HUMAN_CHECKPOINT` and `evidence.independent_pilots.evidence = null` until #176 observes the independent positive and honesty pilots.
 
 ## Reproduce the prepared contour
 
@@ -24,17 +25,20 @@ Review the generated golden:
 tests/fixtures/product-mvp/product-mvp-acceptance.json
 ```
 
-The run must show:
+The preparation run must show:
 
 1. all ten agent eval scenarios pass;
-2. the positive real-business scenario contains at least one editable `VIABLE` Campaign Draft only after all eleven hard gates and complete Profile v1 projection;
-3. each honesty case (economics, demand, measurement, destination, capability) contains no `VIABLE` Draft and starts with a matching prioritized repair action;
+2. the prepared positive real-business-reference Test Scenario contains at least one editable `VIABLE` Campaign Draft only after all eleven hard gates and complete Profile v1 projection;
+3. each prepared honesty scenario (economics, demand, measurement, destination, capability) contains no `VIABLE` Draft and starts with a matching prioritized repair action;
 4. browser acceptance completes all five stages with no accessibility, hierarchy, overflow, console/page-error, unavailable-control, or technical-noise finding;
-5. no-write proof remains exactly zero attempts, mutations, impressions, spend, credentials, live authority, cabinets, and deployments.
+5. no-write proof remains exactly zero attempts, mutations, impressions, spend, credentials, live authority, cabinets, and deployments;
+6. independent pilot evidence remains absent and pending rather than copied from prepared scenario output.
+
+Before recording a verdict, the #176 reviewer must separately run or observe the independent positive and honesty pilots against approved read-only evidence. The checked-in prepared scenarios cannot satisfy that step.
 
 ## Reviewer facilitation
 
-Give the non-advertising specialist only the five-stage owner journey and the plain-language positive/honesty pilot sections. Do not explain advertising concepts first. Ask the following in order and record the response in #176 or its approved human evidence location:
+After the independent runs are observed, give the non-advertising specialist only the five-stage owner journey and the plain-language positive/honesty outputs. Do not explain advertising concepts first. Ask the following in order and record the response in #176 or its approved human evidence location:
 
 1. **Business Model:** Who buys, what value and qualified outcome are sold, how is the acceptable result cost grounded, and what assumptions remain?
 2. **Business goal:** What exact business result is the campaign intended to produce, and why is it not merely a click or form opening?

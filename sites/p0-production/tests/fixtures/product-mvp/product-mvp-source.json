@@ -1,6 +1,6 @@
 {
   "schema_version": "p0-product-mvp-source-v1",
-  "observed_at": "2026-08-25T09:00:00.000Z",
+  "observed_at": "2026-08-23T09:00:00.000Z",
   "scope": "PRODUCT_MVP_NO_PRODUCTION_WRITE",
   "fixture_evidence": {
     "kind": "CONTROLLED_FIXTURE_EVIDENCE",
@@ -182,11 +182,12 @@
     }
   ],
   "pilots": {
-    "kind": "INDEPENDENT_PILOT_SCENARIOS",
+    "kind": "PILOT_CHECKPOINT_PLAN",
+    "independent_evidence_status": "PENDING_HUMAN_CHECKPOINT",
     "positive_scenario_id": "positive-real-business-kontur-market",
     "honesty_scenario_id": "honesty-material-insufficiency-matrix",
     "execution": "lib/p0-product-mvp-pilots.ts",
-    "boundary": "Pure authoritative product contracts only; no provider mutation adapter or live authority is present."
+    "boundary": "Prepared operator-supplied Test Scenarios exercise pure product contracts without provider mutation; only checkpoint #176 may produce independent pilot evidence."
   },
   "browser": {
     "evidence_kind": "CONTROLLED_FIXTURE_EVIDENCE",
@@ -280,58 +281,58 @@
         "topic": "Business Model",
         "prompt": "Объясните, кому и какую ценность продаёт бизнес, как считается допустимая стоимость результата и какие предположения остаются.",
         "evidence_refs": [
-          "positive.business_model"
+          "prepared_scenarios.positive.business_model"
         ]
       },
       {
         "topic": "Business goal",
         "prompt": "Назовите выбранный качественный результат и почему это бизнес-результат, а не техническое действие.",
         "evidence_refs": [
-          "positive.goal"
+          "prepared_scenarios.positive.goal"
         ]
       },
       {
         "topic": "Evidence quality",
         "prompt": "Какие evidence доступны, что недоступно и почему unavailable не равно нулю?",
         "evidence_refs": [
-          "positive.evidence_quality",
-          "honesty.cases"
+          "prepared_scenarios.positive.evidence_quality",
+          "prepared_scenarios.honesty.cases"
         ]
       },
       {
         "topic": "Budget alignment",
         "prompt": "Как бюджет пакета соотносится со Strategy и почему это не прогноз CPA или прибыли?",
         "evidence_refs": [
-          "positive.package_confirmation.budget_alignment"
+          "prepared_scenarios.positive.package_confirmation.budget_alignment"
         ]
       },
       {
         "topic": "Campaign differences",
         "prompt": "Чем кампании различаются материально и какая из них является контролем?",
         "evidence_refs": [
-          "positive.campaigns"
+          "prepared_scenarios.positive.campaigns"
         ]
       },
       {
         "topic": "Auction Protocol",
         "prompt": "Что зафиксировано до теста: изменение, трафик, бюджет, период, сигнал успеха и остановка?",
         "evidence_refs": [
-          "positive.campaigns.0.auction_protocol"
+          "prepared_scenarios.positive.campaigns.0.auction_protocol"
         ]
       },
       {
         "topic": "Risks",
         "prompt": "Какие риски могут изменить решение и что Product MVP не обещает?",
         "evidence_refs": [
-          "positive.campaigns.0.risks",
-          "positive.evidence_quality.limitations"
+          "prepared_scenarios.positive.campaigns.0.risks",
+          "prepared_scenarios.positive.evidence_quality.limitations"
         ]
       },
       {
         "topic": "Package confirmation",
         "prompt": "Что именно означало бы подтверждение пакета и почему в этом checkpoint оно не даёт live authority?",
         "evidence_refs": [
-          "positive.package_confirmation"
+          "prepared_scenarios.positive.package_confirmation"
         ]
       }
     ]

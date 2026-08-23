@@ -9,7 +9,7 @@ import {
 } from "./campaign-fanout.ts";
 import { P0_CURATED_PLAYBOOK_V1 } from "./p0-curated-playbook-v1.ts";
 
-const OBSERVED_AT = "2026-08-25T09:00:00.000Z";
+const OBSERVED_AT = "2026-08-23T09:00:00.000Z";
 const POSITIVE_SCENARIO_ID = "positive-real-business-kontur-market";
 const HONESTY_SCENARIO_ID = "honesty-material-insufficiency-matrix";
 const PROFILE_V1_FIELDS = [
@@ -371,14 +371,14 @@ async function runPositivePilot() {
     .filter(Boolean);
   return {
     scenario_id: POSITIVE_SCENARIO_ID,
-    evidence_kind: "INDEPENDENT_PILOT_EVIDENCE",
-    real_business: true,
+    evidence_kind: "CONTROLLED_TEST_SCENARIO_EVIDENCE",
+    real_business_reference: true,
     derived_from_fixture: false,
-    execution_mode: "EXECUTABLE_PURE_PRODUCT_CONTOUR_NO_WRITE",
-    checkpoint_evidence_status: "PREPARED_FOR_ISSUE_176",
+    execution_mode: "EXECUTABLE_TEST_SCENARIO_NO_WRITE",
+    checkpoint_evidence_status: "AWAITING_INDEPENDENT_OBSERVATION",
     business_name: "Контур.Маркет",
     public_sources: ["https://kontur.ru/market", "https://kontur.ru/market/price"],
-    source_note: "Независимый product scenario проходит действующие Business Model, Campaign Draft, Profile v1 и Pre-launch Viability contracts без provider mutation.",
+    source_note: "Подготовленный Test Scenario использует публичный real-business reference и operator-supplied facts для проверки контрактов; independent pilot evidence появляется только после наблюдения в #176.",
     business_model: {
       editable: true,
       complete: list(ownerContract.questions).length === 0,
@@ -394,16 +394,16 @@ async function runPositivePilot() {
       evidence_refs: ["pilot-first-party-offer", "pilot-owner-confirmation"],
     },
     evidence_quality: {
-      status: campaigns.some((campaign) => campaign.status === "VIABLE") ? "SUFFICIENT_FOR_SCOPE" : "INSUFFICIENT",
+      status: campaigns.some((campaign) => campaign.status === "VIABLE") ? "SCENARIO_SUFFICIENT_NOT_PILOT_EVIDENCE" : "INSUFFICIENT",
       coverage_percent: Math.min(...campaigns.map((campaign) => Number(campaign.score.coverage_percent))),
       sources: [
-        "PUBLIC_FIRST_PARTY",
-        "OWNER_CONFIRMED_PILOT",
-        "READ_ONLY_DEMAND_OBSERVATION",
-        "READ_ONLY_MEASUREMENT_OBSERVATION",
-        "READ_ONLY_CAPABILITY_OBSERVATION",
+        "PUBLIC_REAL_BUSINESS_REFERENCE",
+        "OPERATOR_SUPPLIED_TEST_SCENARIO",
       ],
-      limitations: ["Pre-launch evidence does not predict CPA, profit or a winning campaign."],
+      limitations: [
+        "Prepared scenario inputs are not independent pilot evidence.",
+        "Pre-launch evidence does not predict CPA, profit or a winning campaign.",
+      ],
     },
     campaigns,
     package_confirmation: {
@@ -496,17 +496,17 @@ async function runHonestyPilot() {
   const areas: PilotArea[] = ["ECONOMICS", "DEMAND", "MEASUREMENT", "DESTINATION", "CAPABILITY"];
   return {
     scenario_id: HONESTY_SCENARIO_ID,
-    evidence_kind: "INDEPENDENT_PILOT_EVIDENCE",
+    evidence_kind: "CONTROLLED_TEST_SCENARIO_EVIDENCE",
     derived_from_fixture: false,
-    execution_mode: "EXECUTABLE_PURE_PRODUCT_CONTOUR_NO_WRITE",
-    checkpoint_evidence_status: "PREPARED_FOR_ISSUE_176",
+    execution_mode: "EXECUTABLE_TEST_SCENARIO_NO_WRITE",
+    checkpoint_evidence_status: "AWAITING_INDEPENDENT_OBSERVATION",
     cases: await Promise.all(areas.map(runHonestyCase)),
   };
 }
 
-export async function runP0ProductMvpPilots() {
+export async function runP0ProductMvpPilotScenarios() {
   return {
-    kind: "INDEPENDENT_PILOT_EVIDENCE" as const,
+    kind: "CONTROLLED_TEST_SCENARIO_EVIDENCE" as const,
     positive: await runPositivePilot(),
     honesty: await runHonestyPilot(),
   };

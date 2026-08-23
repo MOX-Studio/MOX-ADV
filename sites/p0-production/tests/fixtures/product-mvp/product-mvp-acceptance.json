@@ -1,9 +1,9 @@
 {
   "schema_version": "p0-product-mvp-acceptance-v1",
-  "generated_at": "2026-08-25T09:00:00.000Z",
+  "generated_at": "2026-08-23T09:00:00.000Z",
   "scope": "PRODUCT_MVP_NO_PRODUCTION_WRITE",
   "status": "READY_FOR_HUMAN_CHECKPOINT",
-  "source_digest": "sha256:349b254bc54f3374932725817751ccd88009219e64afd87aa8387ef6f21d25d9",
+  "source_digest": "sha256:034ddcc6a3e13167d13897e963097f9cbd25311c1c7a1be5981e00ce7827ff30",
   "evidence": {
     "fixture": {
       "kind": "CONTROLLED_FIXTURE_EVIDENCE",
@@ -11,21 +11,21 @@
       "source": "tests/e2e/test_p0_production_candidate.py",
       "purpose": "Deterministic five-stage UI and provider-shape regression evidence only; it is not pilot evidence."
     },
-    "pilots": {
-      "kind": "INDEPENDENT_PILOT_EVIDENCE",
+    "prepared_scenarios": {
+      "kind": "CONTROLLED_TEST_SCENARIO_EVIDENCE",
       "positive": {
         "scenario_id": "positive-real-business-kontur-market",
-        "evidence_kind": "INDEPENDENT_PILOT_EVIDENCE",
-        "real_business": true,
+        "evidence_kind": "CONTROLLED_TEST_SCENARIO_EVIDENCE",
+        "real_business_reference": true,
         "derived_from_fixture": false,
-        "execution_mode": "EXECUTABLE_PURE_PRODUCT_CONTOUR_NO_WRITE",
-        "checkpoint_evidence_status": "PREPARED_FOR_ISSUE_176",
+        "execution_mode": "EXECUTABLE_TEST_SCENARIO_NO_WRITE",
+        "checkpoint_evidence_status": "AWAITING_INDEPENDENT_OBSERVATION",
         "business_name": "Контур.Маркет",
         "public_sources": [
           "https://kontur.ru/market",
           "https://kontur.ru/market/price"
         ],
-        "source_note": "Независимый product scenario проходит действующие Business Model, Campaign Draft, Profile v1 и Pre-launch Viability contracts без provider mutation.",
+        "source_note": "Подготовленный Test Scenario использует публичный real-business reference и operator-supplied facts для проверки контрактов; independent pilot evidence появляется только после наблюдения в #176.",
         "business_model": {
           "editable": true,
           "complete": true,
@@ -70,16 +70,14 @@
           ]
         },
         "evidence_quality": {
-          "status": "SUFFICIENT_FOR_SCOPE",
+          "status": "SCENARIO_SUFFICIENT_NOT_PILOT_EVIDENCE",
           "coverage_percent": 100,
           "sources": [
-            "PUBLIC_FIRST_PARTY",
-            "OWNER_CONFIRMED_PILOT",
-            "READ_ONLY_DEMAND_OBSERVATION",
-            "READ_ONLY_MEASUREMENT_OBSERVATION",
-            "READ_ONLY_CAPABILITY_OBSERVATION"
+            "PUBLIC_REAL_BUSINESS_REFERENCE",
+            "OPERATOR_SUPPLIED_TEST_SCENARIO"
           ],
           "limitations": [
+            "Prepared scenario inputs are not independent pilot evidence.",
             "Pre-launch evidence does not predict CPA, profit or a winning campaign."
           ]
         },
@@ -344,10 +342,10 @@
       },
       "honesty": {
         "scenario_id": "honesty-material-insufficiency-matrix",
-        "evidence_kind": "INDEPENDENT_PILOT_EVIDENCE",
+        "evidence_kind": "CONTROLLED_TEST_SCENARIO_EVIDENCE",
         "derived_from_fixture": false,
-        "execution_mode": "EXECUTABLE_PURE_PRODUCT_CONTOUR_NO_WRITE",
-        "checkpoint_evidence_status": "PREPARED_FOR_ISSUE_176",
+        "execution_mode": "EXECUTABLE_TEST_SCENARIO_NO_WRITE",
+        "checkpoint_evidence_status": "AWAITING_INDEPENDENT_OBSERVATION",
         "cases": [
           {
             "case_id": "economics-insufficient",
@@ -514,6 +512,12 @@
           }
         ]
       }
+    },
+    "independent_pilots": {
+      "expected_kind": "INDEPENDENT_PILOT_EVIDENCE",
+      "status": "PENDING_HUMAN_CHECKPOINT",
+      "checkpoint_issue": 176,
+      "evidence": null
     }
   },
   "agent_evals": [
@@ -781,58 +785,58 @@
         "topic": "Business Model",
         "prompt": "Объясните, кому и какую ценность продаёт бизнес, как считается допустимая стоимость результата и какие предположения остаются.",
         "evidence_refs": [
-          "positive.business_model"
+          "prepared_scenarios.positive.business_model"
         ]
       },
       {
         "topic": "Business goal",
         "prompt": "Назовите выбранный качественный результат и почему это бизнес-результат, а не техническое действие.",
         "evidence_refs": [
-          "positive.goal"
+          "prepared_scenarios.positive.goal"
         ]
       },
       {
         "topic": "Evidence quality",
         "prompt": "Какие evidence доступны, что недоступно и почему unavailable не равно нулю?",
         "evidence_refs": [
-          "positive.evidence_quality",
-          "honesty.cases"
+          "prepared_scenarios.positive.evidence_quality",
+          "prepared_scenarios.honesty.cases"
         ]
       },
       {
         "topic": "Budget alignment",
         "prompt": "Как бюджет пакета соотносится со Strategy и почему это не прогноз CPA или прибыли?",
         "evidence_refs": [
-          "positive.package_confirmation.budget_alignment"
+          "prepared_scenarios.positive.package_confirmation.budget_alignment"
         ]
       },
       {
         "topic": "Campaign differences",
         "prompt": "Чем кампании различаются материально и какая из них является контролем?",
         "evidence_refs": [
-          "positive.campaigns"
+          "prepared_scenarios.positive.campaigns"
         ]
       },
       {
         "topic": "Auction Protocol",
         "prompt": "Что зафиксировано до теста: изменение, трафик, бюджет, период, сигнал успеха и остановка?",
         "evidence_refs": [
-          "positive.campaigns.0.auction_protocol"
+          "prepared_scenarios.positive.campaigns.0.auction_protocol"
         ]
       },
       {
         "topic": "Risks",
         "prompt": "Какие риски могут изменить решение и что Product MVP не обещает?",
         "evidence_refs": [
-          "positive.campaigns.0.risks",
-          "positive.evidence_quality.limitations"
+          "prepared_scenarios.positive.campaigns.0.risks",
+          "prepared_scenarios.positive.evidence_quality.limitations"
         ]
       },
       {
         "topic": "Package confirmation",
         "prompt": "Что именно означало бы подтверждение пакета и почему в этом checkpoint оно не даёт live authority?",
         "evidence_refs": [
-          "positive.package_confirmation"
+          "prepared_scenarios.positive.package_confirmation"
         ]
       }
     ]
