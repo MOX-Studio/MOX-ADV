@@ -12,6 +12,7 @@
     "test": "npm run test:contract && npm run test:e2e",
     "test:contract": "npm run build && node --test tests/*.test.mjs",
     "test:e2e": "cd ../.. && PYTHONPATH=src python3 -m unittest -v tests.e2e.test_p0_production_candidate",
+    "test:product-mvp": "npm run test:contract && npm run test:e2e",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
   },

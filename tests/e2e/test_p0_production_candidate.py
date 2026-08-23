@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -18,6 +19,8 @@ from playwright.sync_api import Page, sync_playwright
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "sites" / "p0-production"
 VIEWPORT = {"width": 1920, "height": 1080}
+PRODUCT_MVP_SOURCE = SOURCE / "tests" / "fixtures" / "product-mvp" / "product-mvp-source.json"
+TECHNICAL_NOISE_DENYLIST = json.loads(PRODUCT_MVP_SOURCE.read_text(encoding="utf-8"))["browser"]["technical_noise_denylist"]
 
 
 def _available_port() -> int:
@@ -102,11 +105,83 @@ def assert_no_horizontal_overflow(test: unittest.TestCase, page: Page) -> None:
           clientWidth: document.documentElement.clientWidth,
           innerWidth: window.innerWidth,
           innerHeight: window.innerHeight,
+          overflowing: [...document.querySelectorAll('main, section, article, aside, form')]
+            .filter((element) => {
+              const style = getComputedStyle(element);
+              return element.scrollWidth > element.clientWidth + 1
+                && !['auto', 'scroll'].includes(style.overflowX);
+            })
+            .slice(0, 10)
+            .map((element) => `${element.tagName.toLowerCase()}.${element.className}`),
         })"""
     )
     test.assertEqual(VIEWPORT["width"], dimensions["innerWidth"])
     test.assertEqual(VIEWPORT["height"], dimensions["innerHeight"])
     test.assertLessEqual(dimensions["scrollWidth"], dimensions["clientWidth"])
+    test.assertEqual([], dimensions["overflowing"])
+
+
+def assert_owner_accessibility_and_hierarchy(
+    test: unittest.TestCase,
+    page: Page,
+    expected_stage: str,
+) -> None:
+    audit = page.evaluate(
+        """() => {
+          const visible = (element) => {
+            const style = getComputedStyle(element);
+            const rect = element.getBoundingClientRect();
+            return style.display !== 'none' && style.visibility !== 'hidden'
+              && rect.width > 0 && rect.height > 0;
+          };
+          const controls = [...document.querySelectorAll('button, input, textarea, select')]
+            .filter(visible);
+          const missingNames = controls.filter((control) => {
+            if (control.tagName === 'BUTTON') return !control.textContent.trim() && !control.getAttribute('aria-label');
+            const label = control.closest('label')?.querySelector(':scope > span')?.textContent
+              || (control.id && document.querySelector(`label[for="${CSS.escape(control.id)}"]`)?.textContent)
+              || control.getAttribute('aria-label');
+            return !String(label || '').trim();
+          }).map((control) => control.outerHTML.slice(0, 180));
+          const ids = [...document.querySelectorAll('[id]')].map((element) => element.id);
+          const duplicateIds = [...new Set(ids.filter((id, index) => ids.indexOf(id) !== index))];
+          const headings = [...document.querySelectorAll('h1, h2, h3, h4')].filter(visible)
+            .map((heading) => ({ level: Number(heading.tagName.slice(1)), text: heading.textContent.trim() }));
+          const skippedHeading = headings.slice(1).find((heading, index) => heading.level > headings[index].level + 1) || null;
+          const unavailableControls = controls.filter((control) => /(?:retry|poll|checkpoint|reconcil|повторить запрос|опросить провайдера)/iu.test(control.textContent || control.getAttribute('aria-label') || ''))
+            .map((control) => control.textContent.trim());
+          return {
+            lang: document.documentElement.lang,
+            h1Count: headings.filter((heading) => heading.level === 1).length,
+            firstHeading: headings[0] || null,
+            skippedHeading,
+            missingNames,
+            duplicateIds,
+            unavailableControls,
+            disabledControls: controls.filter((control) => control.disabled).length,
+          };
+        }"""
+    )
+    test.assertEqual("ru", audit["lang"])
+    test.assertEqual(1, audit["h1Count"])
+    test.assertEqual(1, audit["firstHeading"]["level"])
+    test.assertIsNone(audit["skippedHeading"])
+    test.assertEqual([], audit["missingNames"])
+    test.assertEqual([], audit["duplicateIds"])
+    test.assertEqual([], audit["unavailableControls"])
+    test.assertEqual(0, audit["disabledControls"])
+    current = page.locator('[aria-current="step"] strong')
+    test.assertEqual(1, current.count())
+    test.assertEqual(expected_stage, current.inner_text())
+    primary = page.locator(".owner-action button[type='submit']")
+    if primary.count():
+        test.assertEqual(1, primary.count())
+        test.assertTrue(primary.is_visible())
+        primary.focus()
+        test.assertTrue(primary.evaluate("element => document.activeElement === element"))
+    visible_copy = page.locator("body").inner_text().lower()
+    for forbidden in TECHNICAL_NOISE_DENYLIST:
+        test.assertNotIn(forbidden.lower(), visible_copy)
 
 
 class P0ProductionCandidateE2ETests(unittest.TestCase):
@@ -134,8 +209,9 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                     else None,
                 )
 
-                def checkpoint() -> None:
+                def checkpoint(expected_stage: str) -> None:
                     assert_no_horizontal_overflow(self, page)
+                    assert_owner_accessibility_and_hierarchy(self, page, expected_stage)
                     visible_copy_samples.append(page.locator("body").inner_text())
 
                 page.goto(base_url, wait_until="networkidle")
@@ -163,7 +239,7 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 roadmap = page.get_by_label("Дорожная карта")
                 self.assertEqual(["Управление", "Мониторинг", "SEO", "VK"], roadmap.locator("li span").all_inner_texts())
                 self.assertEqual(0, roadmap.get_by_role("button").count())
-                checkpoint()
+                checkpoint("Цель")
 
                 page.get_by_label("Исходная ситуация").select_option("existing")
                 page.get_by_role("button", name="Продолжить", exact=True).click()
@@ -190,7 +266,7 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 page.get_by_role(
                     "heading", name="От бизнес-цели до готовых кампаний", exact=True
                 ).wait_for()
-                checkpoint()
+                checkpoint("Цель")
 
                 page.get_by_label("Сайт или адрес компании").fill("https://owner.example/")
                 page.get_by_role(
@@ -203,7 +279,7 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                     1,
                     page.locator(".owner-action button[type='submit']").count(),
                 )
-                checkpoint()
+                checkpoint("Цель")
 
                 page.get_by_role(
                     "button", name="Подтвердить цель и продолжить", exact=True
@@ -244,7 +320,7 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 self.assertTrue(competitor_matrix.get_by_text("Наблюдалось: 1.", exact=True).first.is_visible())
                 self.assertIn("Знаменатель: 2", competitor_matrix.inner_text())
                 self.assertIn("Публичные наблюдения не показывают расходы, CPC, конверсии, CPA, ROI, прибыльность", competitor_matrix.inner_text())
-                checkpoint()
+                checkpoint("Что узнал агент")
 
                 page.get_by_label("Кто и как принимает решение о покупке").fill(
                     "Руководитель выбирает поставщика и согласует участие"
@@ -272,7 +348,7 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 page.get_by_role(
                     "heading", name="Стратегия подготовлена", exact=True
                 ).wait_for()
-                checkpoint()
+                checkpoint("Стратегия")
 
                 strategy_recommendation = page.get_by_role(
                     "region", name="Полная рекомендация агента", exact=True
@@ -302,7 +378,7 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 self.assertIn("Условие успеха", protocol_previews.first.inner_text())
                 self.assertIn("Условие остановки", protocol_previews.first.inner_text())
                 self.assertIn("Предположение теста отделено", protocol_previews.first.inner_text())
-                checkpoint()
+                checkpoint("Кампании")
 
                 test_budget = page.get_by_label(re.compile(r"бюджет теста, ₽")).first
                 original_test_budget = int(test_budget.input_value())
@@ -314,7 +390,7 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                     "button", name="Повторно проверить изменённый тест", exact=True
                 ).wait_for()
                 self.assertEqual(0, page.get_by_text("9/9 бизнес-проверок пройдено", exact=True).count())
-                checkpoint()
+                checkpoint("Кампании")
                 page.get_by_role(
                     "button", name="Повторно проверить изменённый тест", exact=True
                 ).click()
@@ -329,7 +405,7 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                     "heading", name=re.compile(r"\d+ кампании к созданию")
                 ).wait_for()
                 self.assertTrue(page.get_by_text("9/9 бизнес-проверок пройдено", exact=True).is_visible())
-                checkpoint()
+                checkpoint("Проверка и создание")
 
                 page.get_by_role(
                     "button", name="Подтвердить точный пакет", exact=True
@@ -348,7 +424,7 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                         re.compile(r"Подайте заявку на участие без гарантии результата")
                     ).first.is_visible()
                 )
-                checkpoint()
+                checkpoint("Проверка и создание")
 
                 page.get_by_role(
                     "button", name="Подтвердить исправление", exact=True
@@ -356,14 +432,10 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 page.get_by_role(
                     "button", name="Подтвердить исправление", exact=True
                 ).click()
-                page.wait_for_timeout(5_000)
-                self.assertTrue(
-                    page.get_by_text(
-                        "Создание завершено без запуска показов", exact=True
-                    ).is_visible(),
-                    page.locator("body").inner_text(),
-                )
-                checkpoint()
+                page.get_by_text(
+                    "Создание завершено без запуска показов", exact=True
+                ).wait_for(timeout=20_000)
+                checkpoint("Проверка и создание")
 
                 visible_copy = "\n".join(visible_copy_samples)
                 for forbidden in [
