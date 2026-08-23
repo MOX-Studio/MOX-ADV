@@ -112,11 +112,15 @@ export type AxeAdapterResult = {
   inapplicable: AxeCategory;
 };
 
+export type LandingInspectionViewport =
+  | { form_factor: "desktop"; width: 1920; height: 1080; device_scale_factor: 1 }
+  | { form_factor: "mobile"; width: 390; height: 844; device_scale_factor: 3 };
+
 export interface LandingAdvisoryAdapter {
   availability: { available: boolean; reason: string | null };
   resolveHostname(hostname: string, signal: AbortSignal): Promise<string[]>;
   versions(signal: AbortSignal): Promise<Record<keyof typeof PINNED_LANDING_TOOL_VERSIONS, string>>;
-  inspect(input: { url: string; viewport: typeof DESKTOP_VIEWPORT; policy: LandingBrowserPolicy; signal: AbortSignal }): Promise<LandingPageInspection>;
+  inspect(input: { url: string; viewport: LandingInspectionViewport; policy: LandingBrowserPolicy; signal: AbortSignal }): Promise<LandingPageInspection>;
   runLighthouse(input: { url: string; sequence: number; viewport: typeof DESKTOP_VIEWPORT; policy: LandingBrowserPolicy; signal: AbortSignal }): Promise<LighthouseAdapterResult>;
   runAxe(input: { url: string; viewport: typeof DESKTOP_VIEWPORT; policy: LandingBrowserPolicy; signal: AbortSignal }): Promise<AxeAdapterResult>;
 }

@@ -147,6 +147,15 @@ function context() {
         api_goal_id: "1717",
         matched: true,
       },
+      goal_definition: {
+        name: "Заявка на участие в промышленной выставке",
+        type: "ACTION",
+        semantic_role: "PRIMARY_BUSINESS_RESULT",
+        funnel_stage: "QUALIFIED_LEAD",
+        funnel_complete: true,
+      },
+      value_tracking: { relevant: true, status: "READY", currency: "RUB" },
+      offline_conversion: { relevant: false, status: "NOT_APPLICABLE" },
       observed_at: "2026-08-21T10:00:00.000Z",
     },
     campaign_catalog: { total: 1, active: [] },
@@ -206,7 +215,7 @@ function context() {
     performance: {
       period_start: "2026-08-01",
       period_end: "2026-08-20",
-      display_metrics: { visits: "10", goal_visits: "2" },
+      display_metrics: { visits: "30", goal_visits: "4", goal_value: "120000" },
       provenance: {
         source_kind: "METRIKA_REPORTS_API",
         observed_at: "2026-08-21T10:00:00.000Z",
@@ -218,8 +227,8 @@ function context() {
           sampled: false,
           contains_sensitive_data: false,
           sample_share: 1,
-          sample_size: 10,
-          sample_space: 10,
+          sample_size: 30,
+          sample_space: 30,
           data_lag: 0,
         },
       },
@@ -318,6 +327,7 @@ function adapters(overrides = {}) {
     async readCurrencyLimits() {
       return { minimum_weekly_budget_rub: 300 };
     },
+    landingAdvisory: landingAdvisoryAdapter(),
     externalWriteConfiguration() {
       return { ready: true, blockers: [], account: "owner-account" };
     },
@@ -693,6 +703,28 @@ test("authoritative application persists LandingAdvisoryRun while every publish 
   const beforeRerun = publishDecision(left.result);
   left.result = await left.application.command("owner", { action: "run_landing_advisory", expected_revision: left.result.revision });
   assert.equal(publishDecision(left.result), beforeRerun);
+});
+
+test("unavailable destination inspection remains an owner-visible blocker with a prepared plan and no false readiness", async (t) => {
+  const { directory, store } = await fixture();
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const unavailable = landingAdvisoryAdapter();
+  unavailable.availability = { available: false, reason: "Pinned isolated inspector unavailable." };
+  const application = new P0Application({ store, adapters: adapters({ landingAdvisory: unavailable }) });
+  let result = await application.command("owner", { action: "analyze_site", expected_revision: 0, url: "https://owner.example/participate" });
+  result = await application.command("owner", { action: "confirm_context_goal", expected_revision: result.revision, confirmation: "CONFIRM_CONTEXT_GOAL", goal: result.state.context_state.provisional_business_goal.value });
+  result = await application.command("owner", { action: "save_business_model", expected_revision: result.revision, value: ownerModel(result.state) });
+  result = await approveStrategy(application, result);
+
+  assert.equal(result.state.measurement_destination_readiness.destination.status, "UNAVAILABLE");
+  assert.equal(result.state.measurement_destination_readiness.status, "BLOCKED");
+  assert.equal(result.state.measurement_destination_readiness.external_changes_performed, false);
+  assert.equal(result.state.recommendation_set.drafts.some((draft) => draft.shortlist_eligible), false);
+  assert.ok(result.state.recommendation_set.drafts.every((draft) => draft.publication_blockers.some((blocker) => blocker.code === "DESTINATION_SCOPE_BLOCKED")));
+  const projection = await new P0OwnerJourney(application, { agentProjection: async () => null }).query("owner");
+  assert.equal(projection.businessReadiness.destination.status, "Недоступно");
+  assert.ok(projection.businessReadiness.repairPlan.some((item) => /безопасн|провер/iu.test(item.action)));
+  assert.equal(projection.primaryAction, null);
 });
 
 test("rejects a content-rehashed cross-party LandingAdvisoryRun before query or downstream use", async (t) => {
@@ -3811,6 +3843,13 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
   ownerResponses.push(projection);
   assert.equal(projection.journey.currentStage, "campaigns");
   assert.ok(projection.campaignOptions.length >= 1);
+  assert.equal(projection.businessReadiness.status, "Готово");
+  assert.equal(projection.businessReadiness.measurement.checks.length, 8);
+  assert.deepEqual(projection.businessReadiness.destination.scopes.map((scope) => [scope.device, scope.classification]), [
+    ["Компьютеры", "Существующая посадочная"],
+    ["Мобильные устройства", "Существующая посадочная"],
+  ]);
+  assert.equal(projection.businessReadiness.destination.priorityCorrections.length <= 3, true);
   projection = await journey.submit(ownerKey, {
     handle: projection.primaryAction.handle,
     values: {},

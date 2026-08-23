@@ -140,11 +140,16 @@ import {
   type LandingAdvisoryAdapter,
   type LandingAdvisoryRun,
 } from "./landing-advisory.ts";
+import {
+  buildMeasurementDestinationReadiness,
+  verifyMeasurementDestinationReadiness,
+  type MeasurementDestinationReadiness,
+} from "./measurement-destination-readiness.ts";
 
 export const P0_APPLICATION_CONTRACT = "mox-adv.p0.application";
-export const P0_APPLICATION_CONTRACT_VERSION = "1.16.0";
-export const P0_DOCUMENT_SCHEMA = "p0-application-document-v11";
-const P0_LEGACY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4", "p0-application-document-v5", "p0-application-document-v6", "p0-application-document-v7", "p0-application-document-v8", "p0-application-document-v9", "p0-application-document-v10"]);
+export const P0_APPLICATION_CONTRACT_VERSION = "1.17.0";
+export const P0_DOCUMENT_SCHEMA = "p0-application-document-v12";
+const P0_LEGACY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4", "p0-application-document-v5", "p0-application-document-v6", "p0-application-document-v7", "p0-application-document-v8", "p0-application-document-v9", "p0-application-document-v10", "p0-application-document-v11"]);
 const P0_PRE_PACKAGE_AUTHORITY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4"]);
 export const P0_CONTEXT_SCHEMA = "p0-context-v2";
 const P0_LEGACY_CONTEXT_SCHEMA = "p0-context-v1";
@@ -313,6 +318,7 @@ export type P0Document = {
   analytics_evidence_snapshot: AnalyticsEvidenceBundle | null;
   strategy_questionnaire: StrategyQuestionnaire | null;
   strategy: CampaignStrategyRevision | Record<string, unknown> | null;
+  measurement_destination_readiness: MeasurementDestinationReadiness | null;
   landing_advisory_run: LandingAdvisoryRun | null;
   recommendation_set: CampaignRecommendationSet | null;
   draft: Record<string, unknown> | null;
@@ -636,6 +642,7 @@ function emptyDocument(): P0Document {
     analytics_evidence_snapshot: null,
     strategy_questionnaire: null,
     strategy: null,
+    measurement_destination_readiness: null,
     landing_advisory_run: null,
     recommendation_set: null,
     draft: null,
@@ -908,6 +915,9 @@ function sanitizeContext(input: P0Context): P0Context {
   const metrika = record(input.metrika);
   const metrikaBinding = record(metrika.binding);
   const goalBinding = record(metrika.goal_binding);
+  const goalDefinition = record(metrika.goal_definition);
+  const valueTracking = record(metrika.value_tracking);
+  const offlineConversion = record(metrika.offline_conversion);
   const catalog = record(input.campaign_catalog);
   const performance = record(input.performance);
   const metrics = record(performance.display_metrics);
@@ -989,6 +999,22 @@ function sanitizeContext(input: P0Context): P0Context {
         matched: goalBinding.matched === true,
       },
       observed_at: cleanText(String(metrika.observed_at ?? ""), 100),
+      goal_definition: {
+        name: artifactText(goalDefinition.name, 500),
+        type: cleanText(String(goalDefinition.type ?? ""), 100),
+        semantic_role: cleanText(String(goalDefinition.semantic_role ?? ""), 100),
+        funnel_stage: cleanText(String(goalDefinition.funnel_stage ?? ""), 100),
+        funnel_complete: typeof goalDefinition.funnel_complete === "boolean" ? goalDefinition.funnel_complete : null,
+      },
+      value_tracking: {
+        relevant: typeof valueTracking.relevant === "boolean" ? valueTracking.relevant : null,
+        status: cleanText(String(valueTracking.status ?? ""), 100),
+        currency: cleanText(String(valueTracking.currency ?? ""), 20),
+      },
+      offline_conversion: {
+        relevant: typeof offlineConversion.relevant === "boolean" ? offlineConversion.relevant : null,
+        status: cleanText(String(offlineConversion.status ?? ""), 100),
+      },
       blockers: stringList(metrika.blockers),
     },
     campaign_catalog: input.campaign_catalog
@@ -1014,6 +1040,7 @@ function sanitizeContext(input: P0Context): P0Context {
           display_metrics: {
             visits: cleanText(String(metrics.visits ?? ""), 100),
             goal_visits: cleanText(String(metrics.goal_visits ?? ""), 100),
+            goal_value: cleanText(String(metrics.goal_value ?? ""), 100),
           },
           provenance: {
             source_kind: cleanText(String(provenance.source_kind ?? ""), 100),
@@ -1582,6 +1609,7 @@ function invalidateContextDownstream(state: P0Document) {
   state.product_focus = null;
   state.strategy_questionnaire = null;
   state.strategy = null;
+  state.measurement_destination_readiness = null;
   state.landing_advisory_run = null;
   state.recommendation_set = null;
   state.draft = null;
@@ -1596,6 +1624,7 @@ function invalidateContextDownstream(state: P0Document) {
 
 function invalidateStrategyDownstream(state: P0Document) {
   state.strategy = null;
+  state.measurement_destination_readiness = null;
   state.landing_advisory_run = null;
   state.recommendation_set = null;
   state.draft = null;
@@ -2029,7 +2058,7 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
     })));
     changed = true;
   }
-  for (const key of ["context_state", "site_analysis", "business_model", "product_focus", "analytics_evidence_snapshot", "strategy_questionnaire", "strategy", "landing_advisory_run", "recommendation_set", "draft", "shortlist", "package_review", "human_decision_gate", "package_execution", "last_decision_invalidation", "external_write_intent", "campaign", "recommendation_recalculation", "last_cascade"] as const) {
+  for (const key of ["context_state", "site_analysis", "business_model", "product_focus", "analytics_evidence_snapshot", "strategy_questionnaire", "strategy", "measurement_destination_readiness", "landing_advisory_run", "recommendation_set", "draft", "shortlist", "package_review", "human_decision_gate", "package_execution", "last_decision_invalidation", "external_write_intent", "campaign", "recommendation_recalculation", "last_cascade"] as const) {
     if (!(key in state)) {
       if (!legacyDocument) lineageError(`same-schema document field ${key} отсутствует.`);
       state[key] = null as never;
@@ -2283,9 +2312,23 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
         analyticsEvidence: state.analytics_evidence_snapshot as unknown as Record<string, unknown> | undefined,
         playbookReleases: [],
         directCapabilitySnapshot: state.context_state?.facts.direct.capability_snapshot ?? null,
+        measurementDestinationReadiness: state.measurement_destination_readiness as unknown as Record<string, unknown> | null,
         generatedAt: updatedAt,
       });
       changed = true;
+    }
+  }
+
+  if (state.measurement_destination_readiness) {
+    if (!strategy) lineageError("Measurement/destination readiness потеряла Campaign Strategy revision.");
+    if (!await verifyMeasurementDestinationReadiness(state.measurement_destination_readiness)) {
+      lineageError("Measurement/destination readiness schema или content hash verification failed.");
+    }
+    if (state.measurement_destination_readiness.strategy_revision_id !== strategy.strategy_revision_id) {
+      lineageError("Measurement/destination readiness ссылается на другую Strategy revision.");
+    }
+    if (state.recommendation_set?.measurement_destination_readiness_id !== state.measurement_destination_readiness.readiness_id) {
+      lineageError("Recommendation Set ссылается на другую measurement/destination readiness revision.");
     }
   }
 
@@ -3196,6 +3239,22 @@ export class P0Application {
     });
   }
 
+  private async buildMeasurementDestinationReadiness(ownerKey: string, state: P0Document) {
+    if (!state.strategy || !state.context_state) {
+      fail("P0_PREREQUISITE_MISSING", "Measurement/destination readiness требует exact Strategy и Context lineage.");
+    }
+    const context = sanitizeContext(await this.adapters.readContext({ owner_key: ownerKey }));
+    this.assertPersistedBindings(state, context);
+    return buildMeasurementDestinationReadiness({
+      strategy: state.strategy as Record<string, unknown>,
+      context: context as unknown as Record<string, unknown>,
+      contextSiteUrl: state.context_state.facts.site.url,
+      servedDevices: ["desktop", "mobile"],
+      adapter: this.adapters.landingAdvisory ?? unavailableLandingAdvisoryAdapter,
+      now: () => this.adapters.now(),
+    });
+  }
+
   private async buildLandingAdvisory(state: P0Document) {
     if (!state.strategy || !state.context_state || !state.analytics_evidence_snapshot) {
       fail("P0_PREREQUISITE_MISSING", "Landing advisory требует exact Strategy, Context и Analytics Evidence Snapshot lineage.");
@@ -3750,12 +3809,14 @@ export class P0Application {
               previous_strategy_revision_id: existingStrategy ? String(existingStrategy.strategy_revision_id ?? "") || null : null,
             },
           };
+          state.measurement_destination_readiness = await this.buildMeasurementDestinationReadiness(key, state);
           state.recommendation_set = await buildCampaignRecommendationSet({
             model: state.business_model as unknown as Record<string, unknown>,
             strategy: state.strategy as unknown as Record<string, unknown>,
             analyticsEvidence: state.analytics_evidence_snapshot as unknown as Record<string, unknown>,
             playbookReleases: await this.playbookReleases(),
             directCapabilitySnapshot: state.context_state?.facts.direct.capability_snapshot ?? null,
+            measurementDestinationReadiness: state.measurement_destination_readiness as unknown as Record<string, unknown>,
             generatedAt: approvedAt,
           });
           state.landing_advisory_run = await this.buildLandingAdvisory(state);
@@ -3803,6 +3864,7 @@ export class P0Application {
           analyticsEvidence: state.analytics_evidence_snapshot as unknown as Record<string, unknown>,
           playbookReleases,
           directCapabilitySnapshot: state.context_state?.facts.direct.capability_snapshot ?? null,
+          measurementDestinationReadiness: state.measurement_destination_readiness as unknown as Record<string, unknown> | null,
           generatedAt: recalculatedAt,
         });
         changes = recommendationRecalculationChanges(previousSet, currentSet);

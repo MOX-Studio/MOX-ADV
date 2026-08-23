@@ -108,6 +108,7 @@ const CONDITIONAL_FIELD_CAPABILITY = new Map([
 ]);
 
 const text = (value: unknown) => String(value ?? "").normalize("NFKC").replace(/\s+/gu, " ").trim();
+const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const keyText = (value: unknown) => text(value).toLocaleLowerCase("ru-RU");
 
 function canonicalizeProviderProjection(value: unknown, path = ""): unknown {
@@ -528,6 +529,7 @@ export type CampaignRecommendationSet = {
   capability_profile: Record<string, unknown>;
   field_registry: typeof DIRECT_V501_DRAFT_FIELD_REGISTRY;
   direct_capability_snapshot_id: string | null;
+  measurement_destination_readiness_id?: string;
   playbook_release: Record<string, unknown>;
   coverage: Record<string, unknown>;
   candidate_audit: CandidateAuditRecord[];
@@ -576,6 +578,7 @@ export async function buildCampaignRecommendationSet({
   generatedAt,
   playbookReleases = [],
   directCapabilitySnapshot = null,
+  measurementDestinationReadiness = null,
 }: {
   model: Record<string, unknown>;
   strategy: Record<string, unknown>;
@@ -583,6 +586,7 @@ export async function buildCampaignRecommendationSet({
   generatedAt: string;
   playbookReleases?: CuratedPlaybookRelease[];
   directCapabilitySnapshot?: DirectCapabilitySnapshot | null;
+  measurementDestinationReadiness?: Record<string, unknown> | null;
 }): Promise<CampaignRecommendationSet> {
   const strategyRevisionId = text(strategy.strategy_revision_id);
   if (!strategyRevisionId) throw new Error("Campaign Strategy должна иметь immutable revision ID.");
@@ -752,6 +756,17 @@ export async function buildCampaignRecommendationSet({
         snapshot: directCapabilitySnapshot,
       });
       const publicationBlockers: Array<Record<string, unknown>> = [...coreCapability.blockers];
+      const readinessMeasurement = record(measurementDestinationReadiness?.measurement);
+      const readinessDestination = record(measurementDestinationReadiness?.destination);
+      if (measurementDestinationReadiness && readinessMeasurement.status !== "READY") publicationBlockers.push(publicationBlocker(
+        "MEASUREMENT_READINESS_BLOCKED",
+        "Выбранный бизнес-результат пока нельзя надёжно наблюдать; выполните подготовленный measurement repair plan.",
+      ));
+      if (measurementDestinationReadiness && readinessDestination.status !== "READY") publicationBlockers.push(publicationBlocker(
+        "DESTINATION_SCOPE_BLOCKED",
+        "Destination не готова для каждого device scope, который способен обслуживать Campaign Draft.",
+        "/direct/ad/TextAd/Href",
+      ));
       if (!playbook.release) publicationBlockers.push(publicationBlocker(
         "PLAYBOOK_RELEASE_UNAVAILABLE",
         "Campaign Draft publication requires exactly one ACTIVE and APPROVED curated playbook release.",
@@ -863,6 +878,7 @@ export async function buildCampaignRecommendationSet({
     evidence_snapshot_id: analyticsEvidence?.snapshot_id ?? null,
     capability_profile: `${CORE_DIRECT_CAPABILITY_PROFILE.profile_id}@${CORE_DIRECT_CAPABILITY_PROFILE.profile_version}`,
     capability_snapshot_id: directCapabilitySnapshot?.snapshot_id ?? null,
+    ...(measurementDestinationReadiness?.readiness_id ? { measurement_destination_readiness_id: measurementDestinationReadiness.readiness_id } : {}),
     playbook_release_digest: playbook.release?.content_digest ?? null,
     exact_generated_candidates: compiled.map((draft) => ({
       draft_id: draft.draft_id,
@@ -922,6 +938,7 @@ export async function buildCampaignRecommendationSet({
     },
     field_registry: DIRECT_V501_DRAFT_FIELD_REGISTRY,
     direct_capability_snapshot_id: directCapabilitySnapshot?.snapshot_id ?? null,
+    ...(measurementDestinationReadiness?.readiness_id ? { measurement_destination_readiness_id: String(measurementDestinationReadiness.readiness_id) } : {}),
     playbook_release: {
       status: playbook.release ? "ACTIVE_APPROVED" : "BLOCKED_FAIL_CLOSED",
       release_id: playbook.release?.release_id ?? null,

@@ -112,6 +112,22 @@ export type OwnerJourneyProjection = {
     };
     materialQuestions: Array<{ question: string; consequence: string }>;
   } | null;
+  businessReadiness: {
+    status: "Готово" | "Заблокировано";
+    measurement: {
+      status: "Готово" | "Заблокировано";
+      summary: string;
+      checks: Array<{ label: string; result: string; limitation: string }>;
+    };
+    destination: {
+      status: "Готово" | "Заблокировано" | "Недоступно";
+      scopes: Array<{ device: string; classification: string; conclusion: string }>;
+      priorityCorrections: Array<{ priority: number; action: string; basis: "Наблюдение" | "Гипотеза" }>;
+    };
+    repairPlan: Array<{ priority: number; action: string; expectedResult: string }>;
+    decisionGate: null | { recommendation: string; evidence: string; options: string };
+    limitations: string[];
+  } | null;
   materialUnknowns: string[];
   agentActivity: {
     status: P0AgentOwnerProjection["status"];
@@ -650,6 +666,74 @@ function businessModelProjection(state: InternalState): OwnerJourneyProjection["
   };
 }
 
+const READINESS_CHECK_LABELS: Record<string, string> = {
+  EXACT_BINDING: "Точная привязка аналитики",
+  GOAL_SEMANTICS: "Смысл основной цели",
+  GOAL_FUNNEL: "Этап воронки",
+  RECENT_REACHES: "Свежие достижения",
+  SAMPLING_PRIVACY_LAG: "Качество и задержка данных",
+  ATTRIBUTION: "Привязка результата к выбранному трафику",
+  VALUE_REVENUE: "Ценность и выручка",
+  OFFLINE_READINESS: "Результаты, передаваемые после продажи",
+};
+
+const DESTINATION_CLASSIFICATION_LABELS: Record<string, string> = {
+  EXISTING_BUSINESS_PAGE: "Существующая бизнес-страница",
+  EXISTING_LANDING: "Существующая посадочная",
+  FUTURE_LANDING_REQUIRED: "Нужна новая посадочная",
+  INVALID_UNRELATED: "Страница не относится к предложению",
+};
+
+function businessReadinessProjection(state: InternalState): OwnerJourneyProjection["businessReadiness"] {
+  const readiness = record(state.measurement_destination_readiness);
+  if (!Object.keys(readiness).length) return null;
+  const measurement = record(readiness.measurement);
+  const destination = record(readiness.destination);
+  const gate = record(readiness.human_decision_gate);
+  const measurementChecks = list(measurement.checks).map(record);
+  return {
+    status: readiness.status === "READY" ? "Готово" : "Заблокировано",
+    measurement: {
+      status: measurement.status === "READY" ? "Готово" : "Заблокировано",
+      summary: measurement.status === "READY" ? "Выбранный бизнес-результат можно наблюдать в нужной области." : "Измеримость выбранного результата пока не доказана.",
+      checks: measurementChecks.map((item) => ({
+        label: ownerText(READINESS_CHECK_LABELS[String(item.code)], "Проверка измеримости"),
+        result: item.status === "PASS" ? "Пройдено" : item.status === "NOT_APPLICABLE" ? "Не требуется" : item.status === "FAIL" ? "Не пройдено" : "Недоступно",
+        limitation: item.limitation ? ownerText(item.limitation) : "Нет существенных ограничений для этой проверки",
+      })),
+    },
+    destination: {
+      status: destination.status === "READY" ? "Готово" : destination.status === "UNAVAILABLE" ? "Недоступно" : "Заблокировано",
+      scopes: list(destination.device_scopes).map((value) => {
+        const scope = record(value);
+        return {
+          device: scope.device === "mobile" ? "Мобильные устройства" : "Компьютеры",
+          classification: scope.classification === null ? "Недоступно" : ownerText(DESTINATION_CLASSIFICATION_LABELS[String(scope.classification)], "Недоступно"),
+          conclusion: ownerText(scope.conclusion),
+        };
+      }),
+      priorityCorrections: list(destination.priority_corrections).slice(0, 3).map((value) => {
+        const correction = record(value);
+        return {
+          priority: Number(correction.priority),
+          action: ownerText(correction.action),
+          basis: correction.basis === "NEURAL_HYPOTHESIS" ? "Гипотеза" as const : "Наблюдение" as const,
+        };
+      }),
+    },
+    repairPlan: list(readiness.repair_plan).map((value) => {
+      const item = record(value);
+      return { priority: Number(item.priority), action: ownerText(item.action), expectedResult: ownerText(item.expected_result) };
+    }),
+    decisionGate: Object.keys(gate).length ? {
+      recommendation: ownerText(gate.recommendation),
+      evidence: list(gate.evidence).map((item) => ownerText(item)).join(" · "),
+      options: list(gate.options).map((item) => `${ownerText(record(item).option)}: ${ownerText(record(item).consequence)}`).join(" · "),
+    } : null,
+    limitations: list(readiness.limitations).map((item) => ownerText(item)).filter(Boolean),
+  };
+}
+
 function materialUnknowns(state: InternalState) {
   const evidence = record(state.analytics_evidence_snapshot);
   const gaps = list(evidence.gaps)
@@ -662,6 +746,10 @@ function materialUnknowns(state: InternalState) {
   }
   const economics = record(contract.economics);
   if (economics.status === "MATERIAL_UNCERTAINTY") gaps.push(ownerText(economics.limitation, "Economics пока не подтверждена."));
+  const readiness = record(state.measurement_destination_readiness);
+  if (readiness.status === "BLOCKED") {
+    for (const item of list(readiness.repair_plan).slice(0, 3)) gaps.push(ownerText(record(item).action));
+  }
   const drafts = list(record(state.recommendation_set).drafts);
   for (const draftValue of drafts) {
     const draft = record(draftValue);
@@ -867,6 +955,7 @@ async function project(
     competitorMatrix: competitorMatrixProjection(view.state),
     demandCostResearch: projectDemandCostResearchForOwner(view.state.analytics_evidence_snapshot),
     businessModel: businessModelProjection(view.state),
+    businessReadiness: businessReadinessProjection(view.state),
     materialUnknowns: unknowns,
     agentActivity: agent ? {
       status: agent.status,
@@ -991,6 +1080,7 @@ async function projectAccessOnly(
     competitorMatrix: null,
     demandCostResearch: null,
     businessModel: null,
+    businessReadiness: null,
     materialUnknowns: [...access.limitations],
     agentActivity: null,
     cards: [{
