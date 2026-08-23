@@ -23,7 +23,9 @@ const strategy = {
   strategy_revision_id: "campaign-strategy-r7",
   goal: "Получать заявки на участие",
   advertised_offer: "Участие со стендом в выставке ИННОПРОМ",
+  target_audience: "Руководители промышленных компаний",
   qualified_result: "Отправленная заявка на участие",
+  exclusions: "Вакансии и бесплатные билеты",
   geography: "Россия",
   period_start: "2026-09-01",
   period_end: "2026-09-30",
@@ -68,7 +70,7 @@ test("deterministically fans one approved Strategy revision out into multiple co
 
   const visible = first.drafts.filter((draft) => draft.visibility === "VISIBLE");
   assert.equal(visible.length, 3);
-  assert.equal(first.schema_version, "campaign-recommendation-set-v3");
+  assert.equal(first.schema_version, "campaign-recommendation-set-v4");
   assert.equal(first.field_registry.schema_version, "direct-v501-draft-field-registry-v1");
   assert.equal(first.field_registry.profile_id, first.capability_profile.profile_id);
   assert.equal(first.field_registry.fields.filter((field) => field.editable).length, 6);
@@ -76,7 +78,8 @@ test("deterministically fans one approved Strategy revision out into multiple co
   assert.equal(first.termination.recursion_allowed, false);
   assert.equal(first.coverage.generated_count, first.coverage.visible_count + first.coverage.hidden_count);
   assert.equal(first.coverage.generated_count, first.candidate_audit.length);
-  assert.equal(first.candidate_audit.every((candidate) => ["VISIBLE", "HIDDEN"].includes(candidate.visibility)), true);
+  assert.equal(first.candidate_audit.every((candidate) => ["VISIBLE", "HIDDEN", "BLOCKED"].includes(candidate.disposition)), true);
+  assert.equal(first.termination.all_candidates_terminal, true);
   assert.equal(new Set(visible.map((draft) => draft.draft_id)).size, visible.length);
   assert.equal(new Set(visible.map((draft) => draft.publish_fingerprint)).size, visible.length);
   assert.equal(visible.every((draft) => draft.strategy_revision_id === strategy.strategy_revision_id), true);
@@ -98,6 +101,9 @@ test("keeps evidence-gap Drafts reviewable but outside shortlist and publish", a
   }
   assert.equal(value.coverage.publishable_drafts, 0);
   assert.equal(value.coverage.evidence_gap_drafts, 3);
+  assert.equal(value.viability_outcome.status, "NO_VIABLE_DRAFTS");
+  assert.ok(value.viability_outcome.repair_plan.length >= 1);
+  assert.equal(value.recommended_shortlist.draft_ids.length, 0);
 });
 
 test("canonicalizes only provider-declared unordered arrays before fingerprinting", async () => {
@@ -230,6 +236,7 @@ test("terminates at one control plus at most two improvements and audits exclude
   assert.equal(value.termination.all_candidates_terminal, true);
   assert.equal(value.termination.comparators_per_bucket, 1);
   assert.equal(value.termination.maximum_improvements_per_bucket, 2);
+  assert.equal(value.drafts.every((draft) => ["VIABLE", "TESTABLE_WITH_GAPS", "INSUFFICIENT_EVIDENCE", "BLOCKED"].includes(draft.viability_status)), true);
   assert.equal(value.drafts.filter((draft) => draft.variant.kind === "CONTROL").length, 1);
   assert.equal(value.drafts.filter((draft) => draft.variant.kind === "IMPROVEMENT").length, 2);
   assert.equal(value.coverage.candidates_total, 4);
@@ -386,6 +393,9 @@ test("packs compatible keyword clusters before a finite product-audience-offer f
   assert.deepEqual(value.coverage.uncovered_leaf_ids, []);
   assert.equal(value.drafts.length, 3);
   assert.equal(value.drafts.every((draft) => draft.demand_cluster_ids.length === 2), true);
+  assert.equal(value.viability_outcome.status, "NO_VIABLE_DRAFTS");
+  assert.equal(value.viability_outcome.repair_plan.some((item) => item.code === "AUCTION_PROTOCOL_PREREGISTRATION_PENDING"), true);
+  assert.deepEqual(value.recommended_shortlist.draft_ids, value.drafts.filter((draft) => draft.shortlist_eligible).sort((left, right) => left.viability_score.rank - right.viability_score.rank || left.draft_id.localeCompare(right.draft_id)).map((draft) => draft.draft_id));
 });
 
 test("reconciles canonical leaf coverage for cluster IDs that require normalization", async () => {

@@ -1,6 +1,6 @@
 {
-  "schema_version": "campaign-recommendation-set-v3",
-  "recommendation_set_id": "recommendation-set-3eb4bfb3c19406c3f56e",
+  "schema_version": "campaign-recommendation-set-v4",
+  "recommendation_set_id": "recommendation-set-ffb4bd9bf8880d96c494",
   "capability_profile": "direct-v501-unified-search-explicit-text@1.0.0",
   "playbook_release": "test-curated-release-default@1.0.0",
   "coverage": {
@@ -25,7 +25,8 @@
     ],
     "suppressed_leaf_ids": [],
     "uncovered_leaf_ids": [],
-    "uncovered_axis_members": []
+    "uncovered_axis_members": [],
+    "blocked_count": 0
   },
   "termination": {
     "contract": "FINITE_NON_RECURSIVE_ONE_PASS",

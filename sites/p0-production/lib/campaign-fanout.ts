@@ -493,6 +493,7 @@ export type CampaignDraftCandidate = Record<string, unknown> & {
   publish_fingerprint: string;
   treatment_fingerprint: string;
   visibility: "VISIBLE" | "HIDDEN";
+  viability_status?: "VIABLE" | "TESTABLE_WITH_GAPS" | "INSUFFICIENT_EVIDENCE" | "BLOCKED";
   viability_score?: ViabilityScoreResult;
 };
 
@@ -502,13 +503,14 @@ export type CandidateAuditRecord = {
   delivery_bucket_id: string | null;
   draft_id: string | null;
   visibility: "VISIBLE" | "HIDDEN";
+  disposition: "VISIBLE" | "HIDDEN" | "BLOCKED";
   reason_code: string;
   playbook_release_id: string | null;
   playbook_rule_id: string | null;
 };
 
 export type CampaignRecommendationSet = {
-  schema_version: "campaign-recommendation-set-v3";
+  schema_version: "campaign-recommendation-set-v4";
   recommendation_set_id: string;
   strategy_revision_id: string;
   analytics_evidence_snapshot_id: string | null;
@@ -523,6 +525,16 @@ export type CampaignRecommendationSet = {
   axis_ledger: Record<string, unknown>;
   termination: Record<string, unknown>;
   score_contract: Record<string, unknown>;
+  viability_outcome: {
+    status: "VIABLE_DRAFTS_AVAILABLE" | "NO_VIABLE_DRAFTS";
+    viable_count: number;
+    repair_plan: Array<{ priority: number; code: string; action: string }>;
+  };
+  recommended_shortlist: {
+    source: "AGENT_COMPARATIVE_PRIORITY";
+    draft_ids: string[];
+    bounded: true;
+  };
   delivery_packing: Awaited<ReturnType<typeof packDemandClusters>>;
   drafts: CampaignDraftCandidate[];
 };
@@ -535,6 +547,7 @@ function playbookCandidateAudit(audit: PlaybookAuditRecord): CandidateAuditRecor
     delivery_bucket_id: null,
     draft_id: null,
     visibility: "HIDDEN",
+    disposition: "HIDDEN",
     reason_code: `HIDDEN:${audit.reason_code}`,
     playbook_release_id: audit.release_id,
     playbook_rule_id: audit.rule_id,
@@ -556,6 +569,44 @@ function ruleSelectedFields(rule: CuratedPlaybookRule) {
 
 function expectedChangedFields(rule: CuratedPlaybookRule) {
   return [...new Set(rule.changed_fields.map(text).filter(Boolean))].sort();
+}
+
+export function recommendationSetViabilityOutcome(drafts: CampaignDraftCandidate[]) {
+  const viableCount = drafts.filter((draft) => draft.viability_status === "VIABLE").length;
+  if (viableCount > 0) return {
+    status: "VIABLE_DRAFTS_AVAILABLE" as const,
+    viable_count: viableCount,
+    repair_plan: [],
+  };
+  const issues = drafts.flatMap((draft) => {
+    const score = draft.viability_score;
+    const eligibility = score?.eligibility?.blockers ?? [];
+    const required = score?.evidence_gaps?.required ?? [];
+    const optional = score?.evidence_gaps?.optional ?? [];
+    return [
+      ...eligibility.map((item) => ({ code: item.code, action: item.remediation })),
+      ...required.map((item) => ({ code: item.code, action: item.description })),
+      ...optional.map((item) => ({ code: item.code, action: item.description })),
+    ];
+  });
+  const priorityOrder = [
+    "ECONOMICS", "DESTINATION", "MEASUREMENT", "DEMAND", "CAPABILITY", "POLICY",
+    "PROJECTION", "PROTOCOL", "BUDGET", "NON_SERVING", "EVIDENCE",
+  ];
+  const unique = [...new Map(issues.filter((item) => text(item.code) && text(item.action)).map((item) => [item.code, item])).values()]
+    .sort((left, right) => {
+      const priority = (code: string) => {
+        const index = priorityOrder.findIndex((prefix) => code.includes(prefix));
+        return index < 0 ? priorityOrder.length : index;
+      };
+      return priority(left.code) - priority(right.code) || left.code.localeCompare(right.code);
+    })
+    .slice(0, 5);
+  return {
+    status: "NO_VIABLE_DRAFTS" as const,
+    viable_count: 0,
+    repair_plan: unique.map((item, index) => ({ priority: index + 1, code: item.code, action: item.action })),
+  };
 }
 
 function playbookApplicationContext(
@@ -712,6 +763,7 @@ export async function buildCampaignRecommendationSet({
         delivery_bucket_id: bucketId,
         draft_id: null,
         visibility: "HIDDEN",
+        disposition: "HIDDEN",
         reason_code: "HIDDEN:PLAYBOOK_RULE_BUCKET_IMPROVEMENT_LIMIT",
         playbook_release_id: playbook.release?.release_id ?? null,
         playbook_rule_id: rule.rule_id,
@@ -766,6 +818,10 @@ export async function buildCampaignRecommendationSet({
       const publicationBlockers: Array<Record<string, unknown>> = [...coreCapability.blockers];
       const readinessMeasurement = record(measurementDestinationReadiness?.measurement);
       const readinessDestination = record(measurementDestinationReadiness?.destination);
+      if (!measurementDestinationReadiness) publicationBlockers.push(publicationBlocker(
+        "MEASUREMENT_DESTINATION_READINESS_MISSING",
+        "Hard eligibility requires the exact measurement and destination readiness revision before scoring.",
+      ));
       if (measurementDestinationReadiness && readinessMeasurement.status !== "READY") publicationBlockers.push(publicationBlocker(
         "MEASUREMENT_READINESS_BLOCKED",
         "Выбранный бизнес-результат пока нельзя надёжно наблюдать; выполните подготовленный measurement repair plan.",
@@ -802,6 +858,8 @@ export async function buildCampaignRecommendationSet({
       if (!suppressionReason && duplicateOf) suppressionReason = "HIDDEN:DUPLICATE_OR_OVERLAP";
       const visibility = suppressionReason ? "HIDDEN" as const : "VISIBLE" as const;
       if (visibility === "VISIBLE") seenTreatments.set(treatmentFingerprint, draftId);
+      const projectionCampaign = record(record(projection.direct).campaign);
+      const projectionSearch = record(record(record(projectionCampaign.UnifiedCampaign).BiddingStrategy).Search);
       const publishEligibility = publicationBlockers.length === 0 && visibility === "VISIBLE" ? "ELIGIBLE" : publicationBlockers.some((item) => item.code === "DEMAND_EVIDENCE_GAP")
         ? "BLOCKED_EVIDENCE_GAP" : "BLOCKED_HARD";
       const draft = {
@@ -869,6 +927,29 @@ export async function buildCampaignRecommendationSet({
         publication_blockers: publicationBlockers,
         unsupported_fields: capability.unsupported_fields,
         capability_selection: capability,
+        protocol_budget_readiness: {
+          status: "CANVAS_COMPARISON_READY",
+          comparator_draft_id: rule ? comparator?.draft_id ?? null : draftId,
+          one_factor_attribution: rule ? actualChangedFields.length > 0 && undeclaredChanges.length === 0 && missingDeclaredChanges.length === 0 : false,
+          weekly_budget_micro_rub: record(projectionSearch.WbMaximumClicks).WeeklySpendLimit ?? null,
+          period: {
+            start: projectionCampaign.StartDate ?? null,
+            end: projectionCampaign.EndDate ?? null,
+          },
+          future_immutable_gate: "AUCTION_PROTOCOL_PREREGISTRATION_PENDING",
+        },
+        readiness_gaps: [
+          {
+            code: "AUCTION_PROTOCOL_PREREGISTRATION_PENDING",
+            description: "Точный Auction Protocol ещё не пререгистрирован; Draft может сравниваться и входить в shortlist, но не должен называться VIABLE до отдельной immutable protocol revision.",
+            required: false,
+          },
+          {
+            code: "CAMPAIGN_CREATION_PROFILE_V1_PENDING",
+            description: "Текущая canvas projection проверена только в существующем bounded profile; frozen Campaign Creation Profile v1 и exact creative/claims surface остаются отдельной обязательной готовностью.",
+            required: false,
+          },
+        ],
         visibility,
         suppression_reason: suppressionReason,
         duplicate_of: duplicateOf,
@@ -883,6 +964,7 @@ export async function buildCampaignRecommendationSet({
 
   const recommendationSetId = `recommendation-set-${(await sha256({
     contract: FAN_OUT_CONTRACT,
+    recommendation_set_schema: "campaign-recommendation-set-v4",
     strategy_revision_id: strategyRevisionId,
     evidence_snapshot_id: analyticsEvidence?.snapshot_id ?? null,
     capability_profile: `${CORE_DIRECT_CAPABILITY_PROFILE.profile_id}@${CORE_DIRECT_CAPABILITY_PROFILE.profile_version}`,
@@ -914,13 +996,20 @@ export async function buildCampaignRecommendationSet({
     scoredAt: generatedAt,
   });
   for (const draft of scored) {
+    const disposition = draft.visibility === "HIDDEN"
+      ? "HIDDEN" as const
+      : draft.viability_status === "BLOCKED" || draft.viability_status === "INSUFFICIENT_EVIDENCE"
+        ? "BLOCKED" as const : "VISIBLE" as const;
     candidateAudit.push({
       candidate_id: `draft-candidate:${draft.draft_id}`,
       candidate_type: "DRAFT",
       delivery_bucket_id: text(draft.delivery_bucket_id) || null,
       draft_id: draft.draft_id,
       visibility: draft.visibility,
-      reason_code: draft.visibility === "VISIBLE" ? "VISIBLE:GENERATED_DRAFT" : text(draft.suppression_reason) || "HIDDEN:STRUCTURAL",
+      disposition,
+      reason_code: disposition === "VISIBLE" ? "VISIBLE:GENERATED_DRAFT"
+        : disposition === "BLOCKED" ? `BLOCKED:${draft.viability_status}`
+          : text(draft.suppression_reason) || "HIDDEN:STRUCTURAL",
       playbook_release_id: draft.playbook_release_id,
       playbook_rule_id: draft.playbook_rule_id,
     });
@@ -928,6 +1017,7 @@ export async function buildCampaignRecommendationSet({
   candidateAudit.sort((left, right) => left.candidate_id.localeCompare(right.candidate_id));
   const visibleCount = candidateAudit.filter((item) => item.visibility === "VISIBLE").length;
   const hiddenCount = candidateAudit.length - visibleCount;
+  const blockedCount = candidateAudit.filter((item) => item.disposition === "BLOCKED").length;
   const auditedDraftCount = candidateAudit.filter((item) => item.candidate_type === "DRAFT").length;
   const auditedNonDraftCount = candidateAudit.length - auditedDraftCount;
   const generatedCount = scored.length + auditedNonDraftCount;
@@ -936,7 +1026,7 @@ export async function buildCampaignRecommendationSet({
   const uncoveredLeafIds = leafLedger.filter((leaf) => !text(leaf.terminal_disposition)).map((leaf) => leaf.leaf_id);
   const generatedReconciles = generatedCount === candidateAudit.length && auditedDraftCount === scored.length;
   return {
-    schema_version: "campaign-recommendation-set-v3",
+    schema_version: "campaign-recommendation-set-v4",
     recommendation_set_id: recommendationSetId,
     strategy_revision_id: strategyRevisionId,
     analytics_evidence_snapshot_id: analyticsEvidence?.snapshot_id ? String(analyticsEvidence.snapshot_id) : null,
@@ -968,6 +1058,7 @@ export async function buildCampaignRecommendationSet({
       generated_count: generatedCount,
       visible_count: visibleCount,
       hidden_count: hiddenCount,
+      blocked_count: blockedCount,
       candidates_total: candidateAudit.length,
       visible_drafts: scored.filter((draft) => draft.visibility === "VISIBLE").length,
       hidden_drafts: scored.filter((draft) => draft.visibility === "HIDDEN").length,
@@ -1002,7 +1093,16 @@ export async function buildCampaignRecommendationSet({
       maximum_improvements_per_bucket: MAX_IMPROVEMENTS_PER_DELIVERY_BUCKET,
       maximum_drafts_per_bucket: 1 + MAX_IMPROVEMENTS_PER_DELIVERY_BUCKET,
       generated_draft_count: scored.length,
-      all_candidates_terminal: candidateAudit.every((candidate) => ["VISIBLE", "HIDDEN"].includes(candidate.visibility)),
+      all_candidates_terminal: candidateAudit.every((candidate) => ["VISIBLE", "HIDDEN", "BLOCKED"].includes(candidate.disposition)),
+    },
+    viability_outcome: recommendationSetViabilityOutcome(scored),
+    recommended_shortlist: {
+      source: "AGENT_COMPARATIVE_PRIORITY",
+      draft_ids: scored
+        .filter((draft) => draft.shortlist_eligible === true)
+        .sort((left, right) => Number(left.viability_score?.rank ?? Number.POSITIVE_INFINITY) - Number(right.viability_score?.rank ?? Number.POSITIVE_INFINITY) || left.draft_id.localeCompare(right.draft_id))
+        .map((draft) => draft.draft_id),
+      bounded: true,
     },
     delivery_packing: deliveryPacking,
     score_contract: {

@@ -84,6 +84,15 @@ export type EligibilityBlocker = {
   remediation: string;
 };
 
+export type HardEligibilityGate = {
+  gate: "LINEAGE" | "ECONOMICS" | "DESTINATION" | "MEASUREMENT" | "DEMAND" | "CAPABILITY" | "POLICY" | "DUPLICATE_PROTECTION" | "PROJECTION" | "PROTOCOL_BUDGET_READINESS" | "NON_SERVING_SAFETY";
+  evaluated_before_score: true;
+  status: "PASSED" | "FAILED" | "REQUIRED_EVIDENCE_MISSING";
+  blocker_codes: string[];
+};
+
+export type CampaignDraftStatus = "VIABLE" | "TESTABLE_WITH_GAPS" | "INSUFFICIENT_EVIDENCE" | "BLOCKED";
+
 export type EvidenceGapDisclosure = {
   code: string;
   gap_id: string | null;
@@ -115,10 +124,12 @@ export type ViabilityScoreResult = {
   schema_version: typeof SCORE_SCHEMA_VERSION;
   contract_version: typeof SCORE_CONTRACT_VERSION;
   policy_status: "UNCALIBRATED_POLICY_V1";
+  draft_status: CampaignDraftStatus;
   eligibility: {
     evaluated_before_score: true;
     status: "ELIGIBLE" | "INELIGIBLE" | "BLOCKED_UNKNOWN";
     blockers: EligibilityBlocker[];
+    gates: HardEligibilityGate[];
   };
   evidence_gaps: {
     evaluated_before_score: true;
@@ -140,6 +151,19 @@ export type ViabilityScoreResult = {
   };
   rank: number | null;
   tied_draft_ids: string[];
+  evidence_coverage: {
+    percent: number;
+    known_weight_percent: number;
+    total_weight_percent: 100;
+    unknown_dimensions: DimensionName[];
+  };
+  main_reasons: Array<{
+    dimension: DimensionName;
+    direction: "RAISES_PRIORITY" | "LOWERS_PRIORITY" | "NEUTRAL";
+    weighted_distance_from_midpoint: number;
+    comparative_only: true;
+    reason: string;
+  }>;
   ranking: {
     status: "RANKED" | "BLOCKED_HARD_ELIGIBILITY" | "BLOCKED_EVIDENCE_GAP" | "STRUCTURALLY_NON_COMPARABLE";
     recommendation_set_id: string;
@@ -414,6 +438,44 @@ function publicationBlockers(draft: DraftCandidate) {
   return list(draft.publication_blockers).map(record);
 }
 
+const HARD_GATE_ORDER: HardEligibilityGate["gate"][] = [
+  "LINEAGE", "ECONOMICS", "DESTINATION", "MEASUREMENT", "DEMAND", "CAPABILITY",
+  "POLICY", "DUPLICATE_PROTECTION", "PROJECTION", "PROTOCOL_BUDGET_READINESS", "NON_SERVING_SAFETY",
+];
+
+function gateForBlockerCode(code: string): HardEligibilityGate["gate"] {
+  if (/LINEAGE|STRATEGY_INCOMPLETE|BUSINESS_MODEL_INCOMPLETE/u.test(code)) return "LINEAGE";
+  if (/ECONOMICS/u.test(code)) return "ECONOMICS";
+  if (/DESTINATION|LANDING/u.test(code)) return "DESTINATION";
+  if (/MEASUREMENT|METRIKA/u.test(code)) return "MEASUREMENT";
+  if (/DEMAND|WORDSTAT|EVIDENCE_GAP/u.test(code)) return "DEMAND";
+  if (/CAPABILITY|DIRECT_|UNSUPPORTED/u.test(code)) return "CAPABILITY";
+  if (/POLICY|CLAIM|ASSET|PLAYBOOK/u.test(code)) return "POLICY";
+  if (/DUPLICATE|OVERLAP|STRUCTURAL_DISPOSITION/u.test(code)) return "DUPLICATE_PROTECTION";
+  if (/PROJECTION/u.test(code)) return "PROJECTION";
+  if (/PROTOCOL|BUDGET/u.test(code)) return "PROTOCOL_BUDGET_READINESS";
+  if (/NON_SERVING|SERVING|RESUME|SAFETY/u.test(code)) return "NON_SERVING_SAFETY";
+  return "PROJECTION";
+}
+
+function hardEligibilityGates(blockers: EligibilityBlocker[], draft: DraftCandidate): HardEligibilityGate[] {
+  const publicationCodes = publicationBlockers(draft).map((item) => text(item.code));
+  return HARD_GATE_ORDER.map((gate) => {
+    const blockerCodes = [...new Set([
+      ...blockers.filter((item) => gateForBlockerCode(item.code) === gate).map((item) => item.code),
+      ...(gate === "DEMAND" && text(draft.market_evidence_status) === "EVIDENCE_GAP" ? ["DEMAND_EVIDENCE_GAP"] : []),
+      ...publicationCodes.filter((code) => gateForBlockerCode(code) === gate),
+    ])].sort();
+    const requiredEvidenceMissing = blockerCodes.some((code) => /UNKNOWN|MISSING|GAP|UNAVAILABLE|UNCERTAINTY/u.test(code));
+    return {
+      gate,
+      evaluated_before_score: true as const,
+      status: blockerCodes.length ? (requiredEvidenceMissing ? "REQUIRED_EVIDENCE_MISSING" as const : "FAILED" as const) : "PASSED" as const,
+      blocker_codes: blockerCodes,
+    };
+  });
+}
+
 function evaluateEligibility(
   draft: DraftCandidate,
   model: Record<string, unknown>,
@@ -437,8 +499,32 @@ function evaluateEligibility(
   if (missingStrategy.length) {
     blockers.push(blocker("STRATEGY_INCOMPLETE", `/strategy/${missingStrategy[0]}`, "Принять полную Campaign Strategy revision."));
   }
-  if (!text(draft.draft_revision_id) || !record(draft.publish_projection).direct) {
+  const projection = record(draft.publish_projection);
+  const projectionLineage = record(projection.lineage);
+  if (!text(draft.draft_revision_id) || !projection.direct) {
     blockers.push(blocker("PUBLISH_PROJECTION_INCOMPLETE", "/draft/publish_projection", "Скомпилировать и провалидировать exact Direct projection."));
+  }
+  if (!text(draft.strategy_revision_id)
+    || text(projectionLineage.strategy_revision_id) !== text(draft.strategy_revision_id)
+    || text(projectionLineage.draft_revision_id) !== text(draft.draft_revision_id)) {
+    blockers.push(blocker("IMMUTABLE_LINEAGE_MISMATCH", "/draft/publish_projection/lineage", "Пересобрать Draft из exact immutable Strategy и Draft revisions."));
+  }
+  const direct = record(projection.direct);
+  const campaign = record(direct.campaign);
+  const adGroup = record(direct.ad_group);
+  const keyword = record(direct.keyword);
+  const ad = record(direct.ad);
+  if (!campaign.UnifiedCampaign || !adGroup.UnifiedAdGroup || !text(keyword.Keyword) || !record(ad.TextAd).Title) {
+    blockers.push(blocker("PUBLISH_PROJECTION_INVALID", "/draft/publish_projection/direct", "Exact Direct projection должен содержать полную поддержанную campaign graph."));
+  }
+  const safety = record(projection.safety);
+  if (safety.must_end_non_serving !== true || safety.resume_allowed !== false || safety.network_serving !== false) {
+    blockers.push(blocker("NON_SERVING_SAFETY_INVALID", "/draft/publish_projection/safety", "Draft обязан завершаться без показов, расходов и resume capability."));
+  }
+  const bidding = record(record(record(campaign.UnifiedCampaign).BiddingStrategy).Search);
+  const weeklySpend = numberOrNull(record(bidding.WbMaximumClicks).WeeklySpendLimit);
+  if (weeklySpend === null || weeklySpend <= 0 || !text(campaign.StartDate) || !text(campaign.EndDate)) {
+    blockers.push(blocker("PROTOCOL_BUDGET_READINESS_INVALID", "/draft/publish_projection/direct/campaign", "Для bounded test нужны положительный budget ceiling и фиксированный период."));
   }
   if (text(draft.duplicate_of)) {
     blockers.push(blocker("EXACT_DUPLICATE", "/draft/duplicate_of", "Использовать канонический Draft или создать material treatment delta."));
@@ -475,6 +561,7 @@ function evaluateEligibility(
     evaluated_before_score: true as const,
     status: blockers.length ? (unknown ? "BLOCKED_UNKNOWN" as const : "INELIGIBLE" as const) : "ELIGIBLE" as const,
     blockers,
+    gates: hardEligibilityGates(blockers, draft),
   };
 }
 
@@ -495,6 +582,11 @@ function evaluateEvidenceGaps(draft: DraftCandidate, evidence: Record<string, un
   for (const [index, raw] of list(evidence?.gaps).map(record).entries()) {
     const material = raw.material === true;
     const disclosure = gapDisclosure(raw, `/analytics_evidence/gaps/${index}`, material);
+    (material ? required : optional).push(disclosure);
+  }
+  for (const [index, raw] of list(draft.readiness_gaps).map(record).entries()) {
+    const material = raw.required === true;
+    const disclosure = gapDisclosure(raw, `/draft/readiness_gaps/${index}`, material);
     (material ? required : optional).push(disclosure);
   }
   const demandGap = text(draft.market_evidence_status) === "EVIDENCE_GAP"
@@ -881,6 +973,56 @@ function weightedResult(dimensions: Record<DimensionName, ScoreDimension>) {
   return { raw: rounded(raw, 4), lower: rounded(lower, 4), upper: rounded(upper, 4) };
 }
 
+function evidenceCoverage(dimensions: Record<DimensionName, ScoreDimension> | null) {
+  const unknownDimensions = dimensions
+    ? (Object.entries(dimensions) as Array<[DimensionName, ScoreDimension]>).filter(([, item]) => item.state === "UNKNOWN").map(([name]) => name)
+    : Object.keys(WEIGHTS) as DimensionName[];
+  const knownWeightPercent = dimensions
+    ? (Object.entries(dimensions) as Array<[DimensionName, ScoreDimension]>).filter(([, item]) => item.state === "KNOWN").reduce((sum, [name]) => sum + WEIGHTS_PERCENT[name], 0)
+    : 0;
+  return {
+    percent: knownWeightPercent,
+    known_weight_percent: knownWeightPercent,
+    total_weight_percent: 100 as const,
+    unknown_dimensions: unknownDimensions,
+  };
+}
+
+const DIMENSION_REASON_LABELS: Record<DimensionName, string> = {
+  demand: "Спрос",
+  cost: "Сопоставимая стоимость",
+  economics: "Экономика",
+  offer_audience_fit: "Соответствие предложения аудитории",
+  direct_feasibility: "Реализуемость в Яндекс Директе",
+  measurement_readiness: "Готовность измерения",
+  evidence_quality: "Качество доказательств",
+};
+
+function comparativeMainReasons(dimensions: Record<DimensionName, ScoreDimension> | null) {
+  if (!dimensions) return [];
+  return (Object.entries(dimensions) as Array<[DimensionName, ScoreDimension]>)
+    .map(([name, item]) => {
+      const distance = rounded((item.value - UNKNOWN_MIDPOINT) * WEIGHTS[name], 4);
+      return {
+        dimension: name,
+        direction: distance > 0 ? "RAISES_PRIORITY" as const : distance < 0 ? "LOWERS_PRIORITY" as const : "NEUTRAL" as const,
+        weighted_distance_from_midpoint: distance,
+        comparative_only: true as const,
+        reason: `${DIMENSION_REASON_LABELS[name]}: ${item.value}/100 при весе ${item.weight_percent}% влияет только на сравнительный приоритет внутри сопоставимой группы.`,
+      };
+    })
+    .sort((left, right) => Math.abs(right.weighted_distance_from_midpoint) - Math.abs(left.weighted_distance_from_midpoint) || left.dimension.localeCompare(right.dimension))
+    .slice(0, 3);
+}
+
+function campaignDraftStatus(item: PreparedDraft<DraftCandidate>): CampaignDraftStatus {
+  if (item.eligibility.status === "INELIGIBLE") return "BLOCKED";
+  if (item.eligibility.status === "BLOCKED_UNKNOWN" || item.evidenceGaps.status === "UNRESOLVED") return "INSUFFICIENT_EVIDENCE";
+  const hasGaps = item.evidenceGaps.optional.length > 0
+    || Boolean(item.dimensions && Object.values(item.dimensions).some((dimension) => dimension.state === "UNKNOWN"));
+  return hasGaps ? "TESTABLE_WITH_GAPS" : "VIABLE";
+}
+
 function capabilityCohortDescriptor(draft: DraftCandidate) {
   const selection = record(draft.capability_selection);
   return {
@@ -1095,10 +1237,12 @@ export async function scoreCampaignDrafts<T extends DraftCandidate>({
         : item.evidenceGaps.status === "UNRESOLVED"
           ? "BLOCKED_EVIDENCE_GAP" as const
           : "RANKED" as const;
+    const draftStatus = campaignDraftStatus(item);
     const result: ViabilityScoreResult = {
       schema_version: SCORE_SCHEMA_VERSION,
       contract_version: SCORE_CONTRACT_VERSION,
       policy_status: "UNCALIBRATED_POLICY_V1",
+      draft_status: draftStatus,
       eligibility: item.eligibility,
       evidence_gaps: item.evidenceGaps,
       score: item.scoreRaw === null ? null : rounded(item.scoreRaw),
@@ -1115,6 +1259,8 @@ export async function scoreCampaignDrafts<T extends DraftCandidate>({
       },
       rank: item.rank,
       tied_draft_ids: item.tiedDraftIds,
+      evidence_coverage: evidenceCoverage(item.dimensions),
+      main_reasons: comparativeMainReasons(item.dimensions),
       ranking: {
         status: rankingStatus,
         recommendation_set_id: fixedRecommendationSetId,
@@ -1157,6 +1303,7 @@ export async function scoreCampaignDrafts<T extends DraftCandidate>({
         && item.eligibility.status === "ELIGIBLE"
         && item.evidenceGaps.status === "RESOLVED",
       ...(scoreHidden ? { score_visibility_blocker: visibility.reason } : {}),
+      viability_status: draftStatus,
       viability_score: result,
     };
   });

@@ -292,13 +292,15 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 )
                 page.get_by_role("button", name="Утвердить стратегию", exact=True).click()
                 page.get_by_role(
-                    "heading", name="Варианты кампаний рассчитаны", exact=True
+                    "heading", name="Пока нет честно жизнеспособных кампаний", exact=True
                 ).wait_for()
                 self.assertGreaterEqual(page.locator(".owner-campaigns article").count(), 2)
+                self.assertTrue(page.get_by_text(re.compile(r"TESTABLE_WITH_GAPS")).first.is_visible())
+                self.assertTrue(page.get_by_text(re.compile(r"только сравнительный приоритет, не прогноз")).first.is_visible())
                 checkpoint()
 
                 page.get_by_role(
-                    "button", name="Принять рекомендованный набор", exact=True
+                    "button", name="Проверить состав и порядок набора", exact=True
                 ).click()
                 page.get_by_role(
                     "heading", name=re.compile(r"\d+ кампании к созданию")

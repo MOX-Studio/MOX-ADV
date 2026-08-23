@@ -18,6 +18,8 @@ export function RecommendationSetDisclosure({ recommendationSet }: { recommendat
   const profile = recommendationSet.capability_profile || {};
   const playbook = recommendationSet.playbook_release || {};
   const scoreContract = recommendationSet.score_contract || {};
+  const viabilityOutcome = recommendationSet.viability_outcome || {};
+  const repairPlan = Array.isArray(viabilityOutcome.repair_plan) ? viabilityOutcome.repair_plan : [];
   return <>
     <div className="context-strip">
       <div><span>Покрытие</span><strong>{coverage.generated_count ?? candidateAudit.length} создано</strong><small>{coverage.visible_count ?? 0} видимых · {coverage.hidden_count ?? hiddenAudit.length} скрытых · сверка {coverage.reconciliation?.generated_equals_visible_plus_hidden ? "успешна" : "заблокирована"}</small></div>
@@ -29,6 +31,7 @@ export function RecommendationSetDisclosure({ recommendationSet }: { recommendat
       <div><strong>Возможности Яндекс Директа</strong><code>{profile.campaign_type} · {profile.ad_group_type} · {profile.criteria?.join("+")} · {profile.ad_type}</code><small>Точный снимок аккаунта API v501: {recommendationSet.direct_capability_snapshot_id || "отсутствует"} · товарная галерея отключена · сети отключены</small></div>
       <div><strong>Правила сравнительной оценки</strong><code>{scoreContract.version || "viability-score/1.0.0"}</code><small>18 спрос · 12 стоимость · 20 экономика · 18 соответствие · 12 Директ · 10 измерение · 10 доказательства = 100% · середина для неизвестного 50</small></div>
     </section>
+    {viabilityOutcome.status === "NO_VIABLE_DRAFTS" && <section className="wide viability-summary blocked" aria-label="Нет жизнеспособных черновиков"><strong>Пока нет честно жизнеспособных кампаний</strong><p>Положительный результат не подставляется принудительно. Выполните приоритетный план и пересчитайте exact revision.</p><ol>{repairPlan.map((item: Record<string, any>) => <li key={item.code}><b>{item.priority}. {item.code}</b> · {localizedText(item.action)}</li>)}</ol></section>}
     {hiddenAudit.length > 0 && <details className="hidden-drafts"><summary>Проверка скрытых кандидатов · {hiddenAudit.length}</summary><ul>{hiddenAudit.map((item: Record<string, any>) => <li key={item.candidate_id}><strong>{machineLabel(item.candidate_type)}{item.playbook_rule_id ? ` · ${item.playbook_rule_id}` : ""}</strong><span>{item.reason_code}{item.draft_id ? ` · ${item.draft_id}` : ""}</span></li>)}</ul></details>}
   </>;
 }
@@ -57,20 +60,23 @@ export function CampaignDraftCard({ draft, selected = false }: { draft: Record<s
   const cost = score.scopes?.cost || {};
   const blockers = Array.isArray(draft.publication_blockers) ? draft.publication_blockers : [];
   const evidenceQuality = score.dimensions?.evidence_quality?.value ?? score.visibility?.gates?.evidence_quality ?? "неизвестно";
+  const evidenceCoverage = score.evidence_coverage?.percent ?? 0;
+  const mainReasons = Array.isArray(score.main_reasons) ? score.main_reasons.slice(0, 3) : [];
   const tied = Array.isArray(score.tied_draft_ids) && score.tied_draft_ids.length > 1;
   const costRange = cost.range?.low !== null && cost.range?.low !== undefined
     ? `${cost.range.low}–${cost.range.high} ${cost.currency || ""}`.trim() : "диапазон недоступен";
   return <div className={`campaign-draft-card ${selected ? "selected" : ""} ${draft.visibility === "HIDDEN" ? "hidden" : ""}`} data-draft-id={draft.draft_id}>
-    <header><DraftVariantLabel draft={draft} /><em>Сравнительная оценка {score.score ?? "—"}/100</em></header>
+    <header><DraftVariantLabel draft={draft} /><em>{draft.viability_status || score.draft_status || "BLOCKED"} · Сравнительная оценка {score.score ?? "—"}/100</em></header>
     <strong>{draft.dimensions?.keyword_cluster || draft.campaign_name}</strong>
     <p>{draft.dimensions?.offer || draft.ad_text}</p>
     <dl>
       <div><dt>Место</dt><dd>{score.rank ? `Смысловое место ${score.rank}${tied ? " · равенство" : ""}` : "Место не присвоено"}</dd></div>
       <div><dt>Чувствительность</dt><dd>{score.score_lower !== null && score.score_lower !== undefined ? `Диапазон ${score.score_lower}–${score.score_upper}` : "Заблокировано до оценки"}</dd></div>
-      <div><dt>Доказательства</dt><dd>{machineLabel(draft.market_evidence_status, "Недоступно")} · качество {evidenceQuality}</dd></div>
+      <div><dt>Доказательства</dt><dd>{machineLabel(draft.market_evidence_status, "Недоступно")} · покрытие {evidenceCoverage}% · качество {evidenceQuality}</dd></div>
       <div><dt>Частотность</dt><dd>{frequency.observed_unique_count ?? "неизвестно"} · {frequency.source || "источник недоступен"}<small>{[frequency.method, frequency.snapshot_batch_id, frequency.declared_window].filter(Boolean).join(" · ")}</small></dd></div>
       <div><dt>Стоимость</dt><dd>{machineLabel(cost.status, "Недоступно")} · {cost.source || "источник недоступен"}<small>{costRange} · {[cost.scenario, cost.as_of, cost.vat_treatment].filter(Boolean).join(" · ")}</small></dd></div>
     </dl>
+    {mainReasons.length > 0 && <ol aria-label="Главные причины сравнительного приоритета">{mainReasons.map((item: Record<string, any>) => <li key={item.dimension}>{localizedText(item.reason)}</li>)}</ol>}
     <footer><span>Проверка: доступна</span><strong>Публикация: {machineLabel(draft.publish_eligibility, "Заблокировано")}</strong><b>Блокирующие причины · {blockers.length}</b></footer>
     {blockers.length > 0 && <small>{blockers.map((item: Record<string, any>) => item.code).join(" · ")}</small>}
     {draft.visibility === "HIDDEN" && <small>Причина скрытия: {localizedText(draft.suppression_reason || "Сохранённая причина отсутствует · безопасно заблокировано")}</small>}

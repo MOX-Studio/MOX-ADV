@@ -168,9 +168,14 @@ export type OwnerJourneyProjection = {
     audience: string;
     offer: string;
     destination: string;
-    readiness: "Готова к проверке" | "Есть существенные пробелы" | "Заблокирована";
+    status: "VIABLE" | "TESTABLE_WITH_GAPS" | "INSUFFICIENT_EVIDENCE" | "BLOCKED";
+    readiness: "Готова к проверке" | "Есть существенные пробелы" | "Недостаточно доказательств" | "Заблокирована";
+    comparativeScore: string;
+    evidenceCoverage: string;
+    sensitivity: string;
     reasons: string[];
     selected: boolean;
+    agentRecommended: boolean;
   }>;
   packageSummary: {
     campaignCount: number;
@@ -376,6 +381,18 @@ function correctionWithStatus(state: InternalState, status: string) {
   return state.package_corrections.find((item) => item.status === status) ?? null;
 }
 
+function orderedShortlistCandidates(view: InternalView) {
+  const recommendationSet = record(view.state.recommendation_set);
+  const recommendedIds = list(record(recommendationSet.recommended_shortlist).draft_ids).map(String);
+  const controls = view.shortlist_controls.filter((item) => item.status !== "BLOCKED");
+  return [...controls].sort((left, right) => {
+    const leftIndex = recommendedIds.indexOf(left.draft_id);
+    const rightIndex = recommendedIds.indexOf(right.draft_id);
+    return (leftIndex < 0 ? Number.POSITIVE_INFINITY : leftIndex) - (rightIndex < 0 ? Number.POSITIVE_INFINITY : rightIndex)
+      || left.draft_id.localeCompare(right.draft_id);
+  });
+}
+
 function actionDescriptor(view: InternalView): InternalActionDescriptor | null {
   const state = view.state;
   if (!state.context_state) {
@@ -450,22 +467,22 @@ function actionDescriptor(view: InternalView): InternalActionDescriptor | null {
   }
 
   if (!state.package_review) {
-    const selected = state.shortlist?.selections.length ?? 0;
-    const available = view.shortlist_controls.filter((item) => item.status === "AVAILABLE").length;
-    if (selected === 0 && available > 0) {
+    const candidates = orderedShortlistCandidates(view);
+    if (candidates.length > 0) {
+      const selectedOrder = new Map((state.shortlist?.selections ?? []).map((item, index) => [item.draft_id, index + 1]));
+      const drafts = list(record(state.recommendation_set).drafts).map(record);
       return {
         kind: "prepare-package",
-        label: "Принять рекомендованный набор",
-        description: "Агент включит готовые варианты и подготовит одну итоговую проверку.",
-        fields: [],
-      };
-    }
-    if (selected > 0 && allowed(view, "review_package")) {
-      return {
-        kind: "review-package",
-        label: "Перейти к итоговой проверке",
-        description: "Будет показано, что именно создаст агент и почему показы останутся выключены.",
-        fields: [],
+        label: "Проверить состав и порядок набора",
+        description: "Агент предложил порядок. Укажите 0, чтобы исключить вариант, или поменяйте номера; заблокированные кампании недоступны.",
+        fields: candidates.map((candidate, index) => ({
+          key: `campaign_${index + 1}`,
+          label: ownerText(drafts.find((draft) => draft.draft_id === candidate.draft_id)?.campaign_name, `Кампания ${index + 1}`, 255),
+          control: "number" as const,
+          value: selectedOrder.get(candidate.draft_id) ?? (candidate.status === "REMOVED" ? 0 : index + 1),
+          required: true,
+          help: "0 — исключить; положительное число — место в пакете.",
+        })),
       };
     }
     return null;
@@ -868,7 +885,9 @@ function appliedPractice(state: InternalState): OwnerJourneyProjection["appliedP
 
 function campaignOptions(view: InternalView): OwnerJourneyProjection["campaignOptions"] {
   const state = view.state;
-  const drafts = list(record(state.recommendation_set).drafts);
+  const recommendationSet = record(state.recommendation_set);
+  const drafts = list(recommendationSet.drafts);
+  const recommendedIds = new Set(list(record(recommendationSet.recommended_shortlist).draft_ids).map(String));
   return drafts
     .filter((value) => record(value).visibility !== "HIDDEN")
     .slice(0, 6)
@@ -876,17 +895,30 @@ function campaignOptions(view: InternalView): OwnerJourneyProjection["campaignOp
       const draft = record(value);
       const score = record(draft.viability_score);
       const eligibility = record(score.eligibility);
+      const gaps = record(score.evidence_gaps);
+      const coverage = record(score.evidence_coverage);
       const selected = state.shortlist?.selections.some((item) => item.draft_id === draft.draft_id) ?? false;
-      const blocked = draft.publish_eligibility === "BLOCKED_HARD" || eligibility.status !== "ELIGIBLE";
-      const reasons = list(eligibility.reasons).map((reason) => ownerText(reason, "", 240)).filter(Boolean).slice(0, 3);
+      const status = ["VIABLE", "TESTABLE_WITH_GAPS", "INSUFFICIENT_EVIDENCE", "BLOCKED"].includes(String(draft.viability_status))
+        ? String(draft.viability_status) as "VIABLE" | "TESTABLE_WITH_GAPS" | "INSUFFICIENT_EVIDENCE" | "BLOCKED" : "BLOCKED";
+      const comparativeReasons = list(score.main_reasons).map((reason) => ownerText(record(reason).reason, "", 240)).filter(Boolean);
+      const blockerReasons = list(eligibility.blockers).map((reason) => ownerText(record(reason).remediation, "", 240)).filter(Boolean);
+      const gapReasons = [...list(gaps.required), ...list(gaps.optional)].map((reason) => ownerText(record(reason).description, "", 240)).filter(Boolean);
+      const reasons = (score.score === null || score.score === undefined ? [...blockerReasons, ...gapReasons] : [...comparativeReasons, ...gapReasons]).slice(0, 3);
       return {
         name: ownerText(draft.campaign_name, `Кампания ${index + 1}`, 255),
         audience: ownerText(answerValue(state, "target_audience"), "Целевая аудитория уточняется", 500),
         offer: ownerText(answerValue(state, "advertised_offer"), "Предложение уточняется", 500),
         destination: ownerText(answerValue(state, "landing_page"), "Посадочная страница уточняется", 1_500),
-        readiness: blocked ? "Заблокирована" as const : reasons.length ? "Есть существенные пробелы" as const : "Готова к проверке" as const,
+        status,
+        readiness: status === "BLOCKED" ? "Заблокирована" as const
+          : status === "INSUFFICIENT_EVIDENCE" ? "Недостаточно доказательств" as const
+            : status === "TESTABLE_WITH_GAPS" ? "Есть существенные пробелы" as const : "Готова к проверке" as const,
+        comparativeScore: score.score === null || score.score === undefined ? "Не рассчитывается до hard eligibility" : `${score.score}/100 · только сравнительный приоритет, не прогноз`,
+        evidenceCoverage: `${Number(coverage.percent ?? 0)}%`,
+        sensitivity: score.score_lower === null || score.score_lower === undefined ? "Недоступна до оценки" : `${score.score_lower}–${score.score_upper}`,
         reasons,
         selected,
+        agentRecommended: recommendedIds.has(String(draft.draft_id)),
       };
     });
 }
@@ -934,7 +966,18 @@ function outcome(view: InternalView, stage: OwnerJourneyStageId, unknowns: strin
   }
   if (stage === "findings") return { status: unknowns.length ? "blocked" : "ready", headline: "Агент собрал понимание бизнеса", summary: "Проверьте только выводы, которые существенно влияют на рекламу." };
   if (stage === "strategy") return { status: "ready", headline: "Стратегия подготовлена", summary: "Рекомендации уже заполнены; подтвердите бизнес-смысл одним решением." };
-  if (stage === "campaigns") return { status: unknowns.length ? "blocked" : "ready", headline: "Варианты кампаний рассчитаны", summary: "Сравните различия и примите рекомендованный набор для проверки." };
+  if (stage === "campaigns") {
+    const viabilityOutcome = record(record(state.recommendation_set).viability_outcome);
+    if (viabilityOutcome.status === "NO_VIABLE_DRAFTS") {
+      const repairs = list(viabilityOutcome.repair_plan).map((item) => ownerText(record(item).action, "", 240)).filter(Boolean).slice(0, 3);
+      return {
+        status: "blocked",
+        headline: "Пока нет честно жизнеспособных кампаний",
+        summary: repairs.length ? `Сначала: ${repairs.join(" Затем: ")}` : "Агент не будет принудительно показывать положительный результат без достаточных оснований.",
+      };
+    }
+    return { status: unknowns.length ? "blocked" : "ready", headline: "Варианты кампаний рассчитаны", summary: "Сравните различия и примите рекомендованный набор для проверки." };
+  }
   const correctedItemIds = new Set(state.package_corrections
     .filter((correction) => correction.terminal_outcome === "PASS_AFTER_CORRECTION")
     .map((correction) => correction.source.item_execution_id));
@@ -1347,9 +1390,25 @@ export class P0OwnerJourney {
         },
       });
     } else if (descriptor.kind === "prepare-package") {
-      for (const control of view.shortlist_controls.filter((item) => item.status === "AVAILABLE")) {
-        await command({ action: "add_to_shortlist", draft_id: control.draft_id });
+      const candidates = orderedShortlistCandidates(view);
+      const desired = candidates.map((candidate, index) => ({
+        ...candidate,
+        order: Number(values[`campaign_${index + 1}`] ?? descriptor.fields[index]?.value),
+      })).filter((candidate) => Number.isSafeInteger(candidate.order) && candidate.order > 0)
+        .sort((left, right) => left.order - right.order || left.draft_id.localeCompare(right.draft_id));
+      if (new Set(desired.map((candidate) => candidate.order)).size !== desired.length) {
+        throw new P0ApplicationError("P0_OWNER_SHORTLIST_ORDER_INVALID", "Каждая выбранная кампания должна иметь отдельное положительное место.");
       }
+      const desiredIds = desired.map((candidate) => candidate.draft_id);
+      for (const selected of [...(view.state.shortlist?.selections ?? [])]) {
+        if (!desiredIds.includes(selected.draft_id)) await command({ action: "remove_from_shortlist", draft_id: selected.draft_id });
+      }
+      for (const candidate of desired) {
+        const currentControl = view.shortlist_controls.find((item) => item.draft_id === candidate.draft_id);
+        if (currentControl?.status === "REMOVED") await command({ action: "restore_to_shortlist", draft_id: candidate.draft_id });
+        else if (currentControl?.status === "AVAILABLE") await command({ action: "add_to_shortlist", draft_id: candidate.draft_id });
+      }
+      if (desiredIds.length > 1) await command({ action: "reorder_shortlist", ordered_draft_ids: desiredIds });
       if (allowed(view, "review_package")) await command({ action: "review_package" });
     } else if (descriptor.kind === "review-package") {
       await command({ action: "review_package" });

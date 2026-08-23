@@ -2073,12 +2073,22 @@ test("ordered multi-Draft shortlist supports add/remove/positional restore, exac
   result = await value.application.command("owner", { action: "restore_to_shortlist", expected_revision: result.revision, draft_id: first.draft_id });
   assert.deepEqual(result.state.shortlist.selections.map((item) => item.draft_id), [first.draft_id, second.draft_id]);
   assert.deepEqual(result.state.shortlist.removed_selections, []);
+  result = await value.application.command("owner", {
+    action: "reorder_shortlist",
+    expected_revision: result.revision,
+    ordered_draft_ids: [second.draft_id, first.draft_id],
+  });
+  assert.deepEqual(result.state.shortlist.selections.map((item) => item.draft_id), [second.draft_id, first.draft_id]);
+  await assert.rejects(
+    value.application.command("owner", { action: "reorder_shortlist", expected_revision: result.revision, ordered_draft_ids: [first.draft_id] }),
+    (error) => error instanceof P0ApplicationError && error.code === "P0_SHORTLIST_ORDER_INVALID",
+  );
   assert.equal(JSON.stringify(result.state.recommendation_set), recommendationBefore);
   assert.equal(JSON.stringify(result.state.analytics_evidence_snapshot), evidenceBefore);
 
   const restarted = new P0Application({ store: value.store, adapters: value.adapter });
   result = await restarted.query("owner");
-  assert.deepEqual(result.state.shortlist.selections.map((item) => item.draft_id), [first.draft_id, second.draft_id]);
+  assert.deepEqual(result.state.shortlist.selections.map((item) => item.draft_id), [second.draft_id, first.draft_id]);
   const reviewTab = await restarted.query("owner");
   const staleReviewTab = await restarted.query("owner");
   const readsBeforeReview = value.contextReads();
@@ -3907,13 +3917,20 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
     ["Мобильные устройства", "Существующая посадочная"],
   ]);
   assert.equal(projection.businessReadiness.destination.priorityCorrections.length <= 3, true);
+  assert.equal(projection.campaignOptions.every((campaign) => ["VIABLE", "TESTABLE_WITH_GAPS", "INSUFFICIENT_EVIDENCE", "BLOCKED"].includes(campaign.status)), true);
+  assert.equal(projection.campaignOptions.every((campaign) => /сравнительный приоритет|hard eligibility/iu.test(campaign.comparativeScore)), true);
+  assert.equal(projection.campaignOptions.every((campaign) => /^\d+%$/u.test(campaign.evidenceCoverage)), true);
+  assert.equal(projection.campaignOptions.every((campaign) => campaign.reasons.length <= 3), true);
+  assert.equal(projection.primaryAction.fields.length >= 2, true);
+  const ownerShortlistOrder = Object.fromEntries(projection.primaryAction.fields.map((field, index) => [field.key, index < 2 ? String(2 - index) : "0"]));
   projection = await journey.submit(ownerKey, {
     handle: projection.primaryAction.handle,
-    values: {},
+    values: ownerShortlistOrder,
   });
   ownerResponses.push(projection);
   assert.equal(projection.journey.currentStage, "review");
   assert.equal(projection.packageSummary.preflight, "9/9 бизнес-проверок пройдено");
+  assert.equal(projection.packageSummary.campaignCount, 2);
   assert.equal(projection.primaryAction.label, "Подтвердить и создать без запуска");
 
   for (const forbidden of [

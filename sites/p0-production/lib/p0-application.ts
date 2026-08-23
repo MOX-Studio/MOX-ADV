@@ -45,6 +45,7 @@ import {
   directProjectionMaterialDelta,
   fingerprintDirectProjection,
   preserveSelectedConditionalProjection,
+  recommendationSetViabilityOutcome,
   type CampaignRecommendationSet,
   type DirectCapabilitySnapshot,
 } from "./campaign-fanout.ts";
@@ -147,7 +148,7 @@ import {
 } from "./measurement-destination-readiness.ts";
 
 export const P0_APPLICATION_CONTRACT = "mox-adv.p0.application";
-export const P0_APPLICATION_CONTRACT_VERSION = "1.18.0";
+export const P0_APPLICATION_CONTRACT_VERSION = "1.19.0";
 export const P0_DOCUMENT_SCHEMA = "p0-application-document-v13";
 const P0_LEGACY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4", "p0-application-document-v5", "p0-application-document-v6", "p0-application-document-v7", "p0-application-document-v8", "p0-application-document-v9", "p0-application-document-v10", "p0-application-document-v11", "p0-application-document-v12"]);
 const P0_PRE_PACKAGE_AUTHORITY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4"]);
@@ -577,6 +578,9 @@ export const P0_COMMAND_TRUTH_TABLE = {
   ),
   restore_to_shortlist: (state: P0Document) => Boolean(
     state.strategy && state.recommendation_set && state.shortlist?.removed_selections.length && packageNotDispatched(state),
+  ),
+  reorder_shortlist: (state: P0Document) => Boolean(
+    state.strategy && state.recommendation_set && state.shortlist && state.shortlist.selections.length > 1 && packageNotDispatched(state),
   ),
   review_package: (state: P0Document) => Boolean(
     state.strategy && state.recommendation_set && state.shortlist?.selections.length && packageNotDispatched(state),
@@ -1761,15 +1765,24 @@ async function buildMaterialDraftCorrection(
     return currentDraft ? {
       ...candidate,
       visibility: currentDraft.visibility,
-      reason_code: currentDraft.visibility === "VISIBLE"
-        ? "VISIBLE:GENERATED_DRAFT"
-        : String(currentDraft.suppression_reason || "HIDDEN:STRUCTURAL"),
+      disposition: currentDraft.visibility === "HIDDEN" ? "HIDDEN"
+        : ["BLOCKED", "INSUFFICIENT_EVIDENCE"].includes(String(currentDraft.viability_status)) ? "BLOCKED" : "VISIBLE",
+      reason_code: currentDraft.visibility === "HIDDEN"
+        ? String(currentDraft.suppression_reason || "HIDDEN:STRUCTURAL")
+        : ["BLOCKED", "INSUFFICIENT_EVIDENCE"].includes(String(currentDraft.viability_status)) ? `BLOCKED:${currentDraft.viability_status}` : "VISIBLE:GENERATED_DRAFT",
     } : candidate;
   });
   correctedRecommendationSet.coverage.visible_count = correctedRecommendationSet.candidate_audit.filter((candidate) => candidate.visibility === "VISIBLE").length;
   correctedRecommendationSet.coverage.hidden_count = correctedRecommendationSet.candidate_audit.length - Number(correctedRecommendationSet.coverage.visible_count);
   correctedRecommendationSet.coverage.visible_drafts = correctedRecommendationSet.drafts.filter((item) => item.visibility === "VISIBLE").length;
   correctedRecommendationSet.coverage.hidden_drafts = correctedRecommendationSet.drafts.length - Number(correctedRecommendationSet.coverage.visible_drafts);
+  correctedRecommendationSet.coverage.blocked_count = correctedRecommendationSet.candidate_audit.filter((candidate) => candidate.disposition === "BLOCKED").length;
+  correctedRecommendationSet.viability_outcome = recommendationSetViabilityOutcome(correctedRecommendationSet.drafts);
+  correctedRecommendationSet.recommended_shortlist = {
+    source: "AGENT_COMPARATIVE_PRIORITY",
+    draft_ids: correctedRecommendationSet.drafts.filter((item) => item.shortlist_eligible).sort((left, right) => Number(left.viability_score?.rank ?? Number.POSITIVE_INFINITY) - Number(right.viability_score?.rank ?? Number.POSITIVE_INFINITY) || left.draft_id.localeCompare(right.draft_id)).map((item) => item.draft_id),
+    bounded: true,
+  };
   return { correctedRecommendationSet, correctedDraft };
 }
 
@@ -2333,7 +2346,7 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
     if (
       !state.recommendation_set
       || state.recommendation_set.strategy_revision_id !== strategy.strategy_revision_id
-      || state.recommendation_set.schema_version !== "campaign-recommendation-set-v3"
+      || state.recommendation_set.schema_version !== "campaign-recommendation-set-v4"
     ) {
       state.recommendation_set = await buildCampaignRecommendationSet({
         model: model as unknown as Record<string, unknown>,
@@ -4100,15 +4113,24 @@ export class P0Application {
           return rescoredDraft ? {
             ...candidate,
             visibility: rescoredDraft.visibility,
-            reason_code: rescoredDraft.visibility === "VISIBLE"
-              ? "VISIBLE:GENERATED_DRAFT"
-              : String(rescoredDraft.suppression_reason || "HIDDEN:STRUCTURAL"),
+            disposition: rescoredDraft.visibility === "HIDDEN" ? "HIDDEN"
+              : ["BLOCKED", "INSUFFICIENT_EVIDENCE"].includes(String(rescoredDraft.viability_status)) ? "BLOCKED" : "VISIBLE",
+            reason_code: rescoredDraft.visibility === "HIDDEN"
+              ? String(rescoredDraft.suppression_reason || "HIDDEN:STRUCTURAL")
+              : ["BLOCKED", "INSUFFICIENT_EVIDENCE"].includes(String(rescoredDraft.viability_status)) ? `BLOCKED:${rescoredDraft.viability_status}` : "VISIBLE:GENERATED_DRAFT",
           } : candidate;
         });
         recommendationSet.coverage.visible_count = recommendationSet.candidate_audit.filter((candidate) => candidate.visibility === "VISIBLE").length;
         recommendationSet.coverage.hidden_count = recommendationSet.candidate_audit.length - Number(recommendationSet.coverage.visible_count);
         recommendationSet.coverage.visible_drafts = recommendationSet.drafts.filter((item) => item.visibility === "VISIBLE").length;
         recommendationSet.coverage.hidden_drafts = recommendationSet.drafts.length - Number(recommendationSet.coverage.visible_drafts);
+        recommendationSet.coverage.blocked_count = recommendationSet.candidate_audit.filter((candidate) => candidate.disposition === "BLOCKED").length;
+        recommendationSet.viability_outcome = recommendationSetViabilityOutcome(recommendationSet.drafts);
+        recommendationSet.recommended_shortlist = {
+          source: "AGENT_COMPARATIVE_PRIORITY",
+          draft_ids: recommendationSet.drafts.filter((item) => item.shortlist_eligible).sort((left, right) => Number(left.viability_score?.rank ?? Number.POSITIVE_INFINITY) - Number(right.viability_score?.rank ?? Number.POSITIVE_INFINITY) || left.draft_id.localeCompare(right.draft_id)).map((item) => item.draft_id),
+          bounded: true,
+        };
         await invalidateDecisionAuthority(state, "DRAFT_MATERIAL_CHANGE", "A material publishable Campaign Draft edit changed exact package lineage.", editedAt);
         if (!state.shortlist) fail("P0_SHORTLIST_MISSING", "Versioned shortlist отсутствует у current Recommendation Set.");
         state.shortlist = await rebaseShortlist({
@@ -4118,17 +4140,27 @@ export class P0Application {
           updatedAt: editedAt,
         });
       }
-    } else if (action === "add_to_shortlist" || action === "remove_from_shortlist" || action === "restore_to_shortlist") {
+    } else if (action === "add_to_shortlist" || action === "remove_from_shortlist" || action === "restore_to_shortlist" || action === "reorder_shortlist") {
       if (!state.strategy || !state.recommendation_set || !state.shortlist) {
         fail("P0_SHORTLIST_MISSING", "Shortlist mutation требует current Strategy и Recommendation Set.");
       }
-      const draftId = requiredInput(payload.draft_id, "Campaign Draft", 255);
-      const draft = state.recommendation_set.drafts.find((item) => item.draft_id === draftId);
-      if (!draft) fail("P0_DRAFT_INVALID", "Draft отсутствует в current Recommendation Set.");
       const changedAt = this.adapters.now();
-      const selections = structuredClone(state.shortlist.selections);
+      let selections = structuredClone(state.shortlist.selections);
       let removedSelections = structuredClone(state.shortlist.removed_selections);
-      if (action === "add_to_shortlist") {
+      const draftId = action === "reorder_shortlist" ? "" : requiredInput(payload.draft_id, "Campaign Draft", 255);
+      const draft = action === "reorder_shortlist" ? null : state.recommendation_set.drafts.find((item) => item.draft_id === draftId);
+      if (action !== "reorder_shortlist" && !draft) fail("P0_DRAFT_INVALID", "Draft отсутствует в current Recommendation Set.");
+      if (action === "reorder_shortlist") {
+        const orderedDraftIds = Array.isArray(payload.ordered_draft_ids)
+          ? payload.ordered_draft_ids.map((item) => cleanText(String(item), 255)) : [];
+        const selectedIds = selections.map((item) => item.draft_id);
+        if (orderedDraftIds.length !== selectedIds.length
+          || new Set(orderedDraftIds).size !== orderedDraftIds.length
+          || orderedDraftIds.some((id) => !selectedIds.includes(id))) {
+          fail("P0_SHORTLIST_ORDER_INVALID", "Новый порядок должен содержать каждый current selected Draft ровно один раз.");
+        }
+        selections = orderedDraftIds.map((id) => selections.find((item) => item.draft_id === id)!);
+      } else if (action === "add_to_shortlist") {
         if (selections.some((item) => item.draft_id === draftId)) {
           fail("P0_SHORTLIST_DUPLICATE", "Draft уже присутствует в ordered shortlist.");
         }
@@ -4136,7 +4168,7 @@ export class P0Application {
           fail("P0_SHORTLIST_RESTORE_REQUIRED", "Removed Draft нужно вернуть через restore, чтобы сохранить positional semantics.");
         }
         try {
-          selections.push(selectionForDraft(draft, state.recommendation_set));
+          selections.push(selectionForDraft(draft!, state.recommendation_set));
         } catch (error) {
           fail("P0_SHORTLIST_BLOCKED", errorMessage(error));
         }
@@ -4153,7 +4185,7 @@ export class P0Application {
         if (!removed) fail("P0_SHORTLIST_NOT_REMOVED", "Draft не имеет current removed disposition для restore.");
         let exact;
         try {
-          exact = selectionForDraft(draft, state.recommendation_set);
+          exact = selectionForDraft(draft!, state.recommendation_set);
         } catch (error) {
           fail("P0_SHORTLIST_BLOCKED", errorMessage(error));
         }
@@ -4175,12 +4207,14 @@ export class P0Application {
       if (state.package_review || state.human_decision_gate || state.shortlist.selections.length > 0) {
         await invalidateDecisionAuthority(
           state,
-          action === "restore_to_shortlist" ? "SHORTLIST_ORDER_CHANGED" : "SHORTLIST_MEMBERSHIP_CHANGED",
+          action === "restore_to_shortlist" || action === "reorder_shortlist" ? "SHORTLIST_ORDER_CHANGED" : "SHORTLIST_MEMBERSHIP_CHANGED",
           action === "add_to_shortlist"
             ? "Draft added to ordered shortlist."
             : action === "remove_from_shortlist"
               ? "Draft removed from ordered shortlist without changing Recommendation Set evidence or candidate audit."
-              : "Removed Draft restored at its previous shortlist position.",
+              : action === "reorder_shortlist"
+                ? "Owner changed the exact Draft order without changing Recommendation Set evidence."
+                : "Removed Draft restored at its previous shortlist position.",
           changedAt,
         );
       }

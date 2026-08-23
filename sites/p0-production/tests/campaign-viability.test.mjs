@@ -225,6 +225,15 @@ test("uses the exact versioned weights and discloses deterministic contributions
     assert.equal(result.evidence_gaps.status, "RESOLVED");
     assert.equal(result.explanation.label, "COMPARATIVE PRELAUNCH PRIORITY / NOT A PREDICTION");
     assert.equal(result.explanation.calibration_used, false);
+    assert.ok(["VIABLE", "TESTABLE_WITH_GAPS"].includes(result.draft_status));
+    assert.equal(result.eligibility.gates.every((gate) => gate.evaluated_before_score === true), true);
+    assert.deepEqual(result.eligibility.gates.map((gate) => gate.gate), [
+      "LINEAGE", "ECONOMICS", "DESTINATION", "MEASUREMENT", "DEMAND", "CAPABILITY",
+      "POLICY", "DUPLICATE_PROTECTION", "PROJECTION", "PROTOCOL_BUDGET_READINESS", "NON_SERVING_SAFETY",
+    ]);
+    assert.ok(result.evidence_coverage.percent >= 0 && result.evidence_coverage.percent <= 100);
+    assert.ok(result.main_reasons.length >= 2 && result.main_reasons.length <= 3);
+    assert.equal(result.main_reasons.every((reason) => reason.comparative_only === true), true);
     assert.equal(result.ranking.recommendation_set_id, first.recommendation_set_id);
     assert.equal(result.ranking.status, "RANKED");
     assert.ok(result.ranking.cohort_id);
@@ -279,6 +288,7 @@ test("evaluates hard eligibility and required EVIDENCE_GAP before score or rank"
     assert.equal(draft.viability_score.eligibility.status, "BLOCKED_UNKNOWN");
     assert.equal(draft.viability_score.score, null);
     assert.equal(draft.viability_score.rank, null);
+    assert.equal(draft.viability_score.draft_status, "INSUFFICIENT_EVIDENCE");
     assert.equal(draft.shortlist_eligible, false);
     assert.equal(draft.publish_eligibility, "ELIGIBLE", "score must not rewrite the existing structural publication decision");
   }
@@ -299,6 +309,7 @@ test("evaluates hard eligibility and required EVIDENCE_GAP before score or rank"
     assert.ok(draft.viability_score.evidence_gaps.required.some((gap) => gap.code === "DEMAND_EVIDENCE_GAP"));
     assert.equal(draft.viability_score.score, null);
     assert.equal(draft.viability_score.rank, null);
+    assert.equal(draft.viability_score.draft_status, "INSUFFICIENT_EVIDENCE");
     assert.equal(draft.visibility, "VISIBLE", "required missing evidence stays review-visible");
     assert.equal(draft.shortlist_eligible, false);
   }
@@ -341,6 +352,10 @@ test("preserves exact semantic ties only inside the fixed Recommendation Set cap
     ...structuredClone(source),
     draft_id: id,
     draft_revision_id: `${id}-r1`,
+    publish_projection: {
+      ...structuredClone(source.publish_projection),
+      lineage: { ...structuredClone(source.publish_projection.lineage), draft_id: id, draft_revision_id: `${id}-r1` },
+    },
     capability_selection: {
       ...structuredClone(source.capability_selection),
       eligible: true,
@@ -427,6 +442,8 @@ test("does not compare distinct exact keyword-auction cost scopes", async () => 
     const draft = structuredClone(source);
     draft.draft_id = id;
     draft.draft_revision_id = `${id}-r1`;
+    draft.publish_projection.lineage.draft_id = id;
+    draft.publish_projection.lineage.draft_revision_id = `${id}-r1`;
     draft.market_evidence.cost.scope.keyword_id = keywordId;
     draft.market_evidence.cost.range = { low, high, kind: "SCENARIO" };
     draft.viability_score = undefined;
@@ -451,6 +468,10 @@ test("recomputes field-level score delta after a material manual edit", async ()
     keyword: "общая нерелевантная фраза",
     ad_title: "Другое объявление",
     ad_text: "Текст без продукта, аудитории и предложения",
+    publish_projection: {
+      ...structuredClone(previous.publish_projection),
+      lineage: { ...structuredClone(previous.publish_projection.lineage), draft_revision_id: `${previous.draft_id}-r2` },
+    },
   };
   const rescored = await rescore(value.drafts.map((draft) => draft.draft_id === edited.draft_id ? edited : draft));
   const current = rescored.find((draft) => draft.draft_id === edited.draft_id);
@@ -537,4 +558,5 @@ test("current Business Model economics uncertainty blocks eligibility even when 
   assert.ok(scored.every((draft) => draft.viability_score.eligibility.blockers.some((item) => item.code === "ECONOMICS_MATERIAL_UNCERTAINTY")));
   assert.ok(scored.every((draft) => draft.shortlist_eligible === false));
   assert.ok(scored.every((draft) => draft.viability_score.score === null));
+  assert.ok(scored.every((draft) => draft.viability_score.draft_status === "INSUFFICIENT_EVIDENCE"));
 });

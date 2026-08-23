@@ -41,6 +41,11 @@ const recommendationSet = {
     release_version: "1.0.0",
     content_digest: `sha256:${"a".repeat(64)}`,
   },
+  viability_outcome: {
+    status: "NO_VIABLE_DRAFTS",
+    viable_count: 0,
+    repair_plan: [{ priority: 1, code: "AUCTION_PROTOCOL_PREREGISTRATION_PENDING", action: "Пререгистрировать точный Auction Protocol." }],
+  },
   candidate_audit: [{
     candidate_id: "playbook-rule:contradicted",
     candidate_type: "PLAYBOOK_RULE",
@@ -63,6 +68,8 @@ test("Recommendation Set UI discloses reconciled audit counts plus exact capabil
   assert.match(html, /direct-capability:owner-account:core/);
   assert.match(html, /Проверка скрытых кандидатов · 1/);
   assert.match(html, /HIDDEN:PLAYBOOK_RULE_CONTRADICTED/);
+  assert.match(html, /Пока нет честно жизнеспособных кампаний/);
+  assert.match(html, /AUCTION_PROTOCOL_PREREGISTRATION_PENDING/);
 });
 
 test("Recommendation Set UI distinguishes comparator and one-factor improvement and renders explicit blockers", async (t) => {
@@ -97,8 +104,14 @@ function scoreFixture(overrides = {}) {
     score_raw: 72,
     score_lower: 62,
     score_upper: 82,
+    draft_status: "TESTABLE_WITH_GAPS",
     rank: 1,
     tied_draft_ids: ["draft-a", "draft-b"],
+    evidence_coverage: { percent: 88, known_weight_percent: 88, total_weight_percent: 100, unknown_dimensions: ["cost"] },
+    main_reasons: [
+      { dimension: "direct_feasibility", direction: "RAISES_PRIORITY", weighted_distance_from_midpoint: 6, comparative_only: true, reason: "Реализуемость повышает только сравнительный приоритет." },
+      { dimension: "demand", direction: "RAISES_PRIORITY", weighted_distance_from_midpoint: 5.4, comparative_only: true, reason: "Спрос повышает только сравнительный приоритет." },
+    ],
     ranking: { status: "RANKED", recommendation_set_id: "recommendation-set-fixed", cohort_id: "capability-cohort:core", comparable_set_id: "comparable-set:core" },
     dimensions: {
       demand: dimension(80, 18),
@@ -145,6 +158,7 @@ test("Campaign Canvas card separately discloses variant, comparative rank, evide
   const draft = {
     draft_id: "draft-a",
     visibility: "VISIBLE",
+    viability_status: "TESTABLE_WITH_GAPS",
     variant: { kind: "IMPROVEMENT", hypothesis: { changed_family: "QUALIFIED_ACTION" } },
     treatment_delta: { changed_family: "QUALIFIED_ACTION", changed_fields: ["/direct/keyword/Keyword"] },
     dimensions: { keyword_cluster: "Demand pack: cluster-a", offer: "Целевое действие" },
@@ -158,7 +172,10 @@ test("Campaign Canvas card separately discloses variant, comparative rank, evide
   assert.match(html, /Сравнительная оценка 72\/100/);
   assert.match(html, /Смысловое место 1 · равенство/);
   assert.match(html, /Диапазон 62–82/);
-  assert.match(html, /Частично · качество 80/);
+  assert.match(html, /TESTABLE_WITH_GAPS/);
+  assert.match(html, /Частично · покрытие 88% · качество 80/);
+  assert.match(html, /Главные причины сравнительного приоритета/);
+  assert.match(html, /Реализуемость повышает только сравнительный приоритет/);
   assert.match(html, /67 · YANDEX_WORDSTAT_V1/);
   assert.match(html, /Недоступно · источник недоступен/);
   assert.match(html, /Проверка: доступна/);
