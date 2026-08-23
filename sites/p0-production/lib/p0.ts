@@ -879,6 +879,7 @@ function accessConfiguration() {
   return {
     directToken: runtime.YANDEX_DIRECT_OAUTH_TOKEN ?? "",
     directExpectedAccount: runtime.YANDEX_DIRECT_CLIENT_LOGIN ?? "",
+    directCampaignId: runtime.YANDEX_DIRECT_CAMPAIGN_ID ?? "",
     directBusinessLabel: runtime.P0_DIRECT_BUSINESS_LABEL ?? "",
     metrikaToken: runtime.YANDEX_METRICA_OAUTH_TOKEN ?? "",
     metrikaExpectedCounterId: runtime.YANDEX_METRICA_COUNTER_ID ?? "",

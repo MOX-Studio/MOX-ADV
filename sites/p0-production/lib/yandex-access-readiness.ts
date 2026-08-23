@@ -14,6 +14,7 @@ type Fetcher = typeof fetch;
 type YandexAccessConfiguration = {
   directToken: string;
   directExpectedAccount?: string;
+  directCampaignId?: string;
   directBusinessLabel?: string;
   metrikaToken: string;
   metrikaExpectedCounterId?: string;
@@ -69,10 +70,7 @@ export class YandexAccessReadinessAdapter implements AccessReadinessAdapter {
 
   async verifyBinding(input: { accountIdentity: string; counterIdentity: string }): Promise<AccessBindingVerification> {
     const direct = await Promise.allSettled([
-      verifyDirectAccountBinding({
-        token: this.configuration.directToken,
-        expectedAccount: input.accountIdentity,
-      }, this.fetcher, this.now),
+      this.verifyDirectReadBinding(input.accountIdentity),
       verifyMetrikaCounterBinding({
         token: this.configuration.metrikaToken,
         expectedCounterId: input.counterIdentity,
@@ -84,7 +82,7 @@ export class YandexAccessReadinessAdapter implements AccessReadinessAdapter {
     const metrikaValue = direct[1].status === "fulfilled" ? direct[1].value : null;
     return {
       direct: {
-        matched: directValue?.binding.matched === true && directValue.account === input.accountIdentity,
+        matched: directValue?.matched === true && directValue.account === input.accountIdentity,
         scope_granted: direct[0].status === "fulfilled",
       },
       metrika: {
@@ -107,7 +105,11 @@ export class YandexAccessReadinessAdapter implements AccessReadinessAdapter {
       },
       body: JSON.stringify({ method: "get", params: { FieldNames: ["Login", "ClientInfo"] } }),
     }), "Direct");
-    if (payload.error) throw new Error("Direct official API rejected account discovery.");
+    if (payload.error) {
+      const error = record(payload.error);
+      if (Number(error.error_code) === 3228) return this.discoverConfiguredDirectAccount();
+      throw new Error("Direct official API rejected account discovery.");
+    }
     return list(record(payload.result).Clients).map((value) => {
       const client = record(value);
       const identity = cleanText(String(client.Login ?? ""), 255);
@@ -120,6 +122,65 @@ export class YandexAccessReadinessAdapter implements AccessReadinessAdapter {
     }).filter((choice) => choice.provider_identity
       && (!this.configuration.directExpectedAccount
         || choice.provider_identity === this.configuration.directExpectedAccount));
+  }
+
+  private async discoverConfiguredDirectAccount() {
+    const account = cleanText(this.configuration.directExpectedAccount ?? "", 255);
+    const campaignId = cleanText(this.configuration.directCampaignId ?? "", 100);
+    if (!account || !campaignId) {
+      throw new Error("Direct Pro unavailable and exact configured campaign read proof is not configured.");
+    }
+    await this.verifyConfiguredDirectCampaignRead(account, campaignId);
+    return [{
+      provider_identity: account,
+      label: cleanText(this.configuration.directBusinessLabel || "Основной рекламный аккаунт", 255),
+      detail: "Доступная реклама этого бизнеса",
+    }];
+  }
+
+  private async verifyDirectReadBinding(accountIdentity: string) {
+    const expectedAccount = cleanText(this.configuration.directExpectedAccount ?? "", 255);
+    if (expectedAccount && accountIdentity !== expectedAccount) {
+      throw new Error("Selected Direct account does not match the exact server-side binding.");
+    }
+    try {
+      const verified = await verifyDirectAccountBinding({
+        token: this.configuration.directToken,
+        expectedAccount: accountIdentity,
+      }, this.fetcher, this.now);
+      return { account: verified.account, matched: verified.binding.matched };
+    } catch {
+      const campaignId = cleanText(this.configuration.directCampaignId ?? "", 100);
+      if (!expectedAccount || !campaignId) throw new Error("Direct read binding is unavailable.");
+      await this.verifyConfiguredDirectCampaignRead(accountIdentity, campaignId);
+      return { account: accountIdentity, matched: true as const };
+    }
+  }
+
+  private async verifyConfiguredDirectCampaignRead(account: string, campaignId: string) {
+    if (!this.configuration.directToken) throw new Error("Direct server credential is unavailable.");
+    const payload = await jsonResponse(await this.fetcher("https://api.direct.yandex.com/json/v501/campaigns", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.configuration.directToken}`,
+        "Client-Login": account,
+        Accept: "application/json",
+        "Accept-Language": "ru",
+        "Content-Type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify({
+        method: "get",
+        params: {
+          SelectionCriteria: { Ids: [campaignId] },
+          FieldNames: ["Id", "Type", "Status", "State"],
+        },
+      }),
+    }), "Direct");
+    if (payload.error) throw new Error("Direct official API rejected configured campaign read proof.");
+    const campaigns = list(record(payload.result).Campaigns)
+      .map(record)
+      .filter((campaign) => String(campaign.Id ?? "") === campaignId);
+    if (campaigns.length !== 1) throw new Error("Direct official API did not confirm the exact configured campaign.");
   }
 
   private async discoverMetrikaCounters() {

@@ -8,6 +8,11 @@ declare namespace Cloudflare {
     YANDEX_METRICA_OAUTH_TOKEN?: string;
     YANDEX_METRICA_COUNTER_ID?: string;
     YANDEX_METRICA_GOAL_ID?: string;
+    YANDEX_WORDSTAT_OAUTH_TOKEN?: string;
+    YANDEX_WORDSTAT_CLIENT_ID?: string;
+    YANDEX_WORDSTAT_REGION_IDS?: string;
+    YANDEX_WORDSTAT_REGION_NAMES?: string;
+    YANDEX_WORDSTAT_DEVICE?: string;
     P0_E2E_FIXTURE_SCENARIO?: string;
     OPENAI_API_KEY?: string;
     P0_AGENT_MODEL?: string;
