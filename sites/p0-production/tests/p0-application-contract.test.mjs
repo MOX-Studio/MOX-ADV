@@ -394,6 +394,7 @@ function strategyValue() {
 
 const STRATEGY_FIELD_ORDER = [
   "business_goal",
+  "campaign_focus",
   "advertised_offer",
   "target_audience",
   "qualified_result",
@@ -768,24 +769,39 @@ test("the authoritative contract persists the fixed Strategy questionnaire and f
   });
 
   const questionnaire = result.state.strategy_questionnaire;
-  assert.equal(questionnaire.schema_version, "p0-strategy-questionnaire-v1");
+  assert.equal(questionnaire.schema_version, "p0-strategy-questionnaire-v2");
   assert.deepEqual(questionnaire.fields.map((field) => field.field_id), STRATEGY_FIELD_ORDER);
   assert.equal(questionnaire.context_revision_id, result.state.context_state.context_revision_id);
   assert.equal(questionnaire.context_material_fingerprint, result.state.context_state.material_fingerprint);
   assert.equal(questionnaire.business_model_revision_id, result.state.business_model.owner_contract.model_revision_id);
   assert.equal(questionnaire.analytics_evidence_snapshot_id, result.state.analytics_evidence_snapshot.snapshot_id);
+  assert.equal(questionnaire.product_focus_revision_id, result.state.product_focus.focus_revision_id);
+  assert.equal(questionnaire.direct_capability_snapshot_id, result.state.context_state.facts.direct.capability_snapshot.snapshot_id);
+  assert.equal(questionnaire.recommendation.objective.value, "QUALIFIED_RESULT");
+  assert.equal(questionnaire.recommendation.bidding.value, "WB_MAXIMUM_CLICKS");
+  assert.deepEqual(questionnaire.recommendation.placements.value, ["SEARCH"]);
+  assert.equal(questionnaire.recommendation.measurement.value, "EXACT_METRIKA_PRIMARY_GOAL");
+  assert.equal(questionnaire.recommendation.economics.target_result_cost_rub, 40_000);
+  assert.deepEqual(questionnaire.material_questions.map((item) => item.field_id), ["period", "weekly_budget"]);
+  assert.deepEqual(questionnaire.human_decision_gate.unresolved_field_ids, ["period", "weekly_budget"]);
   for (const field of questionnaire.fields) {
     assert.equal(Object.hasOwn(field, "recommended_value"), true);
     assert.equal(typeof field.explanation, "string");
     assert.equal(["сайт", "Директ", "Метрика", "аналитика агента", "решение владельца"].includes(field.source_category), true);
     assert.equal(["уверенно", "нужно проверить", "нет данных"].includes(field.status), true);
   }
-  for (const fieldId of ["geography", "period", "weekly_budget"]) {
+  const geography = questionnaire.fields.find((item) => item.field_id === "geography");
+  assert.equal(geography.recommended_value, "Москва и Московская область");
+  assert.equal(geography.status, "уверенно");
+  assert.equal(geography.prepared_decision, null);
+  for (const fieldId of ["period", "weekly_budget"]) {
     const field = questionnaire.fields.find((item) => item.field_id === fieldId);
     assert.equal(field.recommended_value, null);
     assert.equal(field.status, "нет данных");
     assert.equal(field.source_category, "решение владельца");
     assert.equal(field.prepared_decision.required, true);
+    assert.equal(field.prepared_decision.recommendation.length > 0, true);
+    assert.equal(field.prepared_decision.alternatives.length > 0, true);
     assert.equal(field.prepared_decision.consequences.length > 0, true);
   }
   const targetCost = questionnaire.fields.find((item) => item.field_id === "target_result_cost");
@@ -817,13 +833,18 @@ test("the authoritative contract persists the fixed Strategy questionnaire and f
   assert.equal((await store.load("owner")).revision, result.revision);
 
   result = await approveStrategy(application, result);
-  assert.equal(result.state.strategy.schema_version, "p0-campaign-strategy-v1");
+  assert.equal(result.state.strategy.schema_version, "p0-campaign-strategy-v2");
   assert.deepEqual(result.state.strategy.answers.map((answer) => answer.field_id), STRATEGY_FIELD_ORDER);
   assert.equal(result.state.strategy.questionnaire_id, questionnaire.questionnaire_id);
   assert.equal(result.state.strategy.questionnaire_contract_version, questionnaire.contract_version);
   assert.equal(result.state.strategy.context_revision_id, result.state.context_state.context_revision_id);
   assert.equal(result.state.strategy.context_material_fingerprint, result.state.context_state.material_fingerprint);
   assert.equal(result.state.strategy.analytics_evidence_snapshot_id, result.state.analytics_evidence_snapshot.snapshot_id);
+  assert.equal(result.state.strategy.product_focus_revision_id, result.state.product_focus.focus_revision_id);
+  assert.equal(result.state.strategy.direct_capability_snapshot_id, result.state.context_state.facts.direct.capability_snapshot.snapshot_id);
+  assert.deepEqual(result.state.strategy.recommendation, questionnaire.recommendation);
+  assert.deepEqual(result.state.strategy.playbook_lineage, questionnaire.playbook_lineage);
+  assert.equal(result.state.strategy.target_result_cost_uncertainty, null);
   assert.equal(result.state.strategy.lineage.previous_strategy_revision_id, null);
   assert.equal(result.state.recommendation_set.strategy_revision_id, result.state.strategy.strategy_revision_id);
   assert.equal(result.state.recommendation_set.analytics_evidence_snapshot_id, result.state.analytics_evidence_snapshot.snapshot_id);
@@ -3848,8 +3869,21 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
   assert.equal(projection.journey.currentStage, "strategy");
   assert.equal(projection.businessModel.economics.status, "Подтверждена");
   assert.equal(projection.businessModel.materialQuestions.length, 0);
+  assert.equal(projection.campaignStrategy.status, "Нужны существенные решения");
+  assert.deepEqual(projection.campaignStrategy.recommendations.map((item) => item.label), [
+    "Цель оптимизации",
+    "Подход к ставкам",
+    "Размещения",
+    "Измерение",
+    "Экономика результата",
+  ]);
+  assert.deepEqual(projection.campaignStrategy.materialQuestions.map((item) => item.field), ["Период", "Недельный бюджет"]);
+  assert.ok(projection.campaignStrategy.decisionGate.recommendation);
+  assert.ok(projection.campaignStrategy.decisionGate.alternatives);
+  assert.ok(projection.campaignStrategy.decisionGate.consequences);
   assert.equal(projection.primaryAction.fields.find((field) => field.key === "targetResultCost").value, 40_000);
-  assert.equal(projection.primaryAction.fields.find((field) => field.key === "targetResultCost").readOnly, true);
+  assert.equal(projection.primaryAction.fields.find((field) => field.key === "targetResultCost").readOnly, undefined);
+  assert.equal(projection.primaryAction.fields.find((field) => field.key === "campaignFocus").value.length > 0, true);
   projection = await journey.submit(ownerKey, {
     handle: projection.primaryAction.handle,
     values: values(projection, {
@@ -3909,6 +3943,6 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
   assert.ok(diagnostics.state.package_review.package_id);
   assert.ok(diagnostics.state.analytics_evidence_snapshot.snapshot_id);
   assert.equal(diagnostics.state.business_model.owner_contract.economics.target_result_cost_rub, 40_000);
-  assert.equal(diagnostics.state.strategy.answers.find((answer) => answer.field_id === "target_result_cost").value, 40_000);
+  assert.equal(diagnostics.state.strategy.answers.find((answer) => answer.field_id === "target_result_cost").value, 10_000);
   assert.equal(diagnostics.state.package_execution, null);
 });

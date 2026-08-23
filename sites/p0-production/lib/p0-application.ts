@@ -102,6 +102,7 @@ import {
   normalizeStrategyAnswers,
   strategyAnswerValue,
   strategyAnswersFingerprint,
+  verifyStrategyQuestionnaireIdentity,
   type CampaignStrategyRevision,
   type StrategyQuestionnaire,
 } from "./campaign-strategy.ts";
@@ -146,9 +147,9 @@ import {
 } from "./measurement-destination-readiness.ts";
 
 export const P0_APPLICATION_CONTRACT = "mox-adv.p0.application";
-export const P0_APPLICATION_CONTRACT_VERSION = "1.17.0";
-export const P0_DOCUMENT_SCHEMA = "p0-application-document-v12";
-const P0_LEGACY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4", "p0-application-document-v5", "p0-application-document-v6", "p0-application-document-v7", "p0-application-document-v8", "p0-application-document-v9", "p0-application-document-v10", "p0-application-document-v11"]);
+export const P0_APPLICATION_CONTRACT_VERSION = "1.18.0";
+export const P0_DOCUMENT_SCHEMA = "p0-application-document-v13";
+const P0_LEGACY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4", "p0-application-document-v5", "p0-application-document-v6", "p0-application-document-v7", "p0-application-document-v8", "p0-application-document-v9", "p0-application-document-v10", "p0-application-document-v11", "p0-application-document-v12"]);
 const P0_PRE_PACKAGE_AUTHORITY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4"]);
 export const P0_CONTEXT_SCHEMA = "p0-context-v2";
 const P0_LEGACY_CONTEXT_SCHEMA = "p0-context-v1";
@@ -1961,7 +1962,7 @@ function lineageError(message: string): never {
   fail("P0_MIGRATION_LINEAGE_INVALID", `Persisted P0 document отклонён: ${message}`);
 }
 
-async function migrateDocument(raw: Record<string, unknown>, revision: number, updatedAt: string) {
+async function migrateDocument(raw: Record<string, unknown>, revision: number, updatedAt: string, playbookReleases: CuratedPlaybookRelease[]) {
   const version = raw.schema_version;
   if (version !== undefined && version !== P0_DOCUMENT_SCHEMA && !P0_LEGACY_DOCUMENT_SCHEMAS.has(String(version))) {
     fail("P0_DOCUMENT_SCHEMA_UNSUPPORTED", `Persisted P0 document использует неподдерживаемую схему ${String(version)}.`);
@@ -2228,16 +2229,27 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
     invalidateStrategyDownstream(state);
   }
 
+  if (legacyDocument && state.strategy_questionnaire && state.strategy_questionnaire.schema_version !== STRATEGY_QUESTIONNAIRE_SCHEMA) {
+    state.strategy_questionnaire = null;
+    invalidateStrategyDownstream(state);
+    state.last_cascade = cascadeRecord(state, "STRATEGY", updatedAt, ["recommendation_set", "campaign_drafts", "shortlist", "confirmation"]);
+    state.last_cascade.recomputation_status = "REQUIRED";
+    changed = true;
+  }
+
   if (
     !state.strategy_questionnaire
     && state.context_state
     && model?.source === "REAL_SITE_RESEARCH_PLUS_OWNER_CONFIRMATION"
     && state.analytics_evidence_snapshot
+    && state.product_focus
   ) {
     state.strategy_questionnaire = await buildStrategyQuestionnaire({
       contextState: state.context_state as unknown as Record<string, unknown>,
       model: model as unknown as Record<string, unknown>,
       analyticsEvidence: state.analytics_evidence_snapshot as unknown as Record<string, unknown>,
+      productFocus: state.product_focus as unknown as Record<string, unknown>,
+      playbookReleases,
       generatedAt: updatedAt,
     });
     changed = true;
@@ -2250,9 +2262,25 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
       contextState: state.context_state as unknown as Record<string, unknown>,
       model: model as unknown as Record<string, unknown>,
       analyticsEvidence: state.analytics_evidence_snapshot as unknown as Record<string, unknown>,
+      productFocus: state.product_focus as unknown as Record<string, unknown>,
+      playbookReleases,
       generatedAt: state.strategy_questionnaire.generated_at,
     });
-    if (JSON.stringify(rebuiltQuestionnaire) !== JSON.stringify(state.strategy_questionnaire)) {
+    const withoutPlaybook = (questionnaire: StrategyQuestionnaire) => {
+      const copy = structuredClone(questionnaire);
+      copy.questionnaire_id = "PLAYBOOK_LINEAGE_EXCLUDED";
+      copy.playbook_lineage = {
+        release_id: null,
+        release_version: null,
+        release_digest: null,
+        rule_ids: [],
+        rule_digests: [],
+      };
+      return copy;
+    };
+    const deterministicMatch = JSON.stringify(rebuiltQuestionnaire) === JSON.stringify(state.strategy_questionnaire);
+    const onlyActivePlaybookChanged = JSON.stringify(withoutPlaybook(rebuiltQuestionnaire)) === JSON.stringify(withoutPlaybook(state.strategy_questionnaire));
+    if ((!deterministicMatch && !onlyActivePlaybookChanged) || !await verifyStrategyQuestionnaireIdentity(state.strategy_questionnaire)) {
       lineageError("Strategy questionnaire contract, field order, metadata или lineage не прошли проверку.");
     }
   }
@@ -2279,6 +2307,13 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
         || strategy.business_model_revision_id !== model.owner_contract.model_revision_id
         || strategy.business_model_revision_id !== state.strategy_questionnaire.business_model_revision_id
         || strategy.analytics_evidence_snapshot_id !== state.analytics_evidence_snapshot.snapshot_id
+        || strategy.product_focus_revision_id !== state.product_focus?.focus_revision_id
+        || strategy.product_focus_revision_id !== state.strategy_questionnaire.product_focus_revision_id
+        || strategy.direct_capability_snapshot_id !== state.context_state.facts.direct.capability_snapshot.snapshot_id
+        || strategy.direct_capability_snapshot_id !== state.strategy_questionnaire.direct_capability_snapshot_id
+        || JSON.stringify(strategy.playbook_lineage) !== JSON.stringify(state.strategy_questionnaire.playbook_lineage)
+        || JSON.stringify(strategy.recommendation) !== JSON.stringify(state.strategy_questionnaire.recommendation)
+        || strategy.target_result_cost_uncertainty !== state.strategy_questionnaire.recommendation.economics.uncertainty
       ) {
         lineageError("Campaign Strategy revision ссылается на другую Context/Model lineage.");
       }
@@ -3194,7 +3229,12 @@ export class P0Application {
       if (!Number.isSafeInteger(row.revision) || row.revision < 0) {
         fail("P0_STATE_INVALID", "Persisted P0 document содержит некорректную revision.");
       }
-      const migrated = await migrateDocument(structuredClone(decodeDocument(row)), row.revision, row.updated_at);
+      const migrated = await migrateDocument(
+        structuredClone(decodeDocument(row)),
+        row.revision,
+        row.updated_at,
+        await this.playbookReleases(),
+      );
       if (!migrated.changed) {
         return { revision: row.revision, updated_at: row.updated_at, state: migrated.state };
       }
@@ -3633,6 +3673,8 @@ export class P0Application {
           contextState: state.context_state as unknown as Record<string, unknown>,
           model: state.business_model as unknown as Record<string, unknown>,
           analyticsEvidence: state.analytics_evidence_snapshot as unknown as Record<string, unknown>,
+          productFocus: state.product_focus as unknown as Record<string, unknown>,
+          playbookReleases: await this.playbookReleases(),
           generatedAt: modelApprovedAt,
         });
       } else if (!state.strategy_questionnaire && state.analytics_evidence_snapshot) {
@@ -3640,6 +3682,8 @@ export class P0Application {
           contextState: state.context_state as unknown as Record<string, unknown>,
           model: state.business_model as unknown as Record<string, unknown>,
           analyticsEvidence: state.analytics_evidence_snapshot as unknown as Record<string, unknown>,
+          productFocus: state.product_focus as unknown as Record<string, unknown>,
+          playbookReleases: await this.playbookReleases(),
           generatedAt: modelApprovedAt,
         });
       }
@@ -3720,6 +3764,8 @@ export class P0Application {
           contextState: state.context_state as unknown as Record<string, unknown>,
           model: state.business_model as unknown as Record<string, unknown>,
           analyticsEvidence: state.analytics_evidence_snapshot as unknown as Record<string, unknown>,
+          productFocus: state.product_focus as unknown as Record<string, unknown>,
+          playbookReleases: await this.playbookReleases(),
           generatedAt: selectedAt,
         });
       }
@@ -3743,16 +3789,9 @@ export class P0Application {
         payload.answers,
         (input, maximum) => artifactText(input, maximum),
       );
-      normalizedAnswers.target_result_cost = state.business_model.owner_contract.economics.status === "CONFIRMED"
-        ? state.business_model.owner_contract.economics.target_result_cost_rub
-        : null;
       const missing = missingStrategyDecisions(normalizedAnswers);
       if (missing.length) {
         fail("P0_STRATEGY_DECISION_REQUIRED", `Campaign Strategy требует решения владельца: ${missing[0]}.`);
-      }
-      const confirmedContextGoal = state.context_state.business_goal_decision?.value;
-      if (normalizedAnswers.business_goal !== confirmedContextGoal) {
-        fail("P0_CONTEXT_GOAL_CHANGED", "Измените business goal на шаге «Контекст», чтобы применить material cascade.");
       }
       const period = normalizedAnswers.period as { start_date: string; end_date: string };
       if (!isValidIsoCalendarDate(period.start_date) || !isValidIsoCalendarDate(period.end_date) || period.start_date > period.end_date) {
@@ -3792,6 +3831,11 @@ export class P0Application {
             context_material_fingerprint: state.context_state.material_fingerprint,
             business_model_revision_id: state.business_model.owner_contract.model_revision_id,
             analytics_evidence_snapshot_id: state.analytics_evidence_snapshot.snapshot_id,
+            product_focus_revision_id: questionnaire.product_focus_revision_id,
+            direct_capability_snapshot_id: questionnaire.direct_capability_snapshot_id,
+            playbook_lineage: structuredClone(questionnaire.playbook_lineage),
+            recommendation: structuredClone(questionnaire.recommendation),
+            target_result_cost_uncertainty: questionnaire.recommendation.economics.uncertainty,
             answers: questionnaire.fields.map((field) => ({
               field_id: field.field_id,
               value: normalizedAnswers[field.field_id]!,

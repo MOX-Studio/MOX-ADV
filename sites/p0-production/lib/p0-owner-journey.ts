@@ -112,6 +112,23 @@ export type OwnerJourneyProjection = {
     };
     materialQuestions: Array<{ question: string; consequence: string }>;
   } | null;
+  campaignStrategy: {
+    status: "Готова к решению" | "Нужны существенные решения";
+    recommendations: Array<{
+      label: string;
+      value: string;
+      rationale: string;
+      confidence: string;
+    }>;
+    materialQuestions: Array<{ field: string; question: string; recommendation: string; consequences: string }>;
+    decisionGate: null | {
+      recommendation: string;
+      evidence: string;
+      confidence: string;
+      alternatives: string;
+      consequences: string;
+    };
+  } | null;
   appliedPractice: {
     practice: string;
     limitation: string;
@@ -327,11 +344,12 @@ function strategyFields(state: InternalState): OwnerActionField[] {
   const period = record(value("period"));
   return [
     { key: "businessGoal", label: "Бизнес-цель", control: "textarea" as const, value: ownerText(value("business_goal"), "", 500), required: true },
+    { key: "campaignFocus", label: "Рекламный фокус", control: "textarea" as const, value: ownerText(value("campaign_focus"), "", 1_000), required: true },
     { key: "offer", label: "Предложение", control: "textarea" as const, value: ownerText(value("advertised_offer"), "", 1_000), required: true },
     { key: "audience", label: "Аудитория", control: "textarea" as const, value: ownerText(value("target_audience"), "", 1_000), required: true },
     { key: "qualifiedResult", label: "Качественный результат", control: "textarea" as const, value: ownerText(value("qualified_result"), "", 1_000), required: true },
     { key: "exclusions", label: "Исключения", control: "textarea" as const, value: ownerText(value("exclusions"), "", 1_000), required: true },
-    { key: "geography", label: "География", control: "select" as const, value: ownerText(value("geography"), "", 100), required: true, options: ["Россия", "Москва", "Санкт-Петербург"] },
+    { key: "geography", label: "География", control: "textarea" as const, value: ownerText(value("geography"), "", 255), required: true },
     { key: "periodStart", label: "Начало периода", control: "date" as const, value: ownerText(period.start_date, "", 20), required: true },
     { key: "periodEnd", label: "Окончание периода", control: "date" as const, value: ownerText(period.end_date, "", 20), required: true },
     { key: "landingPage", label: "Куда вести клиента", control: "url" as const, value: ownerText(value("landing_page"), "", 1_500), required: true },
@@ -342,10 +360,9 @@ function strategyFields(state: InternalState): OwnerActionField[] {
       control: "number" as const,
       value: Number(value("target_result_cost")) || "",
       required: false,
-      readOnly: true,
       help: Number(value("target_result_cost")) > 0
-        ? "Выведено из подтверждённой economics Business Model."
-        : "Не выводится до подтверждения ценности продажи, маржи и доли обращений, переходящих в продажу.",
+        ? "Рекомендовано из economics Business Model; измените, только если бизнес-предел отличается."
+        : "Оставьте пустым, если economics остаётся существенной неопределённостью.",
     },
     { key: "message", label: "Главное сообщение", control: "textarea" as const, value: ownerText(value("core_message"), "", 1_000), required: true },
   ];
@@ -766,6 +783,72 @@ function materialUnknowns(state: InternalState) {
   return [...new Set(gaps)].slice(0, 6);
 }
 
+const STRATEGY_FIELD_LABELS: Record<string, string> = {
+  business_goal: "Бизнес-цель",
+  campaign_focus: "Рекламный фокус",
+  advertised_offer: "Предложение",
+  target_audience: "Аудитория",
+  qualified_result: "Квалифицированный результат",
+  exclusions: "Исключения",
+  geography: "География",
+  period: "Период",
+  landing_page: "Посадочная",
+  weekly_budget: "Недельный бюджет",
+  target_result_cost: "Целевая стоимость результата",
+  core_message: "Основное сообщение",
+};
+
+function campaignStrategyProjection(state: InternalState): OwnerJourneyProjection["campaignStrategy"] {
+  const questionnaire = record(state.strategy_questionnaire);
+  const recommendation = record(questionnaire.recommendation);
+  if (!Object.keys(recommendation).length) return null;
+  const recommendationItem = (key: string, label: string, valueLabel?: (value: unknown) => string) => {
+    const item = record(recommendation[key]);
+    return {
+      label,
+      value: valueLabel ? valueLabel(item.value) : ownerText(item.value),
+      rationale: ownerText(item.rationale),
+      confidence: item.confidence === "HIGH" ? "Высокая" : item.confidence === "MEDIUM" ? "Средняя" : "Ограниченная",
+    };
+  };
+  const economics = record(recommendation.economics);
+  const questions = list(questionnaire.material_questions).map((value) => {
+    const item = record(value);
+    const decision = record(item.decision);
+    return {
+      field: ownerText(STRATEGY_FIELD_LABELS[String(item.field_id)], "Существенное поле"),
+      question: ownerText(decision.question),
+      recommendation: ownerText(decision.recommendation),
+      consequences: list(decision.consequences).map((entry) => ownerText(entry)).join(" · "),
+    };
+  });
+  const gate = record(questionnaire.human_decision_gate);
+  const approved = Boolean(state.strategy);
+  return {
+    status: approved || (!questions.length && !Object.keys(gate).length) ? "Готова к решению" : "Нужны существенные решения",
+    recommendations: [
+      recommendationItem("objective", "Цель оптимизации", (value) => value === "QUALIFIED_RESULT" ? "Квалифицированный результат" : "Проверка качественного трафика"),
+      recommendationItem("bidding", "Подход к ставкам", (value) => value === "WB_MAXIMUM_CLICKS" ? "Максимум переходов в недельном бюджете" : "Недоступно до проверки возможностей аккаунта"),
+      recommendationItem("placements", "Размещения", (value) => list(value).map((item) => item === "SEARCH" ? "Поиск" : ownerText(item)).join(", ") || "Недоступно"),
+      recommendationItem("measurement", "Измерение", (value) => value === "EXACT_METRIKA_PRIMARY_GOAL" ? "Точная основная цель Метрики" : "Проверка измерения до запуска"),
+      {
+        label: "Экономика результата",
+        value: economics.target_result_cost_rub ? `${Number(economics.target_result_cost_rub).toLocaleString("ru-RU")} ₽` : "Существенная неопределённость",
+        rationale: ownerText(economics.uncertainty, "Целевая стоимость подтверждена Business Model."),
+        confidence: economics.target_result_cost_rub ? "Высокая" : "Ограниченная",
+      },
+    ],
+    materialQuestions: approved ? [] : questions,
+    decisionGate: !approved && Object.keys(gate).length ? {
+      recommendation: ownerText(gate.recommendation),
+      evidence: list(gate.evidence).map((item) => ownerText(item)).join(" · ") || "Перечисленные material gaps являются основанием решения.",
+      confidence: gate.confidence === "MEDIUM" ? "Средняя" : "Ограниченная",
+      alternatives: list(gate.alternatives).map((item) => ownerText(item)).join(" · "),
+      consequences: list(gate.consequences).map((item) => ownerText(item)).join(" · "),
+    } : null,
+  };
+}
+
 function appliedPractice(state: InternalState): OwnerJourneyProjection["appliedPractice"] {
   const draft = list(record(state.recommendation_set).drafts)
     .map(record)
@@ -976,6 +1059,7 @@ async function project(
     competitorMatrix: competitorMatrixProjection(view.state),
     demandCostResearch: projectDemandCostResearchForOwner(view.state.analytics_evidence_snapshot),
     businessModel: businessModelProjection(view.state),
+    campaignStrategy: campaignStrategyProjection(view.state),
     appliedPractice: appliedPractice(view.state),
     businessReadiness: businessReadinessProjection(view.state),
     materialUnknowns: unknowns,
@@ -1102,6 +1186,7 @@ async function projectAccessOnly(
     competitorMatrix: null,
     demandCostResearch: null,
     businessModel: null,
+    campaignStrategy: null,
     appliedPractice: null,
     businessReadiness: null,
     materialUnknowns: [...access.limitations],
@@ -1248,6 +1333,7 @@ export class P0OwnerJourney {
         confirmation: "APPROVE_CAMPAIGN_STRATEGY",
         answers: {
           business_goal: required(values, "businessGoal"),
+          campaign_focus: required(values, "campaignFocus"),
           advertised_offer: required(values, "offer"),
           target_audience: required(values, "audience"),
           qualified_result: required(values, "qualifiedResult"),

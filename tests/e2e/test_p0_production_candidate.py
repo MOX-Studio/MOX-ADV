@@ -274,7 +274,15 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 ).wait_for()
                 checkpoint()
 
-                page.get_by_label("География").select_option("Москва")
+                strategy_recommendation = page.get_by_role(
+                    "region", name="Полная рекомендация агента", exact=True
+                )
+                self.assertIn("Квалифицированный результат", strategy_recommendation.inner_text())
+                self.assertIn("Максимум переходов в недельном бюджете", strategy_recommendation.inner_text())
+                self.assertIn("Поиск", strategy_recommendation.inner_text())
+                self.assertIn("Точная основная цель Метрики", strategy_recommendation.inner_text())
+                self.assertTrue(page.get_by_label("Рекламный фокус").input_value())
+                page.get_by_label("География").fill("Москва")
                 page.get_by_label("Начало периода").fill("2026-09-01")
                 page.get_by_label("Окончание периода").fill("2026-10-01")
                 page.get_by_label("Бюджет на неделю, ₽").fill("50000")
