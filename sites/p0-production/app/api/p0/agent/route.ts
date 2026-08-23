@@ -16,8 +16,7 @@ function failure(error: unknown) {
 
 export async function POST(request: Request) {
   try {
-    const payload = (await request.json()) as Record<string, unknown>;
-    const value = await runAgent(userKey(request), payload);
+    const value = await runAgent(userKey(request));
     return Response.json(value, { status: 201 });
   } catch (error) {
     const providerUnavailable = error instanceof OpenAIResponsesModelError

@@ -5,6 +5,7 @@ import {
   P0_AGENT_TOOL_DEFINITIONS,
   P0Application,
 } from "../lib/p0-application.ts";
+import { P0AgentRuntime } from "../lib/p0-agent-runtime.ts";
 
 class MemoryStore {
   constructor() {
@@ -152,7 +153,7 @@ test("trusted application publishes one bounded read-only Direct audit tool and 
   assert.equal(definition.input_schema.additionalProperties, false);
   assert.ok(P0_AGENT_TOOL_DEFINITIONS.every((tool) => !/(add|update|delete|suspend|resume|moderate)/iu.test(tool.name)));
 
-  const contract = await application.agentContract("owner", "ASSESS_ANALYTICS_READINESS");
+  const contract = await application.agentContract("owner", "COORDINATE_OWNER_JOURNEY");
   assert.ok(contract.policy.allowed_permissions.includes("P0_PROVIDER_READ"));
   const result = await application.executeAgentTool({
     owner_key: "owner",
@@ -198,7 +199,7 @@ test("queued Direct report observation stops resumably at its durable retry time
     store: new MemoryStore(),
     adapters: adapters(async () => auditSummary("PENDING")),
   });
-  const contract = await application.agentContract("owner", "ASSESS_ANALYTICS_READINESS");
+  const contract = await application.agentContract("owner", "COORDINATE_OWNER_JOURNEY");
   const result = await application.executeAgentTool({
     owner_key: "owner",
     run_id: "agent-run-direct-audit",
@@ -218,5 +219,110 @@ test("queued Direct report observation stops resumably at its durable retry time
   assert.equal(evaluation.status, "STOP");
   assert.equal(evaluation.stop_reason.code, "TEMPORARY_PROVIDER_FAILURE");
   assert.equal(evaluation.stop_reason.resumable, true);
-  assert.match(evaluation.stop_reason.message, /2026-08-22T20:00:30\.000Z/u);
+  assert.equal(evaluation.stop_reason.resume_at, "2026-08-22T20:00:30.000Z");
+});
+
+test("durable coordinator resumes a queued Direct report after due time without owner controls", async () => {
+  let auditCalls = 0;
+  let runtimeNow = NOW;
+  const application = new P0Application({
+    store: new MemoryStore(),
+    adapters: {
+      ...adapters(async () => auditSummary(++auditCalls === 1 ? "PENDING" : "COMPLETE")),
+      now: () => runtimeNow,
+    },
+  });
+  const runs = new Map();
+  const runStore = {
+    async load(runId) { return structuredClone(runs.get(runId) ?? null); },
+    async loadCurrent(ownerKey) {
+      return structuredClone([...runs.values()].filter((run) => run.owner_key === ownerKey).at(-1) ?? null);
+    },
+    async initialize(state) {
+      if (runs.has(state.run_id)) return false;
+      runs.set(state.run_id, structuredClone(state));
+      return true;
+    },
+    async compareAndSwap(runId, expectedVersion, state) {
+      if (runs.get(runId)?.version !== expectedVersion) return false;
+      runs.set(runId, structuredClone(state));
+      return true;
+    },
+  };
+  const authority = {
+    contract: (ownerKey, kind) => application.agentContract(ownerKey, kind),
+    executeTool: (input) => application.executeAgentTool(input),
+    evaluate: (input) => application.evaluateAgentObjective(input),
+  };
+  const firstModel = {
+    adapter_id: "queued-report-model",
+    async turn() {
+      return {
+        kind: "TOOL_CALLS",
+        calls: [{ id: "audit-1", name: "p0_audit_direct_account", arguments: { expected_revision: 0 } }],
+        usage: { input_tokens: 50, output_tokens: 10, cost_microusd: 30 },
+      };
+    },
+  };
+  const budgets = {
+    max_model_calls: 6,
+    max_tool_calls: 6,
+    max_input_tokens: 2_000,
+    max_output_tokens: 1_000,
+    max_elapsed_ms: 30_000,
+    max_cost_microusd: 1_000,
+  };
+  const interrupted = await new P0AgentRuntime({
+    application: authority,
+    model: firstModel,
+    store: runStore,
+    now: () => runtimeNow,
+    createId: () => "queued-report-run",
+  }).coordinate({ owner_key: "owner", budgets });
+  assert.equal(interrupted.stop_reason.code, "TEMPORARY_PROVIDER_FAILURE");
+  assert.equal(auditCalls, 1);
+
+  runtimeNow = "2026-08-22T20:00:20.000Z";
+  let earlyModelCalls = 0;
+  const early = await new P0AgentRuntime({
+    application: authority,
+    model: { adapter_id: "queued-report-model", async turn() { earlyModelCalls += 1; throw new Error("not due"); } },
+    store: runStore,
+    now: () => runtimeNow,
+  }).coordinate({ owner_key: "owner", budgets });
+  assert.equal(early.version, interrupted.version);
+  assert.equal(earlyModelCalls, 0);
+
+  runtimeNow = "2026-08-22T20:00:31.000Z";
+  const turns = [
+    {
+      kind: "TOOL_CALLS",
+      calls: [{ id: "audit-2", name: "p0_audit_direct_account", arguments: { expected_revision: 0 } }],
+      usage: { input_tokens: 50, output_tokens: 10, cost_microusd: 30 },
+    },
+    {
+      kind: "TOOL_CALLS",
+      calls: [{
+        id: "assessment",
+        name: "p0_record_owner_journey_assessment",
+        arguments: {
+          expected_revision: 0,
+          owner_question_required: false,
+          next_boundary: "OWNER_REVIEW",
+          summary: "The business entry point is ready for owner review.",
+        },
+      }],
+      usage: { input_tokens: 60, output_tokens: 15, cost_microusd: 40 },
+    },
+  ];
+  const resumed = await new P0AgentRuntime({
+    application: authority,
+    model: { adapter_id: "queued-report-model", async turn() { return turns.shift(); } },
+    store: runStore,
+    now: () => runtimeNow,
+  }).coordinate({ owner_key: "owner", budgets });
+  assert.equal(resumed.status, "COMPLETED");
+  assert.equal(resumed.compaction.through_observation_sequence, 1);
+  assert.equal(auditCalls, 2);
+  assert.equal(resumed.budget.usage.cost_microusd, 100);
 });

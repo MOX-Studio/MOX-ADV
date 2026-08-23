@@ -34,7 +34,8 @@ import {
 } from "./p0-owner-journey.ts";
 import {
   P0AgentRuntime,
-  type P0AgentObjectiveKind,
+  projectP0AgentRunForOwner,
+  type P0AgentOwnerProjection,
 } from "./p0-agent-runtime.ts";
 import {
   D1P0AgentRunStore,
@@ -1187,7 +1188,28 @@ const application = new P0Application({
   },
 });
 
-const ownerJourney = new P0OwnerJourney(application);
+async function coordinateOwnerAgent(key: string): Promise<P0AgentOwnerProjection> {
+  try {
+    const state = await productionAgentRuntime().coordinate({
+      owner_key: key,
+      budgets: P0_AGENT_BUDGETS,
+    });
+    return projectP0AgentRunForOwner(state);
+  } catch {
+    return {
+      status: "blocked",
+      progress: { completed: 0, total: 1, label: "Работа безопасно остановлена" },
+      card: {
+        kind: "problem",
+        title: "Агент сейчас недоступен",
+        body: "Бизнес-состояние не изменено; техническая неполадка не стала новым вопросом владельцу.",
+      },
+      nextBusinessStep: "Вернуться к текущему бизнес-шагу без технического управления.",
+    };
+  }
+}
+
+const ownerJourney = new P0OwnerJourney(application, { agentProjection: coordinateOwnerAgent });
 
 export async function ownerOverview(key: string) {
   return ownerJourney.query(key);
@@ -1207,6 +1229,7 @@ const P0_AGENT_BUDGETS = {
   max_input_tokens: 80_000,
   max_output_tokens: 16_000,
   max_elapsed_ms: 120_000,
+  max_cost_microusd: 100_000,
 } as const;
 
 function productionAgentRuntime() {
@@ -1227,19 +1250,6 @@ function productionAgentRuntime() {
   });
 }
 
-export async function runAgent(key: string, payload: Record<string, unknown>) {
-  const runtime = productionAgentRuntime();
-  const runId = cleanText(String(payload.run_id ?? ""), 500);
-  if (runId) {
-    return runtime.resume({
-      owner_key: key,
-      run_id: runId,
-      compact: payload.compact === true,
-    });
-  }
-  return runtime.start({
-    owner_key: key,
-    objective_kind: String(payload.objective_kind ?? "ASSESS_ANALYTICS_READINESS") as P0AgentObjectiveKind,
-    budgets: P0_AGENT_BUDGETS,
-  });
+export async function runAgent(key: string) {
+  return coordinateOwnerAgent(key);
 }

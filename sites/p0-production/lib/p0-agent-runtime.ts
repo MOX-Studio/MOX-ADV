@@ -1,21 +1,23 @@
 export const P0_AGENT_RUNTIME_CONTRACT = "mox-adv.p0.agent-runtime";
-export const P0_AGENT_RUNTIME_VERSION = "1.0.0";
-export const P0_AGENT_RUN_SCHEMA = "p0-agent-run-v1";
+export const P0_AGENT_RUNTIME_VERSION = "2.0.0";
+export const P0_AGENT_RUN_SCHEMA = "p0-agent-run-v2";
 export const P0_AGENT_APPLICATION_CONTRACT_SCHEMA = "p0-agent-application-contract-v1";
 export const P0_AGENT_OBSERVATION_SCHEMA = "p0-agent-observation-v1";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
-export type P0AgentObjectiveKind = "ASSESS_ANALYTICS_READINESS";
+export type P0AgentObjectiveKind = "COORDINATE_OWNER_JOURNEY";
 export type P0AgentToolPermission =
   | "P0_APPLICATION_READ"
   | "P0_PROVIDER_READ"
+  | "P0_APPROVED_DISPATCH"
   | "P0_OBSERVATION_RECORD";
 
 export type P0AgentStopReasonCode =
   | "COMPLETED"
   | "MATERIAL_DECISION_REQUIRED"
+  | "CRITICAL_DECISION_REQUIRED"
   | "EXACT_WRITE_AUTHORITY_REQUIRED"
   | "BUDGET_EXHAUSTED"
   | "TEMPORARY_PROVIDER_FAILURE"
@@ -28,6 +30,7 @@ export type P0AgentStopReason = {
   code: P0AgentStopReasonCode;
   message: string;
   resumable: boolean;
+  resume_at?: string;
 };
 
 export type P0AgentToolDefinition = {
@@ -102,14 +105,20 @@ export type P0ModelTurnRequest = {
   budget: P0AgentBudgetState;
 };
 
+export type P0ModelUsage = {
+  input_tokens: number;
+  output_tokens: number;
+  cost_microusd?: number;
+};
+
 export type P0ModelTurnResponse = {
   kind: "TOOL_CALLS";
   calls: P0AgentToolCall[];
-  usage: { input_tokens: number; output_tokens: number };
+  usage: P0ModelUsage;
 } | {
   kind: "YIELD";
   message: string;
-  usage: { input_tokens: number; output_tokens: number };
+  usage: P0ModelUsage;
 };
 
 export interface P0ModelAdapter {
@@ -154,6 +163,7 @@ export type P0AgentBudgetLimits = {
   max_input_tokens: number;
   max_output_tokens: number;
   max_elapsed_ms: number;
+  max_cost_microusd: number;
 };
 
 export type P0AgentBudgetUsage = {
@@ -162,6 +172,7 @@ export type P0AgentBudgetUsage = {
   input_tokens: number;
   output_tokens: number;
   elapsed_ms: number;
+  cost_microusd: number;
 };
 
 export type P0AgentBudgetState = {
@@ -211,6 +222,7 @@ export type P0AgentRunState = {
 
 export interface P0AgentRunStore {
   load(runId: string): Promise<P0AgentRunState | null>;
+  loadCurrent?(ownerKey: string): Promise<P0AgentRunState | null>;
   initialize(state: P0AgentRunState): Promise<boolean>;
   compareAndSwap(runId: string, expectedVersion: number, state: P0AgentRunState): Promise<boolean>;
 }
@@ -221,11 +233,13 @@ const DEFAULT_BUDGETS: P0AgentBudgetLimits = {
   max_input_tokens: 80_000,
   max_output_tokens: 16_000,
   max_elapsed_ms: 120_000,
+  max_cost_microusd: 100_000,
 };
 
 const TOOL_PERMISSIONS = new Set<P0AgentToolPermission>([
   "P0_APPLICATION_READ",
   "P0_PROVIDER_READ",
+  "P0_APPROVED_DISPATCH",
   "P0_OBSERVATION_RECORD",
 ]);
 
@@ -383,13 +397,13 @@ function budgetState(limits: P0AgentBudgetLimits): P0AgentBudgetState {
     input_tokens: 0,
     output_tokens: 0,
     elapsed_ms: 0,
+    cost_microusd: 0,
   };
   return { limits: clone(limits), usage, remaining: clone(limits) };
 }
 
-function recomputeBudget(state: P0AgentRunState, nowValue: string) {
+function recomputeBudget(state: P0AgentRunState) {
   const usage = state.budget.usage;
-  usage.elapsed_ms = Math.max(0, Date.parse(nowValue) - Date.parse(state.created_at));
   const limits = state.budget.limits;
   state.budget.remaining = {
     max_model_calls: Math.max(0, limits.max_model_calls - usage.model_calls),
@@ -397,7 +411,24 @@ function recomputeBudget(state: P0AgentRunState, nowValue: string) {
     max_input_tokens: Math.max(0, limits.max_input_tokens - usage.input_tokens),
     max_output_tokens: Math.max(0, limits.max_output_tokens - usage.output_tokens),
     max_elapsed_ms: Math.max(0, limits.max_elapsed_ms - usage.elapsed_ms),
+    max_cost_microusd: Math.max(0, limits.max_cost_microusd - usage.cost_microusd),
   };
+}
+
+function elapsedBetween(startedAt: string, finishedAt: string) {
+  return Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt));
+}
+
+async function coordinatorRunId(ownerKey: string, contract: P0AgentApplicationContract) {
+  const material = JSON.stringify({
+    owner_key: ownerKey,
+    objective: contract.objective.kind,
+    application_revision: contract.authority.application_revision,
+    authority_digest: contract.authority.authority_digest,
+    prior_outcomes_digest: contract.authority.prior_outcomes_digest,
+  });
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(material));
+  return `p0-agent:${[...new Uint8Array(digest)].map((item) => item.toString(16).padStart(2, "0")).join("")}`;
 }
 
 function checkpoint(
@@ -421,8 +452,9 @@ function stopReason(
   code: P0AgentStopReasonCode,
   message: string,
   resumable = false,
+  resumeAt?: string,
 ): P0AgentStopReason {
-  return { code, message, resumable };
+  return { code, message, resumable, ...(resumeAt ? { resume_at: resumeAt } : {}) };
 }
 
 function exceededTokenOrTimeBudget(state: P0AgentRunState) {
@@ -431,6 +463,7 @@ function exceededTokenOrTimeBudget(state: P0AgentRunState) {
     usage.input_tokens > limits.max_input_tokens ? "input-token" : null,
     usage.output_tokens > limits.max_output_tokens ? "output-token" : null,
     usage.elapsed_ms >= limits.max_elapsed_ms ? "elapsed-time" : null,
+    usage.cost_microusd > limits.max_cost_microusd ? "model-cost" : null,
   ].filter(Boolean);
   return exhausted.length ? exhausted.join(", ") : null;
 }
@@ -440,6 +473,7 @@ function nextBudgetBlock(state: P0AgentRunState, operation: "MODEL" | "TOOL") {
   if (usage.elapsed_ms >= limits.max_elapsed_ms) return "elapsed-time";
   if (usage.input_tokens >= limits.max_input_tokens) return "input-token";
   if (usage.output_tokens >= limits.max_output_tokens) return "output-token";
+  if (usage.cost_microusd >= limits.max_cost_microusd) return "model-cost";
   if (operation === "MODEL" && usage.model_calls >= limits.max_model_calls) return "model-call";
   if (operation === "MODEL" && usage.tool_calls >= limits.max_tool_calls) return "tool-call";
   if (operation === "TOOL" && usage.tool_calls >= limits.max_tool_calls) return "tool-call";
@@ -447,7 +481,19 @@ function nextBudgetBlock(state: P0AgentRunState, operation: "MODEL" | "TOOL") {
 }
 
 function assertBudgets(limits: P0AgentBudgetLimits) {
-  for (const [key, value] of Object.entries(limits)) {
+  const keys: Array<keyof P0AgentBudgetLimits> = [
+    "max_model_calls",
+    "max_tool_calls",
+    "max_input_tokens",
+    "max_output_tokens",
+    "max_elapsed_ms",
+    "max_cost_microusd",
+  ];
+  if (!limits || Object.keys(limits).length !== keys.length) {
+    throw new P0AgentRuntimeError("P0_AGENT_BUDGET_INVALID", "Durable budget shape is invalid.");
+  }
+  for (const key of keys) {
+    const value = limits[key];
     if (!Number.isSafeInteger(value) || value <= 0) {
       throw new P0AgentRuntimeError("P0_AGENT_BUDGET_INVALID", `${key} must be a positive safe integer.`);
     }
@@ -485,6 +531,85 @@ function compactObservations(state: P0AgentRunState, nowValue: string) {
     through_observation_sequence: through,
     summary,
     compacted_at: nowValue,
+  };
+}
+
+export type P0AgentOwnerProjection = {
+  status: "working" | "waiting" | "complete" | "blocked";
+  progress: {
+    completed: number;
+    total: number;
+    label: string;
+  };
+  card: {
+    kind: "agent-activity" | "finding" | "problem" | "human-decision-gate";
+    title: string;
+    body: string;
+  };
+  nextBusinessStep: string;
+};
+
+export function projectP0AgentRunForOwner(state: Pick<P0AgentRunState, "status" | "stop_reason" | "observations" | "budget">): P0AgentOwnerProjection {
+  const completed = Math.min(state.observations.length, 4);
+  const total = Math.max(1, Math.min(4, completed + (state.status === "COMPLETED" ? 0 : 1)));
+  const code = state.stop_reason?.code;
+  if (["MATERIAL_DECISION_REQUIRED", "CRITICAL_DECISION_REQUIRED", "EXACT_WRITE_AUTHORITY_REQUIRED"].includes(code ?? "")) {
+    return {
+      status: "blocked",
+      progress: { completed, total, label: "Безопасное исследование завершено до решения владельца" },
+      card: {
+        kind: "human-decision-gate",
+        title: "Подготовлено существенное решение",
+        body: "Агент собрал доступные факты и остановился только на границе бизнес-решения или полномочия.",
+      },
+      nextBusinessStep: "Рассмотреть подготовленную рекомендацию и её последствия.",
+    };
+  }
+  if (state.status === "COMPLETED") {
+    return {
+      status: "complete",
+      progress: { completed, total: Math.max(1, completed), label: "Текущий бизнес-вывод подготовлен" },
+      card: {
+        kind: "finding",
+        title: "Агент подготовил следующий бизнес-шаг",
+        body: "Вывод проверен trusted application и связан с текущим состоянием пути владельца.",
+      },
+      nextBusinessStep: "Продолжить по показанному бизнес-шагу.",
+    };
+  }
+  if (state.stop_reason?.resumable) {
+    return {
+      status: "waiting",
+      progress: { completed, total, label: "Безопасные источники проверяются" },
+      card: {
+        kind: "agent-activity",
+        title: "Агент ожидает источник",
+        body: "Очередь и повторное чтение продолжатся автоматически в пределах сохранённых ограничений.",
+      },
+      nextBusinessStep: "Агент продолжит после ответа источника.",
+    };
+  }
+  if (state.status === "STOPPED") {
+    return {
+      status: "blocked",
+      progress: { completed, total, label: "Работа безопасно остановлена" },
+      card: {
+        kind: "problem",
+        title: "Агент обнаружил ограничение",
+        body: "Продолжение остановлено без изменения бизнес-истины или полномочий.",
+      },
+      nextBusinessStep: "Проверить показанную бизнес-проблему.",
+    };
+  }
+  return {
+    status: "working",
+    progress: { completed, total, label: "Агент продолжает разрешённое исследование" },
+    card: {
+      kind: "agent-activity",
+      title: "Агент продолжает исследование",
+      body: "Разрешённые безопасные чтения выполняются автоматически.",
+    },
+    nextBusinessStep: "Дождаться следующего бизнес-вывода.",
   };
 }
 
@@ -528,7 +653,7 @@ export class P0AgentRuntime {
   private async save(state: P0AgentRunState) {
     const expectedVersion = state.version;
     const nowValue = this.now();
-    recomputeBudget(state, nowValue);
+    recomputeBudget(state);
     state.updated_at = nowValue;
     state.version += 1;
     if (!await this.store.compareAndSwap(state.run_id, expectedVersion, state)) {
@@ -546,6 +671,7 @@ export class P0AgentRuntime {
   }
 
   private async evaluate(state: P0AgentRunState) {
+    const startedAt = this.now();
     const result = await this.application.evaluate({
       owner_key: state.owner_key,
       run_id: state.run_id,
@@ -554,6 +680,7 @@ export class P0AgentRuntime {
       observation_count: state.observations.length,
       last_observation: clone(state.observations.at(-1) ?? null),
     });
+    state.budget.usage.elapsed_ms += elapsedBetween(startedAt, this.now());
     if (result.status === "STOP") return this.stop(state, result.stop_reason);
     return null;
   }
@@ -578,16 +705,19 @@ export class P0AgentRuntime {
 
   private async refreshAuthority(state: P0AgentRunState) {
     let contract: P0AgentApplicationContract;
+    const startedAt = this.now();
     try {
       contract = await this.application.contract(state.owner_key, state.objective.kind);
       assertApplicationContract(contract, state.objective.kind);
       assertFresh(contract, this.now());
     } catch (error) {
+      state.budget.usage.elapsed_ms += elapsedBetween(startedAt, this.now());
       return this.stop(state, stopReason(
         "RESUME_PRECONDITION_FAILED",
         error instanceof Error ? error.message : "Application authority could not be refreshed.",
       ));
     }
+    state.budget.usage.elapsed_ms += elapsedBetween(startedAt, this.now());
     if (!sameContractControlPlane(state, contract) || !sameP0AgentAuthorityIdentity(state.authority, contract.authority)) {
       return this.stop(state, stopReason(
         "RESUME_PRECONDITION_FAILED",
@@ -605,7 +735,7 @@ export class P0AgentRuntime {
       const authoritativeStop = await this.evaluate(state);
       if (authoritativeStop) return authoritativeStop;
 
-      recomputeBudget(state, this.now());
+      recomputeBudget(state);
       const modelBudgetBlock = nextBudgetBlock(state, "MODEL");
       if (modelBudgetBlock) {
         return this.stop(state, stopReason(
@@ -619,20 +749,28 @@ export class P0AgentRuntime {
       await this.save(state);
 
       let turn: P0ModelTurnResponse;
+      const modelStartedAt = this.now();
       try {
         turn = await this.model.turn(this.modelRequest(state));
       } catch (error) {
+        const failedAt = this.now();
+        state.budget.usage.elapsed_ms += elapsedBetween(modelStartedAt, failedAt);
         return this.stop(state, stopReason(
           "TEMPORARY_PROVIDER_FAILURE",
           error instanceof Error ? error.message : "The neural model provider is temporarily unavailable.",
           true,
+          new Date(Date.parse(failedAt) + 30_000).toISOString(),
         ));
       }
+      const modelFinishedAt = this.now();
+      state.budget.usage.elapsed_ms += elapsedBetween(modelStartedAt, modelFinishedAt);
       const inputTokens = Number(turn.usage?.input_tokens ?? 0);
       const outputTokens = Number(turn.usage?.output_tokens ?? 0);
+      const costMicrousd = Number(turn.usage?.cost_microusd ?? 0);
       state.budget.usage.input_tokens += Number.isFinite(inputTokens) ? Math.max(0, Math.trunc(inputTokens)) : 0;
       state.budget.usage.output_tokens += Number.isFinite(outputTokens) ? Math.max(0, Math.trunc(outputTokens)) : 0;
-      recomputeBudget(state, this.now());
+      state.budget.usage.cost_microusd += Number.isFinite(costMicrousd) ? Math.max(0, Math.trunc(costMicrousd)) : 0;
+      recomputeBudget(state);
       state.checkpoints.push(checkpoint(state, "MODEL_TURN", this.now()));
       await this.save(state);
 
@@ -664,7 +802,7 @@ export class P0AgentRuntime {
           `Tool ${call.name} arguments do not match its closed schema.`,
         ));
       }
-      recomputeBudget(state, this.now());
+      recomputeBudget(state);
       const toolBudgetBlock = nextBudgetBlock(state, "TOOL");
       if (toolBudgetBlock) {
         return this.stop(state, stopReason(
@@ -675,6 +813,7 @@ export class P0AgentRuntime {
 
       const nextSequence = state.observations.length + 1;
       let toolResult: Awaited<ReturnType<P0AgentApplicationAuthority["executeTool"]>>;
+      const toolStartedAt = this.now();
       try {
         toolResult = await this.application.executeTool({
           owner_key: state.owner_key,
@@ -685,12 +824,16 @@ export class P0AgentRuntime {
           observation_sequence: nextSequence,
         });
       } catch (error) {
+        const failedAt = this.now();
+        state.budget.usage.elapsed_ms += elapsedBetween(toolStartedAt, failedAt);
         return this.stop(state, stopReason(
           "REPEATED_SAFE_READ_FAILURE",
           error instanceof Error ? error.message : "The trusted P0 tool failed.",
           true,
+          new Date(Date.parse(failedAt) + 30_000).toISOString(),
         ));
       }
+      state.budget.usage.elapsed_ms += elapsedBetween(toolStartedAt, this.now());
       try {
         assertApplicationContract(toolResult.contract, state.objective.kind);
         assertFresh(toolResult.contract, this.now());
@@ -711,20 +854,72 @@ export class P0AgentRuntime {
       state.tools = clone(toolResult.contract.tools);
       state.observations.push(clone(toolResult.observation));
       state.budget.usage.tool_calls += 1;
-      recomputeBudget(state, this.now());
+      recomputeBudget(state);
       state.checkpoints.push(checkpoint(state, "TOOL_OBSERVATION", this.now()));
       await this.save(state);
     }
+  }
+
+  async coordinate({
+    owner_key: ownerKey,
+    budgets = DEFAULT_BUDGETS,
+  }: {
+    owner_key: string;
+    budgets?: P0AgentBudgetLimits;
+  }) {
+    requireText(ownerKey, "Agent owner key", 500);
+    assertBudgets(budgets);
+    const startCurrent = async () => {
+      const contract = await this.application.contract(ownerKey, "COORDINATE_OWNER_JOURNEY");
+      assertApplicationContract(contract, "COORDINATE_OWNER_JOURNEY");
+      const runId = await coordinatorRunId(ownerKey, contract);
+      try {
+        return await this.start({
+          owner_key: ownerKey,
+          objective_kind: "COORDINATE_OWNER_JOURNEY",
+          budgets,
+          run_id: runId,
+        });
+      } catch (error) {
+        if (!(error instanceof P0AgentRuntimeError) || error.code !== "P0_AGENT_RUN_CONFLICT") throw error;
+        const winner = await this.store.load(runId);
+        if (!winner) throw error;
+        return winner;
+      }
+    };
+    const current = await this.store.loadCurrent?.(ownerKey) ?? null;
+    if (!current || current.schema_version !== P0_AGENT_RUN_SCHEMA
+      || current.objective.kind !== "COORDINATE_OWNER_JOURNEY") {
+      return startCurrent();
+    }
+
+    if (current.status === "COMPLETED" || current.stop_reason?.resumable === false) {
+      const latest = await this.application.contract(ownerKey, "COORDINATE_OWNER_JOURNEY");
+      assertApplicationContract(latest, "COORDINATE_OWNER_JOURNEY");
+      if (sameContractControlPlane(current, latest) && sameP0AgentAuthorityIdentity(current.authority, latest.authority)) {
+        return clone(current);
+      }
+      return startCurrent();
+    }
+
+    const resumeAt = current.stop_reason?.resume_at;
+    if (resumeAt && Date.parse(resumeAt) > Date.parse(this.now())) return clone(current);
+    const compact = current.observations.length > (current.compaction?.through_observation_sequence ?? 0);
+    const resumed = await this.resume({ owner_key: ownerKey, run_id: current.run_id, compact });
+    if (resumed.stop_reason?.code !== "RESUME_PRECONDITION_FAILED") return resumed;
+    return startCurrent();
   }
 
   async start({
     owner_key: ownerKey,
     objective_kind: objectiveKind,
     budgets = DEFAULT_BUDGETS,
+    run_id: requestedRunId,
   }: {
     owner_key: string;
     objective_kind: P0AgentObjectiveKind;
     budgets?: P0AgentBudgetLimits;
+    run_id?: string;
   }) {
     requireText(ownerKey, "Agent owner key", 500);
     assertBudgets(budgets);
@@ -732,7 +927,7 @@ export class P0AgentRuntime {
     assertApplicationContract(contract, objectiveKind);
     const timestamp = this.now();
     assertFresh(contract, timestamp);
-    const runId = this.createId();
+    const runId = requestedRunId ?? this.createId();
     requireText(runId, "Agent run ID", 500);
     const state: P0AgentRunState = {
       schema_version: P0_AGENT_RUN_SCHEMA,
@@ -789,7 +984,7 @@ export class P0AgentRuntime {
 
     const refreshStop = await this.refreshAuthority(state);
     if (refreshStop) return refreshStop;
-    recomputeBudget(state, this.now());
+    recomputeBudget(state);
     const budgetBlock = nextBudgetBlock(state, "MODEL");
     if (budgetBlock) {
       return this.stop(state, stopReason(

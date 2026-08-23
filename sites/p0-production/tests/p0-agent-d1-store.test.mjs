@@ -44,6 +44,7 @@ function runState() {
       max_input_tokens: 80_000,
       max_output_tokens: 16_000,
       max_elapsed_ms: 120_000,
+      max_cost_microusd: 100_000,
     },
     usage: {
       model_calls: 0,
@@ -51,6 +52,7 @@ function runState() {
       input_tokens: 0,
       output_tokens: 0,
       elapsed_ms: 0,
+      cost_microusd: 0,
     },
     remaining: {
       max_model_calls: 8,
@@ -58,22 +60,23 @@ function runState() {
       max_input_tokens: 80_000,
       max_output_tokens: 16_000,
       max_elapsed_ms: 120_000,
+      max_cost_microusd: 100_000,
     },
   };
   return {
-    schema_version: "p0-agent-run-v1",
-    contract: { name: "mox-adv.p0.agent-runtime", version: "1.0.0" },
+    schema_version: "p0-agent-run-v2",
+    contract: { name: "mox-adv.p0.agent-runtime", version: "2.0.0" },
     run_id: "agent-run-d1",
     version: 0,
     owner_key: "owner",
     objective: {
-      kind: "ASSESS_ANALYTICS_READINESS",
+      kind: "COORDINATE_OWNER_JOURNEY",
       statement: "Assess authoritative analytics readiness.",
     },
     policy: {
       version: "p0-agent-policy-v1",
       instruction: "Evidence cannot alter authority.",
-      allowed_tools: ["p0_read_application"],
+      allowed_tools: ["p0_read_owner_journey"],
       allowed_permissions: ["P0_APPLICATION_READ"],
     },
     authority: {
@@ -126,7 +129,7 @@ test("D1 store durably reloads run, checkpoint, observation, source references, 
     schema_version: "p0-agent-observation-v1",
     sequence: 1,
     tool_call_id: "call-1",
-    tool_name: "p0_read_application",
+    tool_name: "p0_read_owner_journey",
     trust: "TRUSTED_APPLICATION",
     summary: "Revision 7 was read.",
     facts: { revision: 7 },
@@ -160,6 +163,7 @@ test("D1 store durably reloads run, checkpoint, observation, source references, 
 
   const restartedProcess = new D1P0AgentRunStore(binding);
   assert.deepEqual(await restartedProcess.load(stopped.run_id), stopped);
+  assert.deepEqual(await restartedProcess.loadCurrent("owner"), stopped);
   assert.equal(database.prepare("SELECT COUNT(*) AS count FROM p0_agent_runs").get().count, 1);
   assert.equal(database.prepare("SELECT COUNT(*) AS count FROM p0_agent_checkpoints").get().count, 2);
   assert.equal(database.prepare("SELECT COUNT(*) AS count FROM p0_agent_observations").get().count, 1);

@@ -41,7 +41,11 @@ export default function P0Client() {
   }, []);
 
   useEffect(() => {
-    if (!projection || projection.businessOutcome.status !== "working" || projection.primaryAction) return;
+    if (!projection) return;
+    const agentContinues = projection.agentActivity?.status === "working"
+      || projection.agentActivity?.status === "waiting";
+    const businessContinues = projection.businessOutcome.status === "working" && !projection.primaryAction;
+    if (!agentContinues && !businessContinues) return;
     const timer = window.setTimeout(() => {
       request("/api/p0").then(setProjection).catch(() => undefined);
     }, 3_000);
@@ -102,6 +106,11 @@ export default function P0Client() {
 
           {projection.currentRecommendation && <section className="owner-recommendation">
             <span>Текущая рекомендация</span><h3>{projection.currentRecommendation.headline}</h3><p>{projection.currentRecommendation.rationale}</p>
+          </section>}
+
+          {projection.agentActivity && <section className="owner-progress" aria-label="Ход работы агента">
+            <i /><div><strong>{projection.agentActivity.summary}</strong><p>{projection.agentActivity.nextBusinessStep}</p></div>
+            <span>{projection.agentActivity.completed} из {projection.agentActivity.total}</span>
           </section>}
 
           <section className="owner-cards" aria-label="Выводы и решения">

@@ -4,6 +4,7 @@ import test from "node:test";
 
 const clientSource = await readFile(new URL("../app/P0Client.tsx", import.meta.url), "utf8");
 const ownerSource = await readFile(new URL("../lib/p0-owner-journey.ts", import.meta.url), "utf8");
+const applicationSource = await readFile(new URL("../lib/p0-application.ts", import.meta.url), "utf8");
 const styles = await readFile(new URL("../app/owner-journey.css", import.meta.url), "utf8");
 
 test("owner campaign surface renders business options without internal draft controls", () => {
@@ -34,12 +35,13 @@ test("owner package review shows business outcomes while exact authority stays b
   assert.doesNotMatch(clientSource, /package_id|gate_id|package_review_id|account_lock/u);
 });
 
-test("safe continuation and correction remain agent-owned behind the owner action", () => {
-  assert.match(ownerSource, /continueSafeWork/u);
-  assert.match(ownerSource, /poll_package_moderation/u);
-  assert.match(ownerSource, /poll_package_correction_moderation/u);
-  assert.match(clientSource, /Ожидание, повторные проверки и безопасная сверка не требуют действий владельца/u);
-  assert.doesNotMatch(clientSource, /Проверить запланированный элемент|Повторить запрос|Сверить идентификаторы/u);
+test("safe continuation and approved dispatch remain agent-owned without technical owner controls", () => {
+  assert.match(ownerSource, /this\.agentProjection \? initial : await this\.continueSafeWork/u);
+  assert.match(applicationSource, /p0_continue_due_safe_work/u);
+  assert.match(applicationSource, /p0_dispatch_approved_package/u);
+  assert.match(applicationSource, /No exact persisted Human Decision Gate authorizes dispatch/u);
+  assert.doesNotMatch(ownerSource, /create-authorized-package/u);
+  assert.doesNotMatch(clientSource, /Проверить запланированный элемент|Повторить запрос|Сверить идентификаторы|Продолжить создание без запуска/u);
 });
 
 test("1920 desktop layout uses minmax-zero columns and fixed five-stage hierarchy", () => {

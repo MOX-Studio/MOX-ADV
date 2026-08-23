@@ -3,6 +3,7 @@ import {
   P0ApplicationError,
   type P0Command,
 } from "./p0-application.ts";
+import type { P0AgentOwnerProjection } from "./p0-agent-runtime.ts";
 
 export const OWNER_JOURNEY_STAGES = [
   { id: "goal", label: "Цель" },
@@ -44,6 +45,13 @@ export type OwnerJourneyProjection = {
     rationale: string;
   } | null;
   materialUnknowns: string[];
+  agentActivity: {
+    status: P0AgentOwnerProjection["status"];
+    completed: number;
+    total: number;
+    summary: string;
+    nextBusinessStep: string;
+  } | null;
   cards: Array<{
     kind: OwnerCardKind;
     title: string;
@@ -94,7 +102,6 @@ type ActionKind =
   | "prepare-package"
   | "review-package"
   | "authorize-and-create"
-  | "create-authorized-package"
   | "start-correction"
   | "save-correction"
   | "authorize-correction";
@@ -118,6 +125,8 @@ const FORBIDDEN_TECHNICAL_TEXT = [
   /sha-?256:[a-f0-9]+/giu,
   /\b(?:schema|contract)[_ -]?(?:version|name)\b/giu,
   /\b(?:revision|fingerprint|hash|journal|raw payload|tool trace|error code)\b/giu,
+  /\b(?:run[_ -]?id|checkpoint|retry|poll(?:ing)?|tool names?)\b/giu,
+  /\bp0_[a-z0-9_]+\b/giu,
   /\b(?:campaigns|adgroups|keywords|ads|clients|dictionaries)\.(?:get|add|update|suspend|moderate|resume)\b/giu,
 ];
 
@@ -286,16 +295,6 @@ function actionDescriptor(view: InternalView): InternalActionDescriptor | null {
       fields: [],
     };
   }
-  const correctionReady = correctionWithStatus(state, "READY_TO_RESUBMIT");
-  if (correctionReady) {
-    return {
-      kind: "authorize-correction",
-      target: correctionReady.correction_id,
-      label: "Продолжить создание исправленной кампании",
-      description: "Агент продолжит безопасное создание без запуска показов.",
-      fields: [],
-    };
-  }
   const rejected = state.package_execution?.items.find((item) => item.status === "REJECTED_NEEDS_EDIT"
     && !state.package_corrections.some((correction) => correction.source.item_execution_id === item.item_execution_id));
   if (rejected) {
@@ -334,14 +333,6 @@ function actionDescriptor(view: InternalView): InternalActionDescriptor | null {
       kind: "authorize-and-create",
       label: "Подтвердить и создать без запуска",
       description: "Одно решение разрешает только показанный пакет. Кампании останутся без показов и расходов.",
-      fields: [],
-    };
-  }
-  if (state.human_decision_gate && !state.package_execution && allowed(view, "dispatch_package")) {
-    return {
-      kind: "create-authorized-package",
-      label: "Продолжить создание без запуска",
-      description: "Полномочие уже подтверждено; агент продолжит только показанный пакет.",
       fields: [],
     };
   }
@@ -472,10 +463,21 @@ function recommendation(view: InternalView, stage: OwnerJourneyStageId): OwnerJo
   return { headline: "Создать подтверждённые кампании без запуска", rationale: "Каждая кампания будет создана и проверена независимо, а показы останутся выключены." };
 }
 
-function cards(view: InternalView, stage: OwnerJourneyStageId, unknowns: string[]): OwnerJourneyProjection["cards"] {
+function cards(
+  view: InternalView,
+  stage: OwnerJourneyStageId,
+  unknowns: string[],
+  agent: P0AgentOwnerProjection | null,
+): OwnerJourneyProjection["cards"] {
   const state = view.state;
   const result: OwnerJourneyProjection["cards"] = [];
-  if (stage === "goal") {
+  if (agent && agent.card.kind !== "human-decision-gate") {
+    result.push({
+      kind: agent.card.kind,
+      title: ownerText(agent.card.title, "Текущая работа агента", 200),
+      body: ownerText(agent.card.body, "Агент безопасно продолжает текущую работу.", 600),
+    });
+  } else if (stage === "goal") {
     result.push({ kind: "agent-activity", title: "Агент собирает контекст", body: "Проверяет бизнес, доступную аналитику и текущую рекламу без просьб выполнять технические шаги." });
   }
   if (state.business_model) {
@@ -493,15 +495,32 @@ function cards(view: InternalView, stage: OwnerJourneyStageId, unknowns: string[
   }
   for (const item of unknowns.slice(0, 3)) result.push({ kind: "problem", title: "Существенное неизвестное", body: item });
   const descriptor = actionDescriptor(view);
-  if (descriptor && ["confirm-goal", "authorize-and-create", "authorize-correction"].includes(descriptor.kind)) {
-    result.push({ kind: "human-decision-gate", title: "Нужно решение владельца", body: descriptor.description });
-  } else if (stage !== "goal") {
+  const gateKinds: ActionKind[] = ["confirm-goal", "approve-strategy", "authorize-and-create", "authorize-correction"];
+  if (descriptor && gateKinds.includes(descriptor.kind)) {
+    const current = recommendation(view, stage);
+    result.push({
+      kind: "human-decision-gate",
+      title: "Нужно существенное решение владельца",
+      body: descriptor.description,
+      facts: [
+        { label: "Рекомендация", value: current?.headline ?? descriptor.label },
+        { label: "Основание", value: current?.rationale ?? "Агент использовал все доступные разрешённые evidence." },
+        { label: "Уверенность", value: unknowns.length ? "Ограничена указанными существенными неизвестными" : "Достаточна для подготовленного решения" },
+        { label: "Альтернатива", value: "Скорректировать показанный бизнес-смысл без расширения полномочий" },
+        { label: "Последствие", value: descriptor.description },
+      ],
+    });
+  } else if (!agent && stage !== "goal") {
     result.push({ kind: "agent-activity", title: "Текущая работа агента", body: "Безопасные проверки, ожидание и повторные чтения выполняются автоматически." });
   }
   return result;
 }
 
-async function project(ownerKey: string, view: InternalView): Promise<OwnerJourneyProjection> {
+async function project(
+  ownerKey: string,
+  view: InternalView,
+  agent: P0AgentOwnerProjection | null,
+): Promise<OwnerJourneyProjection> {
   const stage = currentStage(view.state);
   const stageIndex = OWNER_JOURNEY_STAGES.findIndex((item) => item.id === stage);
   const unknowns = materialUnknowns(view.state);
@@ -524,7 +543,14 @@ async function project(ownerKey: string, view: InternalView): Promise<OwnerJourn
     businessOutcome: outcome(view, stage, unknowns),
     currentRecommendation: recommendation(view, stage),
     materialUnknowns: unknowns,
-    cards: cards(view, stage, unknowns),
+    agentActivity: agent ? {
+      status: agent.status,
+      completed: agent.progress.completed,
+      total: agent.progress.total,
+      summary: ownerText(agent.progress.label, "Агент продолжает работу", 300),
+      nextBusinessStep: ownerText(agent.nextBusinessStep, "Дождаться следующего бизнес-вывода.", 400),
+    } : null,
+    cards: cards(view, stage, unknowns, agent),
     campaignOptions: campaigns,
     packageSummary: packageSummary(view, campaigns),
     primaryAction: descriptor ? {
@@ -545,14 +571,21 @@ function required(values: Record<string, unknown>, key: string) {
 
 export class P0OwnerJourney {
   private readonly application: P0Application;
+  private readonly agentProjection: ((ownerKey: string) => Promise<P0AgentOwnerProjection | null>) | null;
 
-  constructor(application: P0Application) {
+  constructor(
+    application: P0Application,
+    options: { agentProjection?: (ownerKey: string) => Promise<P0AgentOwnerProjection | null> } = {},
+  ) {
     this.application = application;
+    this.agentProjection = options.agentProjection ?? null;
   }
 
   async query(ownerKey: string): Promise<OwnerJourneyProjection> {
-    const view = await this.continueSafeWork(ownerKey, await this.application.query(ownerKey));
-    return project(ownerKey, view);
+    const initial = await this.application.query(ownerKey);
+    const view = this.agentProjection ? initial : await this.continueSafeWork(ownerKey, initial);
+    const agent = this.agentProjection ? await this.agentProjection(ownerKey) : null;
+    return project(ownerKey, view, agent);
   }
 
   async submit(ownerKey: string, submission: OwnerActionSubmission): Promise<OwnerJourneyProjection> {
@@ -614,11 +647,10 @@ export class P0OwnerJourney {
         package_review_id: review.package_review_id,
         package_id: review.package_id,
       });
-      const gate = view.state.human_decision_gate!;
-      await command({ action: "dispatch_package", package_id: gate.package_id, gate_id: gate.gate_id });
-    } else if (descriptor.kind === "create-authorized-package") {
-      const gate = view.state.human_decision_gate!;
-      await command({ action: "dispatch_package", package_id: gate.package_id, gate_id: gate.gate_id });
+      if (!this.agentProjection) {
+        const gate = view.state.human_decision_gate!;
+        await command({ action: "dispatch_package", package_id: gate.package_id, gate_id: gate.gate_id });
+      }
     } else if (descriptor.kind === "start-correction") {
       await command({ action: "start_package_correction", item_execution_id: descriptor.target });
     } else if (descriptor.kind === "save-correction") {
@@ -648,16 +680,19 @@ export class P0OwnerJourney {
         });
         correction = view.state.package_corrections.find((item) => item.correction_id === descriptor.target)!;
       }
-      await command({
-        action: "resubmit_package_correction",
-        correction_id: correction.correction_id,
-        package_id: correction.human_decision_gate!.package_id,
-        gate_id: correction.human_decision_gate!.gate_id,
-      });
+      if (!this.agentProjection) {
+        await command({
+          action: "resubmit_package_correction",
+          correction_id: correction.correction_id,
+          package_id: correction.human_decision_gate!.package_id,
+          gate_id: correction.human_decision_gate!.gate_id,
+        });
+      }
     }
 
-    view = await this.continueSafeWork(ownerKey, view);
-    return project(ownerKey, view);
+    if (!this.agentProjection) view = await this.continueSafeWork(ownerKey, view);
+    const agent = this.agentProjection ? await this.agentProjection(ownerKey) : null;
+    return project(ownerKey, view, agent);
   }
 
   async diagnostics(ownerKey: string) {

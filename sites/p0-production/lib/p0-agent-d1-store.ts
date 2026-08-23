@@ -69,6 +69,7 @@ function eventStatements(db: D1Database, state: P0AgentRunState, valueJson: stri
       max_input_tokens: Math.max(0, limits.max_input_tokens - usage.input_tokens),
       max_output_tokens: Math.max(0, limits.max_output_tokens - usage.output_tokens),
       max_elapsed_ms: Math.max(0, limits.max_elapsed_ms - usage.elapsed_ms),
+      max_cost_microusd: Math.max(0, limits.max_cost_microusd - usage.cost_microusd),
     };
     return db.prepare(
       `INSERT OR IGNORE INTO p0_agent_budget_events(run_id, checkpoint_sequence, usage_json, remaining_json, recorded_at) SELECT ?, ?, ?, ?, ? WHERE ${currentRun}`,
@@ -98,6 +99,18 @@ export class D1P0AgentRunStore implements P0AgentRunStore {
     const row = await this.db
       .prepare("SELECT version, value_json FROM p0_agent_runs WHERE run_id = ?")
       .bind(runId)
+      .first<AgentRunRow>();
+    if (!row) return null;
+    const state = JSON.parse(row.value_json) as P0AgentRunState;
+    if (state.version !== row.version) throw new Error("Durable agent run version drift detected.");
+    return state;
+  }
+
+  async loadCurrent(ownerKey: string): Promise<P0AgentRunState | null> {
+    await ensureP0AgentTables(this.db);
+    const row = await this.db
+      .prepare("SELECT version, value_json FROM p0_agent_runs WHERE user_key = ? ORDER BY created_at DESC, rowid DESC LIMIT 1")
+      .bind(ownerKey)
       .first<AgentRunRow>();
     if (!row) return null;
     const state = JSON.parse(row.value_json) as P0AgentRunState;

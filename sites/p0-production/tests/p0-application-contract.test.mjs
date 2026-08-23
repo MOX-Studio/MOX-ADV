@@ -3330,12 +3330,12 @@ test("authoritative application owns the agent objective, typed tool schema, per
   const value = await fixture();
   t.after(() => rm(value.directory, { recursive: true, force: true }));
 
-  const initial = await value.application.agentContract("owner", "ASSESS_ANALYTICS_READINESS");
+  const initial = await value.application.agentContract("owner", "COORDINATE_OWNER_JOURNEY");
   assert.equal(initial.schema_version, "p0-agent-application-contract-v1");
-  assert.equal(initial.objective.kind, "ASSESS_ANALYTICS_READINESS");
-  assert.deepEqual(initial.policy.allowed_tools, ["p0_read_application", "p0_audit_direct_account", "p0_record_readiness_assessment"]);
-  assert.deepEqual(initial.policy.allowed_permissions, ["P0_APPLICATION_READ", "P0_PROVIDER_READ", "P0_OBSERVATION_RECORD"]);
-  assert.deepEqual(initial.tools.map((tool) => tool.name), ["p0_read_application", "p0_audit_direct_account", "p0_record_readiness_assessment"]);
+  assert.equal(initial.objective.kind, "COORDINATE_OWNER_JOURNEY");
+  assert.deepEqual(initial.policy.allowed_tools, ["p0_read_owner_journey", "p0_audit_direct_account", "p0_continue_due_safe_work", "p0_dispatch_approved_package", "p0_record_owner_journey_assessment"]);
+  assert.deepEqual(initial.policy.allowed_permissions, ["P0_APPLICATION_READ", "P0_PROVIDER_READ", "P0_APPROVED_DISPATCH", "P0_OBSERVATION_RECORD"]);
+  assert.deepEqual(initial.tools.map((tool) => tool.name), ["p0_read_owner_journey", "p0_audit_direct_account", "p0_continue_due_safe_work", "p0_dispatch_approved_package", "p0_record_owner_journey_assessment"]);
   assert.ok(initial.tools.every((tool) => tool.input_schema.additionalProperties === false));
   assert.equal(initial.authority.application_revision, 0);
   assert.match(initial.authority.authority_digest, /^sha256:[a-f0-9]{64}$/u);
@@ -3348,14 +3348,14 @@ test("authoritative application owns the agent objective, typed tool schema, per
     authority: initial.authority,
     call: {
       id: "call-1",
-      name: "p0_read_application",
+      name: "p0_read_owner_journey",
       arguments: { expected_revision: 0 },
     },
     observation_sequence: 1,
   });
   assert.equal(read.observation.trust, "TRUSTED_APPLICATION");
   assert.equal(read.observation.application_revision, 0);
-  assert.equal(read.observation.facts.analytics_evidence_status, "MISSING");
+  assert.equal(read.observation.facts.next_boundary, "OWNER_REVIEW");
   assert.deepEqual(read.contract.policy, initial.policy);
   assert.deepEqual(
     await value.application.evaluateAgentObjective({
@@ -3369,6 +3369,27 @@ test("authoritative application owns the agent objective, typed tool schema, per
     { status: "CONTINUE", stop_reason: null },
   );
 
+  await assert.rejects(
+    value.application.executeAgentTool({
+      owner_key: "owner",
+      run_id: "agent-run-1",
+      objective: initial.objective,
+      authority: initial.authority,
+      call: {
+        id: "unnecessary-question",
+        name: "p0_record_owner_journey_assessment",
+        arguments: {
+          expected_revision: 0,
+          next_boundary: "HUMAN_DECISION_GATE",
+          owner_question_required: true,
+          summary: "Ask the owner for a routine fact.",
+        },
+      },
+      observation_sequence: 2,
+    }),
+    (error) => error instanceof P0ApplicationError && error.code === "P0_AGENT_UNNECESSARY_OWNER_QUESTION",
+  );
+
   const assessment = await value.application.executeAgentTool({
     owner_key: "owner",
     run_id: "agent-run-1",
@@ -3376,12 +3397,12 @@ test("authoritative application owns the agent objective, typed tool schema, per
     authority: initial.authority,
     call: {
       id: "call-2",
-      name: "p0_record_readiness_assessment",
+      name: "p0_record_owner_journey_assessment",
       arguments: {
         expected_revision: 0,
-        analytics_evidence_status: "MISSING",
-        material_decision_required: false,
-        summary: "Analytics evidence is missing; the next safe action must be prepared by a later evidence tool slice.",
+        next_boundary: "OWNER_REVIEW",
+        owner_question_required: false,
+        summary: "The owner can provide the business entry point while routine research remains agent-owned.",
       },
     },
     observation_sequence: 2,
@@ -3415,7 +3436,7 @@ test("authoritative application owns the agent objective, typed tool schema, per
     expected_revision: 0,
     url: "https://owner.example/",
   });
-  const decisionContract = await value.application.agentContract("owner", "ASSESS_ANALYTICS_READINESS");
+  const decisionContract = await value.application.agentContract("owner", "COORDINATE_OWNER_JOURNEY");
   const decision = await value.application.evaluateAgentObjective({
     owner_key: "owner",
     run_id: "agent-run-1",
@@ -3435,7 +3456,7 @@ test("authoritative application owns the agent objective, typed tool schema, per
   });
   assert.equal(result.state.business_model.research.agent, "DETERMINISTIC_EVIDENCE_EXTRACTOR_V4");
   assert.equal(result.state.product_focus.decision_status, "HUMAN_DECISION_REQUIRED");
-  const focusDecisionContract = await value.application.agentContract("owner", "ASSESS_ANALYTICS_READINESS");
+  const focusDecisionContract = await value.application.agentContract("owner", "COORDINATE_OWNER_JOURNEY");
   const focusDecision = await value.application.evaluateAgentObjective({
     owner_key: "owner",
     run_id: "agent-run-1",
@@ -3453,7 +3474,7 @@ test("authoritative application owns the agent objective, typed tool schema, per
     value: ownerModel(result.state),
   });
   assert.equal(result.state.product_focus.decision_status, "OWNER_SELECTED");
-  const completedContract = await value.application.agentContract("owner", "ASSESS_ANALYTICS_READINESS");
+  const completedContract = await value.application.agentContract("owner", "COORDINATE_OWNER_JOURNEY");
   assert.equal(completedContract.authority.application_revision, result.revision);
   const completed = await value.application.evaluateAgentObjective({
     owner_key: "owner",
@@ -3464,7 +3485,7 @@ test("authoritative application owns the agent objective, typed tool schema, per
     last_observation: null,
   });
   assert.equal(completed.status, "STOP");
-  assert.equal(completed.stop_reason.code, "COMPLETED");
+  assert.equal(completed.stop_reason.code, "CRITICAL_DECISION_REQUIRED");
 });
 
 test("typed owner journey is the narrow five-stage query/action seam and keeps diagnostics outside the owner response", async (t) => {
@@ -3484,7 +3505,16 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
       async readPlaybookReleases() { return [release]; },
     }),
   });
-  const journey = new P0OwnerJourney(application);
+  const journey = new P0OwnerJourney(application, {
+    async agentProjection() {
+      return {
+        status: "waiting",
+        progress: { completed: 2, total: 4, label: "checkpoint retry p0_read_owner_journey" },
+        card: { kind: "agent-activity", title: "run_id internal", body: "polling tool names stay internal" },
+        nextBusinessStep: "retry p0_continue_due_safe_work without owner control",
+      };
+    },
+  });
   const ownerKey = "owner";
   const values = (projection, overrides = {}) => ({
     ...Object.fromEntries(projection.primaryAction.fields.map((field) => [field.key, field.value])),
@@ -3565,6 +3595,11 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
     /journal/iu,
     /tool[_ -]?trace/iu,
     /error[_ -]?code/iu,
+    /run[_ -]?id/iu,
+    /checkpoint/iu,
+    /retry/iu,
+    /polling/iu,
+    /p0_[a-z0-9_]+/iu,
   ]) {
     for (const response of ownerResponses) assert.doesNotMatch(JSON.stringify(response), forbidden);
   }
