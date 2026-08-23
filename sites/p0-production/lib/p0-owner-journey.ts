@@ -2,6 +2,7 @@ import {
   P0Application,
   P0ApplicationError,
 } from "./p0-application.ts";
+import { BUSINESS_MODEL_FIELD_ORDER } from "./business-model-contract.ts";
 import type { P0AgentOwnerProjection } from "./p0-agent-runtime.ts";
 import {
   type AccessReadinessProjection,
@@ -28,6 +29,7 @@ export type OwnerActionField = {
   required: boolean;
   options?: Array<string | { value: string; label: string }>;
   help?: string;
+  readOnly?: boolean;
 };
 
 export type OwnerJourneyProjection = {
@@ -48,6 +50,25 @@ export type OwnerJourneyProjection = {
   currentRecommendation: {
     headline: string;
     rationale: string;
+  } | null;
+  businessModel: {
+    fields: Array<{
+      label: string;
+      value: string;
+      availability: "Доступно" | "Недоступно";
+      provenance: string;
+      observedAt: string;
+      freshness: string;
+      confidence: string;
+      limitation: string;
+      assumption: string;
+    }>;
+    economics: {
+      status: "Подтверждена" | "Существенная неопределённость";
+      targetResultCost: string;
+      explanation: string;
+    };
+    materialQuestions: Array<{ question: string; consequence: string }>;
   } | null;
   materialUnknowns: string[];
   agentActivity: {
@@ -199,21 +220,44 @@ function goalFields(state: InternalState): OwnerActionField[] {
   }];
 }
 
+const BUSINESS_MODEL_INPUTS = [
+  { key: "product", field: "product", label: "Что рекламируем", required: true },
+  { key: "value", field: "value", label: "Почему это ценно", required: true },
+  { key: "qualifiedResult", field: "qualified_outcome", label: "Какой результат считаем качественным", required: true },
+  { key: "customerContext", field: "customer_context", label: "Клиент и его контекст", required: true },
+  { key: "buyingContext", field: "buying_context", label: "Кто и как принимает решение о покупке" },
+  { key: "revenueModel", field: "revenue_model", label: "Модель выручки" },
+  { key: "salesCycle", field: "sales_cycle", label: "Цикл продажи" },
+  { key: "averageSaleValueRub", field: "average_sale_value_rub", label: "Средняя ценность продажи, ₽", control: "number" },
+  { key: "grossMarginPercent", field: "gross_margin_percent", label: "Валовая маржа, %", control: "number" },
+  { key: "leadToSalePercent", field: "lead_to_sale_percent", label: "Доля обращений, переходящих в продажу, %", control: "number" },
+  { key: "capacity", field: "capacity", label: "Мощность обработки новых результатов" },
+  { key: "seasonality", field: "seasonality", label: "Сезонность" },
+  { key: "geography", field: "geography", label: "География обслуживания" },
+  { key: "exclusions", field: "exclusions", label: "Что не считаем результатом", required: true },
+  { key: "keyConstraints", field: "key_constraints", label: "Ключевые ограничения" },
+] as const;
+
 function businessModelFields(state: InternalState): OwnerActionField[] {
   const model = record(state.business_model);
-  return [
-    ["product", "Что рекламируем"],
-    ["audience", "Кому это нужно"],
-    ["value", "Почему это ценно"],
-    ["qualifiedResult", "Какой результат считаем качественным", "qualified_result"],
-    ["exclusions", "Что не считаем результатом"],
-  ].map(([key, label, sourceKey = key]) => ({
-    key,
-    label,
-    control: "textarea" as const,
-    value: ownerText(model[sourceKey], "", 1_000),
-    required: true,
-  }));
+  const contract = record(model.owner_contract);
+  const contractFields = record(contract.fields);
+  const questions = list(contract.questions).map(record);
+  return BUSINESS_MODEL_INPUTS.map((input) => {
+    const contractField = record(contractFields[input.field]);
+    const value = input.field === "product" || input.field === "value"
+      ? model[input.field]
+      : contractField.value;
+    const question = questions.find((item) => item.field === input.field);
+    return {
+      key: input.key,
+      label: input.label,
+      control: "control" in input ? input.control : "textarea" as const,
+      value: typeof value === "number" ? value : ownerText(value, "", 1_000),
+      required: "required" in input && input.required === true,
+      ...(question ? { help: `${ownerText(question.question)} ${ownerText(question.why_material)}` } : {}),
+    };
+  });
 }
 
 function strategyFields(state: InternalState): OwnerActionField[] {
@@ -230,7 +274,17 @@ function strategyFields(state: InternalState): OwnerActionField[] {
     { key: "periodEnd", label: "Окончание периода", control: "date" as const, value: ownerText(period.end_date, "", 20), required: true },
     { key: "landingPage", label: "Куда вести клиента", control: "url" as const, value: ownerText(value("landing_page"), "", 1_500), required: true },
     { key: "weeklyBudget", label: "Бюджет на неделю, ₽", control: "number" as const, value: Number(value("weekly_budget")) || "", required: true },
-    { key: "targetResultCost", label: "Целевая стоимость результата, ₽", control: "number" as const, value: Number(value("target_result_cost")) || "", required: true },
+    {
+      key: "targetResultCost",
+      label: "Целевая стоимость результата, ₽",
+      control: "number" as const,
+      value: Number(value("target_result_cost")) || "",
+      required: false,
+      readOnly: true,
+      help: Number(value("target_result_cost")) > 0
+        ? "Выведено из подтверждённой economics Business Model."
+        : "Не выводится до подтверждения ценности продажи, маржи и доли обращений, переходящих в продажу.",
+    },
     { key: "message", label: "Главное сообщение", control: "textarea" as const, value: ownerText(value("core_message"), "", 1_000), required: true },
   ];
 }
@@ -367,11 +421,75 @@ async function actionHandle(ownerKey: string, view: InternalView, descriptor: In
   return opaqueHandle(material);
 }
 
+const BUSINESS_MODEL_LABELS: Record<string, string> = {
+  qualified_outcome: "Квалифицированный результат",
+  customer_context: "Клиент и его контекст",
+  buying_context: "Контекст покупки",
+  revenue_model: "Модель выручки",
+  sales_cycle: "Цикл продажи",
+  average_sale_value_rub: "Средняя ценность продажи",
+  gross_margin_percent: "Валовая маржа",
+  lead_to_sale_percent: "Обращения, переходящие в продажу",
+  capacity: "Мощность",
+  seasonality: "Сезонность",
+  geography: "География",
+  exclusions: "Исключения",
+  key_constraints: "Ключевые ограничения",
+};
+
+function businessModelProjection(state: InternalState): OwnerJourneyProjection["businessModel"] {
+  const contract = record(record(state.business_model).owner_contract);
+  const fields = record(contract.fields);
+  if (!Object.keys(fields).length) return null;
+  const economics = record(contract.economics);
+  return {
+    fields: BUSINESS_MODEL_FIELD_ORDER.map((field) => {
+      const item = record(fields[field]);
+      const provenance = record(item.provenance);
+      const assumption = record(item.assumption);
+      const value = item.value === null || item.value === undefined || item.value === ""
+        ? "Недоступно"
+        : typeof item.value === "number"
+          ? `${item.value}${field.includes("percent") ? "%" : field.endsWith("_rub") ? " ₽" : ""}`
+          : ownerText(item.value);
+      return {
+        label: BUSINESS_MODEL_LABELS[field],
+        value,
+        availability: item.availability === "AVAILABLE" ? "Доступно" as const : "Недоступно" as const,
+        provenance: ownerText(provenance.label, "Нет доступного подтверждения"),
+        observedAt: ownerText(provenance.observed_at, "Дата наблюдения недоступна", 100),
+        freshness: item.freshness === "CURRENT" ? "Актуально для текущего анализа" : "Свежесть неизвестна",
+        confidence: item.confidence === "OWNER_CONFIRMED" ? "Подтверждено владельцем" : item.confidence === "HIGH" ? "Высокая" : item.confidence === "MEDIUM" ? "Средняя" : item.confidence === "LOW" ? "Низкая" : "Недоступна",
+        limitation: ownerText(item.limitation, "Нет известного ограничения"),
+        assumption: ownerText(assumption.statement, "Предположение не применялось"),
+      };
+    }),
+    economics: {
+      status: economics.status === "CONFIRMED" ? "Подтверждена" : "Существенная неопределённость",
+      targetResultCost: economics.status === "CONFIRMED" ? `${Number(economics.target_result_cost_rub)} ₽` : "Не выводится",
+      explanation: economics.status === "CONFIRMED"
+        ? "Рассчитано из подтверждённых ценности продажи, маржи и доли обращений, переходящих в продажу."
+        : ownerText(economics.limitation, "Economics пока не подтверждена."),
+    },
+    materialQuestions: list(contract.questions).map((value) => {
+      const question = record(value);
+      return { question: ownerText(question.question), consequence: ownerText(question.why_material) };
+    }),
+  };
+}
+
 function materialUnknowns(state: InternalState) {
   const evidence = record(state.analytics_evidence_snapshot);
   const gaps = list(evidence.gaps)
     .filter((gap) => record(gap).material === true)
     .map((gap) => ownerText(record(gap).description, "Существенный факт пока не подтверждён"));
+  const contract = record(record(state.business_model).owner_contract);
+  for (const questionValue of list(contract.questions)) {
+    const question = record(questionValue);
+    gaps.push(`${ownerText(question.question)} ${ownerText(question.why_material)}`);
+  }
+  const economics = record(contract.economics);
+  if (economics.status === "MATERIAL_UNCERTAINTY") gaps.push(ownerText(economics.limitation, "Economics пока не подтверждена."));
   const drafts = list(record(state.recommendation_set).drafts);
   for (const draftValue of drafts) {
     const draft = record(draftValue);
@@ -508,7 +626,7 @@ function cards(
   }
   for (const item of unknowns.slice(0, 3)) result.push({ kind: "problem", title: "Существенное неизвестное", body: item });
   const descriptor = actionDescriptor(view);
-  const gateKinds: ActionKind[] = ["confirm-goal", "approve-strategy", "authorize-and-create", "authorize-correction"];
+  const gateKinds: ActionKind[] = ["confirm-goal", "confirm-business-model", "approve-strategy", "authorize-and-create", "authorize-correction"];
   if (descriptor && gateKinds.includes(descriptor.kind)) {
     const current = recommendation(view, stage);
     result.push({
@@ -574,6 +692,7 @@ async function project(
     } : {}),
     businessOutcome: outcome(view, stage, unknowns),
     currentRecommendation: recommendation(view, stage),
+    businessModel: businessModelProjection(view.state),
     materialUnknowns: unknowns,
     agentActivity: agent ? {
       status: agent.status,
@@ -695,6 +814,7 @@ async function projectAccessOnly(
       headline: state.path === "NEW_ADVERTISER" ? "Продолжить с cold-start профилем" : "Использовать только подтверждённый доступ",
       rationale: access.history.explanation,
     },
+    businessModel: null,
     materialUnknowns: [...access.limitations],
     agentActivity: null,
     cards: [{
@@ -815,10 +935,22 @@ export class P0OwnerJourney {
         action: "save_business_model",
         value: {
           product: required(values, "product"),
-          audience: required(values, "audience"),
+          audience: required(values, "customerContext"),
           value: required(values, "value"),
           qualified_result: required(values, "qualifiedResult"),
           exclusions: required(values, "exclusions"),
+          qualified_outcome: required(values, "qualifiedResult"),
+          customer_context: required(values, "customerContext"),
+          buying_context: values.buyingContext,
+          revenue_model: values.revenueModel,
+          sales_cycle: values.salesCycle,
+          average_sale_value_rub: values.averageSaleValueRub,
+          gross_margin_percent: values.grossMarginPercent,
+          lead_to_sale_percent: values.leadToSalePercent,
+          capacity: values.capacity,
+          seasonality: values.seasonality,
+          geography: values.geography,
+          key_constraints: values.keyConstraints,
         },
       });
     } else if (descriptor.kind === "approve-strategy") {
@@ -835,7 +967,7 @@ export class P0OwnerJourney {
           period: { start_date: required(values, "periodStart"), end_date: required(values, "periodEnd") },
           landing_page: required(values, "landingPage"),
           weekly_budget: required(values, "weeklyBudget"),
-          target_result_cost: required(values, "targetResultCost"),
+          target_result_cost: values.targetResultCost,
           core_message: required(values, "message"),
         },
       });

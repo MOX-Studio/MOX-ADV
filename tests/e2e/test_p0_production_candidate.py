@@ -219,6 +219,26 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 )
                 checkpoint()
 
+                page.get_by_label("Кто и как принимает решение о покупке").fill(
+                    "Руководитель выбирает поставщика и согласует участие"
+                )
+                page.get_by_label("Модель выручки").fill("Разовая продажа пакета участия")
+                page.get_by_label("Цикл продажи").fill("От 14 до 30 дней")
+                page.get_by_label("Средняя ценность продажи, ₽").fill("500000")
+                page.get_by_label("Валовая маржа, %").fill("40")
+                page.get_by_label(
+                    "Доля обращений, переходящих в продажу, %"
+                ).fill("20")
+                page.get_by_label("Мощность обработки новых результатов").fill(
+                    "До 20 заявок в месяц"
+                )
+                page.get_by_label("Сезонность").fill("Спрос растёт перед выставкой")
+                page.get_by_label("География обслуживания").fill(
+                    "Москва и Московская область"
+                )
+                page.get_by_label("Ключевые ограничения").fill(
+                    "Не обещать гарантированный результат"
+                )
                 page.get_by_role(
                     "button", name="Подтвердить понимание бизнеса", exact=True
                 ).click()
@@ -231,7 +251,10 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 page.get_by_label("Начало периода").fill("2026-09-01")
                 page.get_by_label("Окончание периода").fill("2026-10-01")
                 page.get_by_label("Бюджет на неделю, ₽").fill("50000")
-                page.get_by_label("Целевая стоимость результата, ₽").fill("10000")
+                self.assertEqual(
+                    "40000",
+                    page.get_by_label("Целевая стоимость результата, ₽").input_value(),
+                )
                 page.get_by_role("button", name="Утвердить стратегию", exact=True).click()
                 page.get_by_role(
                     "heading", name="Варианты кампаний рассчитаны", exact=True

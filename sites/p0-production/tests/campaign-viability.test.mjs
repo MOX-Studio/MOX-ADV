@@ -490,3 +490,30 @@ test("LandingAdvisoryRun and post-launch outcomes cannot affect decisions or fin
   assert.equal(viabilityScorePolicy.forbidden_inputs.includes("LandingAdvisoryRun"), true);
   assert.equal(viabilityScorePolicy.post_launch_inputs_used, false);
 });
+
+test("current Business Model economics uncertainty blocks eligibility even when Strategy contains positive budget and target cost", async () => {
+  const generated = await recommendationSet();
+  const uncertainModel = {
+    ...model,
+    owner_contract: {
+      schema_version: "p0-business-model-v1",
+      economics: {
+        status: "MATERIAL_UNCERTAINTY",
+        target_result_cost_rub: null,
+      },
+    },
+  };
+  const scored = await scoreCampaignDrafts({
+    recommendationSetId: "recommendation-set:economics-honesty",
+    drafts: generated.drafts,
+    model: uncertainModel,
+    strategy: { ...strategy, weekly_budget_rub: 100_000, target_cpa_rub: 1_000 },
+    analyticsEvidence: evidence(),
+    scoredAt: "2026-08-21T12:00:00.000Z",
+  });
+
+  assert.ok(scored.every((draft) => draft.viability_score.eligibility.status === "BLOCKED_UNKNOWN"));
+  assert.ok(scored.every((draft) => draft.viability_score.eligibility.blockers.some((item) => item.code === "ECONOMICS_MATERIAL_UNCERTAINTY")));
+  assert.ok(scored.every((draft) => draft.shortlist_eligible === false));
+  assert.ok(scored.every((draft) => draft.viability_score.score === null));
+});

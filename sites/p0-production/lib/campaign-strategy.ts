@@ -46,6 +46,7 @@ export type StrategyQuestionnaire = {
   generated_at: string;
   context_revision_id: string;
   context_material_fingerprint: string;
+  business_model_revision_id: string;
   analytics_evidence_snapshot_id: string;
   fields: StrategyQuestionnaireField[];
 };
@@ -57,8 +58,9 @@ export type CampaignStrategyRevision = {
   questionnaire_contract_version: string;
   context_revision_id: string;
   context_material_fingerprint: string;
+  business_model_revision_id: string;
   analytics_evidence_snapshot_id: string;
-  answers: Array<{ field_id: StrategyFieldId; value: StrategyAnswerValue }>;
+  answers: Array<{ field_id: StrategyFieldId; value: StrategyAnswerValue | null }>;
   material_fingerprint: string;
   approved_at: string;
   approved_by: "OWNER";
@@ -155,6 +157,11 @@ export async function buildStrategyQuestionnaire({
   const exclusions = modelRecommendation(model, "exclusions");
   const message = modelRecommendation(model, "value");
   const landing = normalizedText(siteFacts.url, 2_000);
+  const economics = record(record(model.owner_contract).economics);
+  const economicsConfirmed = economics.status === "CONFIRMED"
+    && Number.isSafeInteger(Number(economics.target_result_cost_rub))
+    && Number(economics.target_result_cost_rub) > 0;
+  const groundedTargetResultCost = economicsConfirmed ? Number(economics.target_result_cost_rub) : null;
   const minimumWeeklyBudget = Number(record(contextFacts.direct).minimum_weekly_budget_rub);
   const minimumBudgetConsequence = Number.isFinite(minimumWeeklyBudget) && minimumWeeklyBudget > 0
     ? `Direct допускает не менее ${minimumWeeklyBudget} ₽ в неделю, но этот технический минимум не является business budget.`
@@ -227,12 +234,21 @@ export async function buildStrategyQuestionnaire({
       "Какую максимальную сумму можно расходовать за неделю?",
       [minimumBudgetConsequence, "Без суммы approval остаётся заблокированным."],
     ),
-    preparedField(
-      "target_result_cost",
-      "Pre-launch cost evidence не предоставляет владельцу право установить целевую стоимость результата.",
-      "Какова предельная стоимость одного квалифицированного результата?",
-      ["Значение определяет экономическую оценку Drafts; без него approval остаётся заблокированным."],
-    ),
+    economicsConfirmed ? {
+      field_id: "target_result_cost",
+      recommended_value: groundedTargetResultCost,
+      explanation: "Целевая стоимость результата детерминированно выведена из подтверждённых value, margin и lead-to-sale inputs Business Model.",
+      source_category: "решение владельца",
+      status: "уверенно",
+      prepared_decision: null,
+    } : {
+      field_id: "target_result_cost",
+      recommended_value: null,
+      explanation: normalizedText(economics.limitation, 1_000) || "Economics остаётся Material Uncertainty; положительный бюджет не создаёт целевую стоимость результата.",
+      source_category: "решение владельца",
+      status: "нет данных",
+      prepared_decision: null,
+    },
     {
       field_id: "core_message",
       recommended_value: message.value,
@@ -245,14 +261,16 @@ export async function buildStrategyQuestionnaire({
 
   const contextRevisionId = normalizedText(contextState.context_revision_id, 255);
   const contextMaterialFingerprint = normalizedText(contextState.material_fingerprint, 255);
+  const businessModelRevisionId = normalizedText(record(model.owner_contract).model_revision_id, 255);
   const snapshotId = normalizedText(analyticsEvidence.snapshot_id, 255);
-  if (!contextRevisionId || !contextMaterialFingerprint || !snapshotId) {
-    throw new Error("Strategy questionnaire требует точные Context и Analytics Evidence Snapshot lineage.");
+  if (!contextRevisionId || !contextMaterialFingerprint || !businessModelRevisionId || !snapshotId) {
+    throw new Error("Strategy questionnaire требует точные Context, Business Model и Analytics Evidence Snapshot lineage.");
   }
   const questionnaireId = await sha256({
     contract_version: STRATEGY_QUESTIONNAIRE_CONTRACT_VERSION,
     context_revision_id: contextRevisionId,
     context_material_fingerprint: contextMaterialFingerprint,
+    business_model_revision_id: businessModelRevisionId,
     analytics_evidence_snapshot_id: snapshotId,
     fields,
   });
@@ -263,6 +281,7 @@ export async function buildStrategyQuestionnaire({
     generated_at: generatedAt,
     context_revision_id: contextRevisionId,
     context_material_fingerprint: contextMaterialFingerprint,
+    business_model_revision_id: businessModelRevisionId,
     analytics_evidence_snapshot_id: snapshotId,
     fields,
   };
@@ -303,7 +322,7 @@ export function normalizeStrategyAnswers(
 }
 
 export function missingStrategyDecisions(answers: Record<StrategyFieldId, StrategyAnswerValue | null>) {
-  return STRATEGY_FIELD_ORDER.filter((fieldId) => answers[fieldId] === null);
+  return STRATEGY_FIELD_ORDER.filter((fieldId) => fieldId !== "target_result_cost" && answers[fieldId] === null);
 }
 
 export async function strategyAnswersFingerprint(answers: Record<StrategyFieldId, StrategyAnswerValue | null>) {

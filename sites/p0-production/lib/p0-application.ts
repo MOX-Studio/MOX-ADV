@@ -6,6 +6,14 @@ import {
   type AnalyticsEvidenceBundle,
 } from "./analytics-evidence.ts";
 import {
+  BUSINESS_MODEL_FIELD_ORDER,
+  BUSINESS_MODEL_SCHEMA,
+  buildBusinessModelContract,
+  reviseBusinessModelContract,
+  type BusinessModelContract,
+  type BusinessModelFieldId,
+} from "./business-model-contract.ts";
+import {
   buildProductFocusArtifacts,
   createProductFocusState,
   inferDecisionMakers,
@@ -134,9 +142,9 @@ import {
 } from "./landing-advisory.ts";
 
 export const P0_APPLICATION_CONTRACT = "mox-adv.p0.application";
-export const P0_APPLICATION_CONTRACT_VERSION = "1.13.0";
-export const P0_DOCUMENT_SCHEMA = "p0-application-document-v10";
-const P0_LEGACY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4", "p0-application-document-v5", "p0-application-document-v6", "p0-application-document-v7", "p0-application-document-v8", "p0-application-document-v9"]);
+export const P0_APPLICATION_CONTRACT_VERSION = "1.14.0";
+export const P0_DOCUMENT_SCHEMA = "p0-application-document-v11";
+const P0_LEGACY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4", "p0-application-document-v5", "p0-application-document-v6", "p0-application-document-v7", "p0-application-document-v8", "p0-application-document-v9", "p0-application-document-v10"]);
 const P0_PRE_PACKAGE_AUTHORITY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4"]);
 export const P0_CONTEXT_SCHEMA = "p0-context-v2";
 const P0_LEGACY_CONTEXT_SCHEMA = "p0-context-v1";
@@ -454,6 +462,20 @@ export type BusinessModel = {
   value: string;
   qualified_result: string;
   exclusions: string;
+  qualified_outcome: string;
+  customer_context: string;
+  buying_context: string;
+  revenue_model: string;
+  sales_cycle: string;
+  average_sale_value_rub: number | null;
+  gross_margin_percent: number | null;
+  lead_to_sale_percent: number | null;
+  capacity: string;
+  seasonality: string;
+  geography: string;
+  key_constraints: string;
+  economics: string;
+  owner_contract: BusinessModelContract;
   source: string;
   assumptions: string[];
   missing_questions: string[];
@@ -505,7 +527,7 @@ export const P0_COMMAND_TRUTH_TABLE = {
     state.context_state && state.site_analysis && packageNotDispatched(state),
   ),
   save_business_model: (state: P0Document) => Boolean(
-    state.site_analysis && state.business_model && state.product_focus && packageNotDispatched(state),
+    state.site_analysis && state.business_model && packageNotDispatched(state),
   ),
   select_focus: (state: P0Document) => Boolean(
     state.site_analysis && state.business_model && state.product_focus && packageNotDispatched(state),
@@ -1145,6 +1167,13 @@ function pageEconomics(page: PageEvidence) {
   return cleanText(match?.[0] ?? "", 200);
 }
 
+function rubAmount(value: unknown) {
+  const match = cleanText(String(value ?? ""), 500).match(/\d[\d\s]*(?:[.,]\d+)?/u);
+  if (!match) return null;
+  const amount = Number(match[0].replace(/\s/gu, "").replace(",", "."));
+  return Number.isFinite(amount) && amount > 0 ? Math.round(amount * 100) / 100 : null;
+}
+
 function normalizedTerms(value: unknown) {
   return new Set(cleanText(String(value ?? ""), 2_000)
     .normalize("NFKC")
@@ -1744,19 +1773,66 @@ async function inferModel(site: SiteAnalysis, context: P0Context): Promise<Busin
   const sources = ["PUBLIC_FIRST_PARTY_SITE"];
   if (context.direct.ready === true) sources.push("DIRECT_REAL_ACCOUNT");
   if (context.metrika.ready === true) sources.push("METRIKA_REAL_COUNTER");
+  const publishedEconomics = cleanText(String(primaryCandidate?.economics ?? ""), 500);
+  const ownerContract = await buildBusinessModelContract({
+    observedAt: site.fetched_at,
+    discovered: {
+      qualified_outcome: {
+        value: facts.qualified_result.value,
+        source_url: facts.qualified_result.evidence?.url,
+        quote: facts.qualified_result.evidence?.text,
+        confidence: facts.qualified_result.confidence,
+      },
+      customer_context: {
+        value: facts.audience.value,
+        source_url: facts.audience.evidence?.url,
+        quote: facts.audience.evidence?.text,
+        confidence: facts.audience.confidence,
+      },
+      average_sale_value_rub: {
+        value: rubAmount(publishedEconomics),
+        source_url: cleanText(String(primaryCandidate?.destination ?? ""), 2_000),
+        quote: publishedEconomics,
+        confidence: publishedEconomics ? "MEDIUM" : "LOW",
+      },
+      exclusions: {
+        value: facts.exclusions.value,
+        source_url: facts.exclusions.evidence?.url,
+        quote: facts.exclusions.evidence?.text,
+        confidence: facts.exclusions.confidence,
+      },
+    },
+  });
   const model: BusinessModel = {
     product: facts.product.value,
     audience: facts.audience.value,
     value: facts.value.value,
     qualified_result: facts.qualified_result.value,
     exclusions: facts.exclusions.value,
+    qualified_outcome: String(ownerContract.fields.qualified_outcome.value ?? ""),
+    customer_context: String(ownerContract.fields.customer_context.value ?? ""),
+    buying_context: "",
+    revenue_model: "",
+    sales_cycle: "",
+    average_sale_value_rub: typeof ownerContract.fields.average_sale_value_rub.value === "number" ? ownerContract.fields.average_sale_value_rub.value : null,
+    gross_margin_percent: null,
+    lead_to_sale_percent: null,
+    capacity: "",
+    seasonality: "",
+    geography: "",
+    key_constraints: "",
+    economics: "Material Uncertainty: подтверждённые value, margin и lead-to-sale inputs недоступны.",
+    owner_contract: ownerContract,
     source: "REAL_SITE_AND_CONNECTED_DATA_RESEARCH",
     assumptions: Object.entries(facts)
       .filter(([, fact]) => fact.value && fact.confidence === "MEDIUM")
       .map(([name]) => `${name}: вывод детерминированного extractor требует подтверждения владельца`),
-    missing_questions: Object.entries(facts)
-      .filter(([, fact]) => !fact.value)
-      .map(([name]) => questions[name]),
+    missing_questions: [
+      ...Object.entries(facts)
+        .filter(([, fact]) => !fact.value)
+        .map(([name]) => questions[name]),
+      ...ownerContract.questions.map((item) => item.question),
+    ],
     research: {
       agent: "DETERMINISTIC_EVIDENCE_EXTRACTOR_V4",
       pages_analyzed: site.pages.length,
@@ -1764,8 +1840,8 @@ async function inferModel(site: SiteAnalysis, context: P0Context): Promise<Busin
       completed_fields: Object.entries(facts).filter(([, fact]) => fact.value).map(([name]) => name),
     },
     offer_candidates: offerCandidates,
-    field_evidence: Object.fromEntries(
-      Object.entries(facts).map(([name, fact]) => [
+    field_evidence: Object.fromEntries([
+      ...Object.entries(facts).map(([name, fact]) => [
         name,
         {
           confidence: fact.confidence,
@@ -1773,7 +1849,15 @@ async function inferModel(site: SiteAnalysis, context: P0Context): Promise<Busin
           quote: fact.evidence?.text ?? "",
         },
       ]),
-    ),
+      ...BUSINESS_MODEL_FIELD_ORDER.map((field) => {
+        const contractField = ownerContract.fields[field];
+        return [field, {
+          confidence: contractField.confidence,
+          source_url: contractField.provenance.source_url ?? "",
+          quote: field === "average_sale_value_rub" ? publishedEconomics : "",
+        }];
+      }),
+    ]),
   };
   return model;
 }
@@ -1902,6 +1986,51 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
   }
   if (state.analytics_evidence_snapshot && !await verifyAnalyticsEvidenceSnapshot(state.analytics_evidence_snapshot)) {
     lineageError("Analytics Evidence Snapshot hash verification failed.");
+  }
+  if (state.business_model && state.business_model.owner_contract?.schema_version !== BUSINESS_MODEL_SCHEMA) {
+    if (!legacyDocument) lineageError("same-schema Business Model contract отсутствует или имеет неизвестную версию.");
+    const legacyModel = state.business_model;
+    let ownerContract = await buildBusinessModelContract({
+      observedAt: state.site_analysis?.fetched_at ?? updatedAt,
+      discovered: {
+        qualified_outcome: { value: legacyModel.qualified_result, source_url: legacyModel.field_evidence?.qualified_result?.source_url, confidence: legacyModel.field_evidence?.qualified_result?.confidence },
+        customer_context: { value: legacyModel.audience, source_url: legacyModel.field_evidence?.audience?.source_url, confidence: legacyModel.field_evidence?.audience?.confidence },
+        exclusions: { value: legacyModel.exclusions, source_url: legacyModel.field_evidence?.exclusions?.source_url, confidence: legacyModel.field_evidence?.exclusions?.confidence },
+      },
+    });
+    if (legacyModel.source === "REAL_SITE_RESEARCH_PLUS_OWNER_CONFIRMATION") {
+      ownerContract = await reviseBusinessModelContract({
+        previous: ownerContract,
+        confirmedAt: updatedAt,
+        values: {
+          qualified_outcome: legacyModel.qualified_result,
+          customer_context: legacyModel.audience,
+          exclusions: legacyModel.exclusions,
+        },
+      });
+    }
+    legacyModel.owner_contract = ownerContract;
+    legacyModel.qualified_outcome = String(ownerContract.fields.qualified_outcome.value ?? "");
+    legacyModel.customer_context = String(ownerContract.fields.customer_context.value ?? "");
+    legacyModel.buying_context = "";
+    legacyModel.revenue_model = "";
+    legacyModel.sales_cycle = "";
+    legacyModel.average_sale_value_rub = null;
+    legacyModel.gross_margin_percent = null;
+    legacyModel.lead_to_sale_percent = null;
+    legacyModel.capacity = "";
+    legacyModel.seasonality = "";
+    legacyModel.geography = "";
+    legacyModel.key_constraints = "";
+    legacyModel.economics = "Material Uncertainty: legacy target cost не является подтверждённой economics.";
+    legacyModel.missing_questions = ownerContract.questions.map((item) => item.question);
+    state.last_cascade = cascadeRecord(state, "MODEL", updatedAt, ["campaign_strategy", "recommendation_set", "campaign_drafts", "shortlist", "confirmation"]);
+    await invalidateDecisionAuthority(state, "MODEL_MATERIAL_CHANGE", "Legacy Business Model lacked confirmed economics and requires owner revalidation.", updatedAt);
+    state.analytics_evidence_snapshot = null;
+    state.product_focus = null;
+    state.strategy_questionnaire = null;
+    invalidateStrategyDownstream(state);
+    changed = true;
   }
   if (state.business_model && !Array.isArray(state.business_model.offer_candidates)) {
     if (!legacyDocument) lineageError("same-schema Model field offer_candidates отсутствует.");
@@ -2065,6 +2194,8 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
         strategy.questionnaire_id !== state.strategy_questionnaire.questionnaire_id
         || strategy.context_revision_id !== state.context_state.context_revision_id
         || strategy.context_material_fingerprint !== state.context_state.material_fingerprint
+        || strategy.business_model_revision_id !== model.owner_contract.model_revision_id
+        || strategy.business_model_revision_id !== state.strategy_questionnaire.business_model_revision_id
         || strategy.analytics_evidence_snapshot_id !== state.analytics_evidence_snapshot.snapshot_id
       ) {
         lineageError("Campaign Strategy revision ссылается на другую Context/Model lineage.");
@@ -2327,7 +2458,11 @@ function focusDecisionRequired(state: P0Document) {
 }
 
 function materialDecisionRequired(state: P0Document) {
-  return state.context_state?.status === "GOAL_PROVISIONAL" || focusDecisionRequired(state);
+  const model = state.business_model;
+  const unresolvedModel = Boolean(model
+    && model.source !== "REAL_SITE_RESEARCH_PLUS_OWNER_CONFIRMATION"
+    && (model.owner_contract.questions.length > 0 || model.owner_contract.economics.status === "MATERIAL_UNCERTAINTY"));
+  return state.context_state?.status === "GOAL_PROVISIONAL" || unresolvedModel || focusDecisionRequired(state);
 }
 
 function agentHumanDecisionBoundary(state: P0Document): "MATERIAL_UNCERTAINTY" | "CRITICAL_DECISION" | null {
@@ -3192,11 +3327,24 @@ export class P0Application {
         return [field, confirmedValue];
       }));
       const firstOwnerApproval = state.business_model.source !== "REAL_SITE_RESEARCH_PLUS_OWNER_CONFIRMATION";
-      const materialModelChange = fields.some((field) => cleanText(String(state.business_model?.[field] ?? ""), 1_000) !== confirmedValues[field]);
+      const modelApprovedAt = this.adapters.now();
+      const contractValues = Object.fromEntries(BUSINESS_MODEL_FIELD_ORDER
+        .filter((field) => Object.hasOwn(value, field))
+        .map((field) => [field, value[field]])) as Partial<Record<BusinessModelFieldId, unknown>>;
+      contractValues.qualified_outcome = confirmedValues.qualified_result;
+      contractValues.customer_context = confirmedValues.audience;
+      contractValues.exclusions = confirmedValues.exclusions;
+      const revisedOwnerContract = await reviseBusinessModelContract({
+        previous: state.business_model.owner_contract,
+        values: contractValues,
+        confirmedAt: modelApprovedAt,
+      });
+      const coreModelChange = fields.some((field) => cleanText(String(state.business_model?.[field] ?? ""), 1_000) !== confirmedValues[field]);
+      const materialModelChange = coreModelChange
+        || revisedOwnerContract.material_fingerprint !== state.business_model.owner_contract.material_fingerprint;
       const focusCandidateChanged = (["product", "audience", "value", "qualified_result"] as const)
         .some((field) => cleanText(String(state.business_model?.[field] ?? ""), 1_000) !== confirmedValues[field]);
       const selectedCatalogOffer = state.product_focus?.catalog.offers.find((offer) => offer.offer_id === state.product_focus?.selected_offer_id) ?? null;
-      const modelApprovedAt = this.adapters.now();
       const context = sanitizeContext(await this.adapters.readContext({ owner_key: key }));
       this.assertResearchContextPreflight(context, modelApprovedAt);
       this.assertPersistedBindings(state, context);
@@ -3234,9 +3382,31 @@ export class P0Application {
             owner_edited: state.business_model.field_evidence[field]?.owner_edited === true || fieldChanged,
           };
         }
+        state.business_model.owner_contract = revisedOwnerContract;
+        for (const field of BUSINESS_MODEL_FIELD_ORDER) {
+          const contractField = revisedOwnerContract.fields[field];
+          state.business_model[field] = contractField.value as never;
+          state.business_model.field_evidence[field] = {
+            confidence: contractField.confidence,
+            source_url: contractField.provenance.source_url ?? "",
+            quote: contractField.provenance.kind === "OWNER_CONFIRMATION" ? String(contractField.value ?? "") : state.business_model.field_evidence[field]?.quote ?? "",
+            owner_confirmed: contractField.owner_confirmed || undefined,
+            owner_confirmed_at: contractField.owner_confirmed ? contractField.provenance.observed_at ?? undefined : undefined,
+            owner_edited: contractField.owner_confirmed || undefined,
+          };
+        }
+        state.business_model.qualified_result = String(revisedOwnerContract.fields.qualified_outcome.value ?? confirmedValues.qualified_result);
+        state.business_model.audience = String(revisedOwnerContract.fields.customer_context.value ?? confirmedValues.audience);
+        state.business_model.exclusions = String(revisedOwnerContract.fields.exclusions.value ?? confirmedValues.exclusions);
+        state.business_model.economics = revisedOwnerContract.economics.status === "CONFIRMED"
+          ? `Подтверждённая предельная стоимость квалифицированного результата: ${revisedOwnerContract.economics.target_result_cost_rub} ₽.`
+          : `Material Uncertainty: ${revisedOwnerContract.economics.limitation}`;
         state.business_model.source = "REAL_SITE_RESEARCH_PLUS_OWNER_CONFIRMATION";
-        state.business_model.assumptions = [];
-        state.business_model.missing_questions = [];
+        state.business_model.assumptions = BUSINESS_MODEL_FIELD_ORDER
+          .flatMap((field) => revisedOwnerContract.fields[field].assumption.statement
+            ? [`${field}: ${revisedOwnerContract.fields[field].assumption.statement}`]
+            : []);
+        state.business_model.missing_questions = revisedOwnerContract.questions.map((item) => item.question);
         state.analytics_evidence_snapshot = await this.buildModelEvidence(
           state.site_analysis,
           state.business_model,
@@ -3333,6 +3503,17 @@ export class P0Application {
           owner_edited: focusChanged || state.business_model.field_evidence[field]?.owner_edited === true,
         };
       }
+      state.business_model.owner_contract = await reviseBusinessModelContract({
+        previous: state.business_model.owner_contract,
+        confirmedAt: selectedAt,
+        values: {
+          customer_context: selectedValues.audience,
+          qualified_outcome: selectedValues.qualified_result,
+        },
+      });
+      state.business_model.customer_context = String(state.business_model.owner_contract.fields.customer_context.value ?? "");
+      state.business_model.qualified_outcome = String(state.business_model.owner_contract.fields.qualified_outcome.value ?? "");
+      state.business_model.missing_questions = state.business_model.owner_contract.questions.map((item) => item.question);
       state.analytics_evidence_snapshot = await this.buildModelEvidence(
         state.site_analysis,
         state.business_model,
@@ -3369,6 +3550,7 @@ export class P0Application {
       if (
         questionnaire.context_revision_id !== state.context_state.context_revision_id
         || questionnaire.context_material_fingerprint !== state.context_state.material_fingerprint
+        || questionnaire.business_model_revision_id !== state.business_model.owner_contract.model_revision_id
         || questionnaire.analytics_evidence_snapshot_id !== state.analytics_evidence_snapshot.snapshot_id
       ) {
         fail("P0_STRATEGY_LINEAGE_STALE", "Strategy questionnaire устарел после material Context или Model change.");
@@ -3377,6 +3559,9 @@ export class P0Application {
         payload.answers,
         (input, maximum) => artifactText(input, maximum),
       );
+      normalizedAnswers.target_result_cost = state.business_model.owner_contract.economics.status === "CONFIRMED"
+        ? state.business_model.owner_contract.economics.target_result_cost_rub
+        : null;
       const missing = missingStrategyDecisions(normalizedAnswers);
       if (missing.length) {
         fail("P0_STRATEGY_DECISION_REQUIRED", `Campaign Strategy требует решения владельца: ${missing[0]}.`);
@@ -3421,6 +3606,7 @@ export class P0Application {
             questionnaire_contract_version: questionnaire.contract_version,
             context_revision_id: state.context_state.context_revision_id,
             context_material_fingerprint: state.context_state.material_fingerprint,
+            business_model_revision_id: state.business_model.owner_contract.model_revision_id,
             analytics_evidence_snapshot_id: state.analytics_evidence_snapshot.snapshot_id,
             answers: questionnaire.fields.map((field) => ({
               field_id: field.field_id,

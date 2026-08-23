@@ -398,7 +398,6 @@ function requiredStrategyFields(strategy: Record<string, unknown>) {
     period_end: period.end_date,
     landing_page: strategyAnswerValue(strategy, "landing_page"),
     weekly_budget: strategyAnswerValue(strategy, "weekly_budget"),
-    target_result_cost: strategyAnswerValue(strategy, "target_result_cost"),
     core_message: strategyAnswerValue(strategy, "core_message"),
   };
   return Object.entries(values).filter(([, value]) => !text(value)).map(([key]) => key);
@@ -424,6 +423,15 @@ function evaluateEligibility(
   const blockers: EligibilityBlocker[] = [];
   if (!text(model.product) || !text(model.audience) || !text(model.qualified_result)) {
     blockers.push(blocker("BUSINESS_MODEL_INCOMPLETE", "/business_model", "Подтвердить product, audience и qualified outcome в модели бизнеса."));
+  }
+  const modelContract = record(model.owner_contract);
+  const modelEconomics = record(modelContract.economics);
+  if (text(modelContract.schema_version) && (modelEconomics.status !== "CONFIRMED" || numberOrNull(modelEconomics.target_result_cost_rub) === null)) {
+    blockers.push(blocker(
+      "ECONOMICS_MATERIAL_UNCERTAINTY",
+      "/business_model/economics",
+      "Подтвердить value, margin и lead-to-sale inputs; положительный бюджет или вручную введённая стоимость результата не заменяют economics.",
+    ));
   }
   const missingStrategy = requiredStrategyFields(strategy);
   if (missingStrategy.length) {
@@ -462,7 +470,7 @@ function evaluateEligibility(
   const unknown = blockers.some((item) => [
     "EVIDENCE_HARD_BLOCKER",
     "EVIDENCE_SNAPSHOT_MISSING",
-  ].includes(item.code) || item.code.includes("CAPABILITY_SNAPSHOT_MISSING") || item.code.includes("EVIDENCE_MISSING"));
+  ].includes(item.code) || item.code.includes("ECONOMICS_MATERIAL_UNCERTAINTY") || item.code.includes("CAPABILITY_SNAPSHOT_MISSING") || item.code.includes("EVIDENCE_MISSING"));
   return {
     evaluated_before_score: true as const,
     status: blockers.length ? (unknown ? "BLOCKED_UNKNOWN" as const : "INELIGIBLE" as const) : "ELIGIBLE" as const,
@@ -672,9 +680,15 @@ function hasVolumeScore(frequency: Record<string, unknown>) {
   return null;
 }
 
-function economicsDimension(strategy: Record<string, unknown>, draft: DraftCandidate) {
+function economicsDimension(model: Record<string, unknown>, strategy: Record<string, unknown>, draft: DraftCandidate) {
+  const modelContract = record(model.owner_contract);
+  const confirmedEconomics = record(modelContract.economics);
+  const currentContract = Boolean(text(modelContract.schema_version));
+  const economicsConfirmed = confirmedEconomics.status === "CONFIRMED";
   const weeklyBudget = numberOrNull(strategyAnswerValue(strategy, "weekly_budget"));
-  const targetCost = numberOrNull(strategyAnswerValue(strategy, "target_result_cost"));
+  const targetCost = currentContract
+    ? economicsConfirmed ? numberOrNull(confirmedEconomics.target_result_cost_rub) : null
+    : numberOrNull(strategyAnswerValue(strategy, "target_result_cost"));
   const plannedUnits = weeklyBudget !== null && targetCost !== null && weeklyBudget > 0 && targetCost > 0
     ? weeklyBudget * (52 / 12) / targetCost
     : null;
@@ -851,7 +865,7 @@ function buildDimensions(
   return {
     demand,
     cost,
-    economics: economicsDimension(strategy, draft),
+    economics: economicsDimension(model, strategy, draft),
     offer_audience_fit: fitDimension(draft, model, strategy, evidence),
     direct_feasibility: directDimension(draft, evidence),
     measurement_readiness: measurementDimension(evidence),

@@ -295,10 +295,25 @@ async function fixture() {
 }
 
 function ownerModel(state) {
-  return Object.fromEntries(
-    ["product", "audience", "value", "qualified_result", "exclusions"]
-      .map((field) => [field, state.business_model[field]]),
-  );
+  return {
+    product: state.business_model.product,
+    audience: state.business_model.audience,
+    value: state.business_model.value,
+    qualified_result: state.business_model.qualified_result,
+    exclusions: state.business_model.exclusions,
+    qualified_outcome: state.business_model.qualified_result,
+    customer_context: state.business_model.audience,
+    buying_context: "Руководитель выбирает поставщика и согласует участие",
+    revenue_model: "Разовая продажа пакета участия",
+    sales_cycle: "От 14 до 30 дней",
+    average_sale_value_rub: 500_000,
+    gross_margin_percent: 40,
+    lead_to_sale_percent: 20,
+    capacity: "До 20 новых квалифицированных заявок в месяц",
+    seasonality: "Основной спрос перед датой выставки",
+    geography: "Москва и Московская область",
+    key_constraints: "Не обещать гарантированный коммерческий результат",
+  };
 }
 
 function strategyValue() {
@@ -618,6 +633,7 @@ test("the authoritative contract persists the fixed Strategy questionnaire and f
   assert.deepEqual(questionnaire.fields.map((field) => field.field_id), STRATEGY_FIELD_ORDER);
   assert.equal(questionnaire.context_revision_id, result.state.context_state.context_revision_id);
   assert.equal(questionnaire.context_material_fingerprint, result.state.context_state.material_fingerprint);
+  assert.equal(questionnaire.business_model_revision_id, result.state.business_model.owner_contract.model_revision_id);
   assert.equal(questionnaire.analytics_evidence_snapshot_id, result.state.analytics_evidence_snapshot.snapshot_id);
   for (const field of questionnaire.fields) {
     assert.equal(Object.hasOwn(field, "recommended_value"), true);
@@ -625,7 +641,7 @@ test("the authoritative contract persists the fixed Strategy questionnaire and f
     assert.equal(["сайт", "Директ", "Метрика", "аналитика агента", "решение владельца"].includes(field.source_category), true);
     assert.equal(["уверенно", "нужно проверить", "нет данных"].includes(field.status), true);
   }
-  for (const fieldId of ["geography", "period", "weekly_budget", "target_result_cost"]) {
+  for (const fieldId of ["geography", "period", "weekly_budget"]) {
     const field = questionnaire.fields.find((item) => item.field_id === fieldId);
     assert.equal(field.recommended_value, null);
     assert.equal(field.status, "нет данных");
@@ -633,7 +649,12 @@ test("the authoritative contract persists the fixed Strategy questionnaire and f
     assert.equal(field.prepared_decision.required, true);
     assert.equal(field.prepared_decision.consequences.length > 0, true);
   }
-  assert.doesNotMatch((await store.load("owner")).value_json, /50000|10000/u);
+  const targetCost = questionnaire.fields.find((item) => item.field_id === "target_result_cost");
+  assert.equal(targetCost.recommended_value, 40_000);
+  assert.equal(targetCost.status, "уверенно");
+  assert.equal(targetCost.prepared_decision, null);
+  assert.equal(result.state.strategy, null);
+  assert.equal(questionnaire.fields.find((item) => item.field_id === "weekly_budget").recommended_value, null);
 
   await assert.rejects(
     application.command("owner", {
@@ -813,7 +834,7 @@ test("Strategy and Model material changes cascade while technical normalization 
   assert.equal(result.state.recommendation_set.recommendation_set_id, afterConflict.state.recommendation_set.recommendation_set_id);
 
   const changedModel = ownerModel(result.state);
-  changedModel.product = "Другое рекламируемое предложение";
+  changedModel.gross_margin_percent = 35;
   result = await application.command("owner", {
     action: "save_business_model",
     expected_revision: result.revision,
@@ -828,7 +849,10 @@ test("Strategy and Model material changes cascade while technical normalization 
   assert.equal(result.write_readiness.ready, false);
   assert.notEqual(result.state.analytics_evidence_snapshot.snapshot_id, original.snapshot);
   assert.equal(result.state.strategy_questionnaire.analytics_evidence_snapshot_id, result.state.analytics_evidence_snapshot.snapshot_id);
-  assert.equal(result.state.strategy_questionnaire.fields.find((field) => field.field_id === "advertised_offer").source_category, "решение владельца");
+  assert.equal(result.state.business_model.owner_contract.economics.target_result_cost_rub, 35_000);
+  assert.equal(result.state.strategy_questionnaire.fields.find((field) => field.field_id === "target_result_cost").recommended_value, 35_000);
+  assert.equal(result.state.strategy_questionnaire.fields.find((field) => field.field_id === "advertised_offer").source_category, "сайт");
+  assert.equal(result.state.strategy_questionnaire.fields.find((field) => field.field_id === "target_result_cost").source_category, "решение владельца");
   assert.equal((await store.load("owner")).revision, result.revision);
 });
 
@@ -1481,7 +1505,7 @@ test("compare-and-swap rejects a stale tab without changing the persisted docume
   assert.equal(current.state.site_analysis.url, "https://owner.example/");
 });
 
-test("legacy Sites state migrates with lineage but cannot bypass current eligibility into an external write", async (t) => {
+test("legacy Sites state without grounded economics migrates fail-closed and cannot bypass current eligibility", async (t) => {
   const { directory, store } = await fixture();
   t.after(() => rm(directory, { recursive: true, force: true }));
   const legacy = {
@@ -1535,14 +1559,15 @@ test("legacy Sites state migrates with lineage but cannot bypass current eligibi
   let result = await application.query("owner");
   assert.equal(result.revision, 8);
   assert.equal(result.state.schema_version, P0_DOCUMENT_SCHEMA);
-  assert.equal(result.state.strategy.strategy_revision_id, "campaign-strategy-r7");
-  assert.match(result.state.draft.draft_id, /^draft-/);
-  assert.equal(result.state.draft.strategy_revision_id, "campaign-strategy-r7");
-  assert.match(result.state.draft.publish_fingerprint, /^sha256:[a-f0-9]{64}$/u);
+  assert.equal(result.state.business_model.owner_contract.schema_version, "p0-business-model-v1");
+  assert.equal(result.state.business_model.owner_contract.economics.status, "MATERIAL_UNCERTAINTY");
+  assert.equal(result.state.strategy, null);
+  assert.equal(result.state.draft, null);
+  assert.equal(result.state.shortlist, null);
+  assert.equal(result.state.last_cascade.trigger, "MODEL");
   assert.equal(result.revision_history.at(-1).revision, 7);
 
-  assert.equal(result.state.shortlist.schema_version, "p0-shortlist-v2");
-  assert.deepEqual(result.state.shortlist.selections, []);
+  assert.equal(result.state.business_model.missing_questions.length > 0, true);
   assert.equal(result.workflow.allowed_commands.includes("confirm_creation"), false);
   await assert.rejects(
     application.command("owner", {
@@ -1556,7 +1581,8 @@ test("legacy Sites state migrates with lineage but cannot bypass current eligibi
   result = await application.query("owner");
   assert.equal(result.revision, 8);
   assert.equal(result.state.campaign, null);
-  assert.equal(result.state.draft.strategy_revision_id, result.state.strategy.strategy_revision_id);
+  assert.equal(result.state.strategy, null);
+  assert.equal(result.state.business_model.owner_contract.economics.target_result_cost_rub, null);
 });
 
 test("legacy state with an outcome but no Draft lineage is rejected explicitly", async (t) => {
@@ -3193,8 +3219,17 @@ test("Strategy, Model, Context and playbook material paths invalidate current Ga
     const value = await packageFixture(t);
     const draft = value.result.state.recommendation_set.drafts.find((item) => item.shortlist_eligible && item.visibility === "VISIBLE");
     let result = await reviewAndConfirm(value.application, value.result, [draft.draft_id]);
+    const reviewBefore = JSON.stringify(result.state.package_review);
+    const gateBefore = JSON.stringify(result.state.human_decision_gate);
+    const modelRevisionBefore = result.state.business_model.owner_contract.model_revision_id;
+    const normalized = Object.fromEntries(Object.entries(ownerModel(result.state)).map(([key, item]) => [key, typeof item === "string" ? `  ${item.replaceAll(" ", "   ")}  ` : String(item)]));
+    result = await value.application.command("owner", { action: "save_business_model", expected_revision: result.revision, value: normalized });
+    assert.equal(result.state.business_model.owner_contract.model_revision_id, modelRevisionBefore);
+    assert.equal(JSON.stringify(result.state.package_review), reviewBefore);
+    assert.equal(JSON.stringify(result.state.human_decision_gate), gateBefore);
+
     const changed = ownerModel(result.state);
-    changed.product = "Материально другое предложение";
+    changed.gross_margin_percent = 35;
     result = await value.application.command("owner", { action: "save_business_model", expected_revision: result.revision, value: changed });
     assert.equal(result.state.package_review, null);
     assert.equal(result.state.human_decision_gate, null);
@@ -3610,10 +3645,25 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
 
   projection = await journey.submit(ownerKey, {
     handle: projection.primaryAction.handle,
-    values: values(projection),
+    values: values(projection, {
+      buyingContext: "Руководитель согласует участие",
+      revenueModel: "Разовая продажа пакета участия",
+      salesCycle: "От 14 до 30 дней",
+      averageSaleValueRub: "500000",
+      grossMarginPercent: "40",
+      leadToSalePercent: "20",
+      capacity: "До 20 заявок в месяц",
+      seasonality: "Спрос растёт перед выставкой",
+      geography: "Москва и Московская область",
+      keyConstraints: "Не обещать гарантированный результат",
+    }),
   });
   ownerResponses.push(projection);
   assert.equal(projection.journey.currentStage, "strategy");
+  assert.equal(projection.businessModel.economics.status, "Подтверждена");
+  assert.equal(projection.businessModel.materialQuestions.length, 0);
+  assert.equal(projection.primaryAction.fields.find((field) => field.key === "targetResultCost").value, 40_000);
+  assert.equal(projection.primaryAction.fields.find((field) => field.key === "targetResultCost").readOnly, true);
   projection = await journey.submit(ownerKey, {
     handle: projection.primaryAction.handle,
     values: values(projection, {
@@ -3662,5 +3712,7 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
   assert.equal(diagnostics.state.schema_version, P0_DOCUMENT_SCHEMA);
   assert.ok(diagnostics.state.package_review.package_id);
   assert.ok(diagnostics.state.analytics_evidence_snapshot.snapshot_id);
+  assert.equal(diagnostics.state.business_model.owner_contract.economics.target_result_cost_rub, 40_000);
+  assert.equal(diagnostics.state.strategy.answers.find((answer) => answer.field_id === "target_result_cost").value, 40_000);
   assert.equal(diagnostics.state.package_execution, null);
 });

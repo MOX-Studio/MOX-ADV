@@ -108,6 +108,16 @@ export default function P0Client() {
             <span>Текущая рекомендация</span><h3>{projection.currentRecommendation.headline}</h3><p>{projection.currentRecommendation.rationale}</p>
           </section>}
 
+          {projection.businessModel && <section className="owner-business-model" aria-labelledby="owner-business-model-title">
+            <header><div><p className="owner-eyebrow">МОДЕЛЬ БИЗНЕСА</p><h2 id="owner-business-model-title">Проверяемое понимание бизнеса</h2></div><strong>{projection.businessModel.economics.status}</strong></header>
+            <div className="owner-model-economics"><span>Целевая стоимость результата</span><b>{projection.businessModel.economics.targetResultCost}</b><p>{projection.businessModel.economics.explanation}</p></div>
+            <div className="owner-model-grid">{projection.businessModel.fields.map((field) => <article key={field.label}>
+              <header><h3>{field.label}</h3><span>{field.availability}</span></header><p>{field.value}</p>
+              <dl><div><dt>Источник</dt><dd>{field.provenance}</dd></div><div><dt>Наблюдение</dt><dd>{field.observedAt}</dd></div><div><dt>Свежесть</dt><dd>{field.freshness}</dd></div><div><dt>Уверенность</dt><dd>{field.confidence}</dd></div><div><dt>Ограничение</dt><dd>{field.limitation}</dd></div><div><dt>Предположение</dt><dd>{field.assumption}</dd></div></dl>
+            </article>)}</div>
+            {projection.businessModel.materialQuestions.length > 0 && <div className="owner-model-questions"><h3>Только существенные вопросы</h3><ul>{projection.businessModel.materialQuestions.map((item) => <li key={item.question}><strong>{item.question}</strong><span>{item.consequence}</span></li>)}</ul></div>}
+          </section>}
+
           {projection.agentActivity && <section className="owner-progress" aria-label="Ход работы агента">
             <i /><div><strong>{projection.agentActivity.summary}</strong><p>{projection.agentActivity.nextBusinessStep}</p></div>
             <span>{projection.agentActivity.completed} из {projection.agentActivity.total}</span>
@@ -159,9 +169,9 @@ function Header() {
 }
 
 function OwnerField({ field }: { field: OwnerActionField }) {
-  const common = { name: field.key, required: field.required, defaultValue: field.value };
+  const common = { name: field.key, required: field.required, defaultValue: field.value, readOnly: field.readOnly };
   return <label className={field.control === "textarea" ? "wide" : ""}><span>{field.label}</span>
-    {field.control === "textarea" ? <textarea {...common} /> : field.control === "select" ? <select {...common}><option value="" disabled>Выберите</option>{field.options?.map((option) => {
+    {field.control === "textarea" ? <textarea {...common} /> : field.control === "select" ? <select name={field.key} required={field.required} defaultValue={field.value}><option value="" disabled>Выберите</option>{field.options?.map((option) => {
       const value = typeof option === "string" ? option : option.value;
       const label = typeof option === "string" ? option : option.label;
       return <option key={value} value={value}>{label}</option>;

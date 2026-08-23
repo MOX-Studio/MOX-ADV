@@ -40,6 +40,29 @@
 .owner-recommendation > span { color: var(--owner-green-dark); font-size: 8px; font-weight: 850; text-transform: uppercase; }
 .owner-recommendation h3 { margin: 6px 0; font-size: 18px; }
 .owner-recommendation p { margin: 0; color: var(--owner-muted); font-size: 9px; line-height: 1.55; }
+.owner-business-model { margin-top: 18px; padding: 18px; border: 1px solid var(--owner-line); border-radius: 10px; background: #fbfdfb; }
+.owner-business-model > header { display: flex; gap: 16px; justify-content: space-between; align-items: flex-start; }
+.owner-business-model > header h2 { margin: 5px 0 0; font-size: 21px; }
+.owner-business-model > header > strong { padding: 7px 9px; border-radius: 999px; color: #7b531d; background: var(--owner-amber); font-size: 8px; }
+.owner-model-economics { display: grid; grid-template-columns: 1fr auto; gap: 5px 16px; margin-top: 13px; padding: 12px; border-radius: 8px; background: var(--owner-soft); }
+.owner-model-economics span { color: var(--owner-muted); font-size: 8px; }
+.owner-model-economics b { font-size: 12px; }
+.owner-model-economics p { grid-column: 1 / -1; margin: 0; color: var(--owner-muted); font-size: 8px; line-height: 1.45; }
+.owner-model-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+.owner-model-grid article { min-width: 0; padding: 11px; border: 1px solid var(--owner-line); border-radius: 7px; background: white; }
+.owner-model-grid article > header { display: flex; gap: 8px; justify-content: space-between; }
+.owner-model-grid h3 { margin: 0; font-size: 10px; }
+.owner-model-grid header span { color: var(--owner-muted); font-size: 7px; }
+.owner-model-grid article > p { margin: 7px 0; font-size: 9px; font-weight: 750; overflow-wrap: anywhere; }
+.owner-model-grid dl { display: grid; gap: 3px; margin: 0; }
+.owner-model-grid dl div { display: grid; grid-template-columns: 76px 1fr; gap: 6px; padding-top: 3px; border-top: 1px solid #edf1ee; }
+.owner-model-grid dt { color: var(--owner-muted); font-size: 6px; }
+.owner-model-grid dd { margin: 0; font-size: 6px; overflow-wrap: anywhere; }
+.owner-model-questions { margin-top: 10px; padding: 12px; border-radius: 8px; background: var(--owner-amber); }
+.owner-model-questions h3 { margin: 0 0 8px; font-size: 10px; }
+.owner-model-questions ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.owner-model-questions li { display: grid; gap: 2px; font-size: 7px; }
+.owner-model-questions li span { color: var(--owner-muted); }
 .owner-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 16px; }
 .owner-card { min-width: 0; padding: 16px; border: 1px solid var(--owner-line); border-radius: 9px; background: white; }
 .owner-card > span { color: var(--owner-green-dark); font-size: 7px; font-weight: 850; letter-spacing: .08em; text-transform: uppercase; }
