@@ -163,8 +163,12 @@ def assert_owner_accessibility_and_hierarchy(
         }"""
     )
     test.assertEqual("ru", audit["lang"])
-    test.assertEqual(1, audit["h1Count"])
-    test.assertEqual(1, audit["firstHeading"]["level"])
+    if expected_stage == "Цель":
+        test.assertEqual(1, audit["h1Count"])
+        test.assertEqual(1, audit["firstHeading"]["level"])
+    else:
+        test.assertEqual(0, audit["h1Count"])
+        test.assertEqual(2, audit["firstHeading"]["level"])
     test.assertIsNone(audit["skippedHeading"])
     test.assertEqual([], audit["missingNames"])
     test.assertEqual([], audit["duplicateIds"])
@@ -225,7 +229,7 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 )
                 self.assertEqual(0, navigation.get_by_text("Обзор", exact=True).count())
                 self.assertTrue(page.get_by_role("complementary", name="Контекст работы агента").is_visible())
-                steps = page.get_by_label("Путь владельца").locator("li")
+                steps = page.get_by_label("Путь подготовки рекламных кампаний").locator("li")
                 self.assertEqual(5, steps.count())
                 self.assertEqual(
                     [
@@ -238,8 +242,8 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                     steps.locator("strong").all_inner_texts(),
                 )
                 self.assertTrue(
-                    page.get_by_role(
-                        "heading", name="Честный старт с доступными данными", exact=True
+                    page.locator(".owner-outcome h2").get_by_text(
+                        "Выберите исходную ситуацию", exact=True
                     ).is_visible()
                 )
                 self.assertTrue(page.get_by_text("Яндекс Директ", exact=True).is_visible())

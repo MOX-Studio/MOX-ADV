@@ -6,6 +6,7 @@ const clientSource = await readFile(new URL("../app/P0Client.tsx", import.meta.u
 const ownerSource = await readFile(new URL("../lib/p0-owner-journey.ts", import.meta.url), "utf8");
 const applicationSource = await readFile(new URL("../lib/p0-application.ts", import.meta.url), "utf8");
 const styles = await readFile(new URL("../app/owner-journey.css", import.meta.url), "utf8");
+const prototypeStyles = await readFile(new URL("../app/prototype/prd-149/prototype.module.css", import.meta.url), "utf8");
 
 test("owner campaign surface renders business options without internal draft controls", () => {
   assert.match(clientSource, /Кампании для бизнес-проверки/u);
@@ -47,10 +48,11 @@ test("safe continuation and approved dispatch remain agent-owned without technic
   assert.doesNotMatch(clientSource, /Проверить запланированный элемент|Повторить запрос|Сверить идентификаторы|Продолжить создание без запуска/u);
 });
 
-test("1920 desktop layout uses the accepted agent rail and fixed five-stage hierarchy", () => {
-  assert.match(styles, /\.owner-journey \{[^}]*grid-template-columns: repeat\(5, minmax\(0, 1fr\)\)/u);
-  assert.match(styles, /\.owner-workspace \{[^}]*grid-template-columns: 280px minmax\(0, 1fr\)/u);
-  assert.match(styles, /\.owner-agent-rail \{[^}]*position: sticky/u);
+test("1920 desktop layout uses the accepted PRD-149 shell and fixed five-stage hierarchy", () => {
+  assert.match(prototypeStyles, /\.stageNavhorizontal \{[^}]*grid-template-columns: repeat\(5, 1fr\)/u);
+  assert.match(prototypeStyles, /\.ownerWorkspace \{[^}]*grid-template-columns: 280px minmax\(0, 1fr\)/u);
+  assert.match(prototypeStyles, /\.agentRail \{[^}]*position: sticky/u);
+  assert.match(prototypeStyles, /\.artifact \{[^}]*min-width: 0/u);
   assert.match(styles, /\.owner-main \{[^}]*min-width: 0/u);
   assert.match(styles, /\.owner-campaigns article \{[^}]*min-width: 0/u);
 });

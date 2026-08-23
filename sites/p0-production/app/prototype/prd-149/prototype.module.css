@@ -66,24 +66,24 @@
 .eyebrow { margin: 0; color: var(--green); font-size: 8px; font-weight: 850; letter-spacing: .14em; text-transform: uppercase; }
 .hero h1 { margin: 8px 0 7px; font-size: 38px; line-height: 1; letter-spacing: -.045em; }
 .hero > div:first-child > p:last-child { max-width: 820px; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
-.heroOutcome { min-width: 330px; padding: 13px 15px; border: 1px solid #a8cbb5; border-radius: 10px; background: var(--green-soft); }
+.heroOutcome { width: calc(50% - 10px); min-width: 330px; padding: 13px 15px; border: 1px solid #a8cbb5; border-radius: 10px; background: var(--green-soft); }
 .heroOutcome span, .heroOutcome strong, .heroOutcome small { display: block; }
 .heroOutcome span { color: var(--green-dark); font-size: 7px; font-weight: 800; letter-spacing: .08em; }
 .heroOutcome strong { margin-top: 6px; font-size: 14px; }
 .heroOutcome small { margin-top: 4px; color: var(--muted); font-size: 8px; }
 
 .stageNav { margin: 0; padding: 0; list-style: none; }
-.stageNav button { width: 100%; color: var(--ink); text-align: left; }
-.stageNav button span { display: grid; place-items: center; color: var(--muted); background: white; }
-.stageNav button strong, .stageNav button small { display: block; }
-.stageNav button small { color: var(--muted); }
+.stageNav button, .stageNav .stageItem { width: 100%; color: var(--ink); text-align: left; }
+.stageNav button span, .stageNav .stageItem > span { display: grid; place-items: center; color: var(--muted); background: white; }
+.stageNav button strong, .stageNav button small, .stageNav .stageItem strong, .stageNav .stageItem small { display: block; }
+.stageNav button small, .stageNav .stageItem small { color: var(--muted); }
 .stageNavhorizontal { display: grid; grid-template-columns: repeat(5, 1fr); gap: 7px; margin: 18px 0; }
-.stageNavhorizontal button { display: grid; grid-template-columns: 28px 1fr; gap: 9px; min-height: 58px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; background: rgba(255,255,255,.72); }
-.stageNavhorizontal button span { width: 27px; height: 27px; border: 1px solid var(--line); border-radius: 50%; font-size: 8px; }
-.stageNavhorizontal button strong { font-size: 9px; }
-.stageNavhorizontal button small { margin-top: 3px; font-size: 6px; }
+.stageNavhorizontal button, .stageNavhorizontal .stageItem { display: grid; grid-template-columns: 28px 1fr; gap: 9px; min-height: 58px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; background: rgba(255,255,255,.72); }
+.stageNavhorizontal button span, .stageNavhorizontal .stageItem > span { width: 27px; height: 27px; border: 1px solid var(--line); border-radius: 50%; font-size: 8px; }
+.stageNavhorizontal button strong, .stageNavhorizontal .stageItem strong { font-size: 9px; }
+.stageNavhorizontal button small, .stageNavhorizontal .stageItem small { margin-top: 3px; font-size: 6px; }
 .stageNavhorizontal .currentStage { border-color: var(--green); background: var(--green-soft); }
-.stageNavhorizontal .currentStage span, .stageNavhorizontal .passedStage span { border-color: var(--green); color: white; background: var(--green); }
+.stageNavhorizontal .currentStage > span, .stageNavhorizontal .passedStage > span { border-color: var(--green); color: white; background: var(--green); }
 .ownerWorkspace { display: grid; grid-template-columns: 280px minmax(0, 1fr); align-items: start; border: 1px solid var(--line); border-radius: 13px; background: rgba(255,254,250,.72); box-shadow: 0 24px 54px rgba(23,39,29,.08); }
 .agentRail { position: sticky; top: 86px; min-height: 520px; padding: 18px; border-right: 1px solid var(--line); border-radius: 13px 0 0 13px; background: rgba(255,255,255,.95); }
 .agentRail > header { display: flex; gap: 10px; align-items: center; padding-bottom: 15px; border-bottom: 1px solid var(--line); }
@@ -100,7 +100,7 @@
 .railSnapshot strong { margin-top: 5px; font-size: 9px; }
 .railSnapshot small { margin-top: 4px; color: var(--muted); font-size: 6px; line-height: 1.4; }
 .automationMap { margin-top: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: white; }
-.automationMap h3 { margin: 0 0 5px; font-size: 8px; }
+.automationMap h2, .automationMap h3 { margin: 0 0 5px; font-size: 8px; }
 .automationMap > div { display: flex; gap: 8px; justify-content: space-between; padding: 6px 0; border-top: 1px solid var(--line); }
 .automationMap span { color: var(--muted); font-size: 6px; }
 .automationMap strong { color: var(--green-dark); font-size: 5px; text-align: right; }

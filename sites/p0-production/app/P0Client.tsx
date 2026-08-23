@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
+import styles from "./prototype/prd-149/prototype.module.css";
 import type {
   OwnerActionField,
   OwnerJourneyProjection,
@@ -27,6 +28,14 @@ const cardLabels = {
   problem: "Проблема",
   "human-decision-gate": "Решение владельца",
 } as const;
+
+const stageDetails: Record<OwnerJourneyProjection["journey"]["stages"][number]["id"], string> = {
+  goal: "Доступ и бизнес-результат",
+  findings: "Модель и доказательства",
+  strategy: "Готовое решение",
+  campaigns: "Сравнение гипотез",
+  review: "Точное полномочие",
+};
 
 export default function P0Client() {
   const [projection, setProjection] = useState<OwnerJourneyProjection | null>(null);
@@ -74,35 +83,22 @@ export default function P0Client() {
   }
 
   if (!projection) {
-    return <div className="owner-shell">
+    return <div className={styles.prototype}>
       <Header />
-      <main className="owner-page"><section className="owner-loading" aria-live="polite"><strong>Готовлю путь владельца</strong><p>{error || "Собираю текущий бизнес-вывод…"}</p></section></main>
+      <main className={styles.pageA}><section className="owner-loading" aria-live="polite"><strong>Готовлю путь владельца</strong><p>{error || "Собираю текущий бизнес-вывод…"}</p></section></main>
     </div>;
   }
 
-  return <div className="owner-shell">
+  return <div className={styles.prototype}>
     <Header />
-    <main className="owner-page">
-      <header className="owner-hero">
-        <div><p className="owner-eyebrow">P0 · ПРОИЗВОДСТВЕННЫЙ МОДУЛЬ</p><h1>Стратегия и рекламные кампании</h1><p>Агент ведёт владельца от бизнес-цели до точного пакета кампаний.</p></div>
-        <div className="owner-hero-outcome"><span>Текущий результат</span><strong>{projection.businessOutcome.headline}</strong><small>{projection.businessOutcome.summary}</small></div>
-      </header>
-
-      <ol className="owner-journey" aria-label="Путь владельца">
-        {projection.journey.stages.map((stage, index) => <li key={stage.id} className={stage.status} aria-current={stage.status === "current" ? "step" : undefined}>
-          <span>{stage.status === "complete" ? "✓" : index + 1}</span><strong>{stage.label}</strong>
-        </li>)}
-      </ol>
-
-      {projection.introduction && <section className="owner-introduction"><p className="owner-eyebrow">КАК ЭТО РАБОТАЕТ</p><h2>{projection.introduction.title}</h2><p>{projection.introduction.body}</p></section>}
-
-      <div className="owner-workspace">
+    <main className={styles.pageA} id="module">
+      {projection.journey.currentStage === "goal" && <Hero projection={projection} />}
+      <StageNavigation projection={projection} />
+      <div className={styles.ownerWorkspace}>
         <AgentRail projection={projection} />
-        <section className="owner-main">
-          <header className="owner-outcome">
-            <p className="owner-eyebrow">ТЕКУЩИЙ БИЗНЕС-РЕЗУЛЬТАТ</p>
-            <h2>{projection.businessOutcome.headline}</h2>
-            <p>{projection.businessOutcome.summary}</p>
+        <section className={`${styles.artifact} owner-main`}>
+          <header className={`${styles.sectionHead} owner-outcome`}>
+            <div><p className={styles.eyebrow}>ТЕКУЩИЙ БИЗНЕС-РЕЗУЛЬТАТ</p><h2>{projection.businessOutcome.headline}</h2><p>{projection.businessOutcome.summary}</p></div>
           </header>
 
           {projection.currentRecommendation && <section className="owner-recommendation">
@@ -232,10 +228,12 @@ export default function P0Client() {
             {projection.packageSummary.outcomes.length > 0 && <ul>{projection.packageSummary.outcomes.map((item) => <li key={item.campaign}><strong>{item.campaign}</strong><span>{item.outcome}</span></li>)}</ul>}
           </section>}
 
+          {projection.materialUnknowns.length > 0 && <details className={styles.disclosure} open><summary>СУЩЕСТВЕННЫЕ НЕИЗВЕСТНЫЕ</summary><ul>{projection.materialUnknowns.map((item) => <li key={item}>{item}</li>)}</ul></details>}
+
           {projection.primaryAction && <form key={projection.primaryAction.handle} className="owner-action" onSubmit={submit}>
             <header><p className="owner-eyebrow">СЛЕДУЮЩИЙ ШАГ</p><h2>{projection.primaryAction.label}</h2><p>{projection.primaryAction.description}</p></header>
             {projection.primaryAction.fields.length > 0 && <div className="owner-fields">{projection.primaryAction.fields.map((field) => <OwnerField key={field.key} field={field} />)}</div>}
-            <button type="submit" disabled={busy}>{busy ? "Агент выполняет работу…" : projection.primaryAction.label}</button>
+            <button className={styles.primaryButton} type="submit" disabled={busy}>{busy ? "Агент выполняет работу…" : projection.primaryAction.label}</button>
           </form>}
           {!projection.primaryAction && projection.businessOutcome.status === "working" && <div className="owner-progress" role="status"><i /><div><strong>Агент продолжает работу</strong><p>Ожидание, повторные проверки и безопасная сверка не требуют действий владельца.</p></div></div>}
           {error && <p className="owner-error" role="alert">{error}</p>}
@@ -246,33 +244,51 @@ export default function P0Client() {
   </div>;
 }
 
+function Hero({ projection }: { projection: OwnerJourneyProjection }) {
+  return <section className={styles.hero}>
+    <div><p className={styles.eyebrow}>P0 · ПРОИЗВОДСТВЕННЫЙ МОДУЛЬ</p><h1>Стратегия и рекламные кампании</h1><p>Агент ведёт владельца от бизнес-цели до точного пакета кампаний.</p></div>
+    <div className={styles.heroOutcome}><span>Текущий результат</span><strong>{projection.businessOutcome.headline}</strong><small>{projection.businessOutcome.summary}</small></div>
+  </section>;
+}
+
+function StageNavigation({ projection }: { projection: OwnerJourneyProjection }) {
+  return <ol className={`${styles.stageNav} ${styles.stageNavhorizontal}`} aria-label="Путь подготовки рекламных кампаний">
+    {projection.journey.stages.map((stage, index) => <li key={stage.id}>
+      <div className={`${styles.stageItem} ${stage.status === "current" ? styles.currentStage : ""} ${stage.status === "complete" ? styles.passedStage : ""}`} aria-current={stage.status === "current" ? "step" : undefined}>
+        <span>{stage.status === "complete" ? "✓" : index + 1}</span><div><strong>{stage.label}</strong><small>{stageDetails[stage.id]}</small></div>
+      </div>
+    </li>)}
+  </ol>;
+}
+
 function AgentRail({ projection }: { projection: OwnerJourneyProjection }) {
-  const currentStage = projection.journey.stages.find((stage) => stage.status === "current") ?? projection.journey.stages.at(-1);
   const agentWorking = projection.agentActivity?.status === "working" || projection.agentActivity?.status === "waiting";
-  return <aside className="owner-agent-rail" aria-label="Контекст работы агента">
-    <header><span>А</span><div><strong>Агент MOX</strong><small>{agentWorking ? "Выполняет безопасную работу" : "Готов к работе"}</small></div></header>
-    <section className="owner-agent-message"><p className="owner-eyebrow">ТЕКУЩИЙ ВЫВОД</p><strong>{projection.agentActivity?.summary ?? projection.businessOutcome.headline}</strong><p>{projection.agentActivity?.nextBusinessStep ?? projection.businessOutcome.summary}</p></section>
-    <section className="owner-rail-snapshot"><span>Текущий этап</span><strong>{currentStage?.label ?? "Проверка и создание"}</strong><small>{projection.businessOutcome.status === "blocked" ? "Нужно внимание владельца" : projection.businessOutcome.status === "complete" ? "Бизнес-результат подготовлен" : "Агент продолжает путь"}</small></section>
-    <section className="owner-automation-map" aria-label="Карта подготовки">
-      <h2>Карта подготовки</h2>
-      {projection.journey.stages.map((stage) => <div key={stage.id}><span>{stage.label}</span><strong className={stage.status}>{stage.status === "complete" ? "ГОТОВО" : stage.status === "current" ? "СЕЙЧАС" : "ДАЛЬШЕ"}</strong></div>)}
+  return <aside className={styles.agentRail} aria-label="Контекст работы агента">
+    <header><span>А</span><div><strong>Агент кампании</strong><small>{agentWorking ? "Выполняет безопасную работу" : "Безопасная работа завершена"}</small></div></header>
+    <section className={styles.agentMessage}><p className={styles.eyebrow}>ТЕКУЩИЙ ВЫВОД</p><strong>{projection.agentActivity?.summary ?? projection.businessOutcome.headline}</strong><p>{projection.agentActivity?.nextBusinessStep ?? projection.businessOutcome.summary}</p></section>
+    <section className={styles.railSnapshot}><span>Текущий этап</span><strong>{projection.journey.stages.find((stage) => stage.status === "current")?.label ?? "Проверка и создание"}</strong><small>{projection.businessOutcome.status === "blocked" ? "Нужно внимание владельца" : "Факты и ограничения раскрыты в основном рабочем поле"}</small></section>
+    <section className={styles.automationMap} aria-label="Карта автоматизации">
+      <h2>Карта автоматизации</h2>
+      <div><span>Исследование</span><strong>АГЕНТ</strong></div>
+      <div><span>Бизнес-смысл</span><strong>ИСПРАВЛЯЕТ ВЛАДЕЛЕЦ</strong></div>
+      <div><span>Точный пакет</span><strong>РАЗОВОЕ ПРАВО</strong></div>
+      <div><span>Показы и расходы</span><strong className={styles.unavailable}>НЕДОСТУПНО</strong></div>
     </section>
-    {projection.materialUnknowns.length > 0 && <section className="owner-rail-unknowns"><span>СУЩЕСТВЕННЫЕ НЕИЗВЕСТНЫЕ</span><ul>{projection.materialUnknowns.map((item) => <li key={item}>{item}</li>)}</ul></section>}
-    <section className="owner-safety-card"><span>ГРАНИЦА P0</span><strong>Создание без запуска</strong><p>Показы, расходы и возобновление кампаний недоступны. Любое полномочие подтверждается отдельно.</p></section>
+    <section className={styles.safetyCard}><span>ГРАНИЦА P0</span><strong>Создание без запуска</strong><p>Показы, расходы и возобновление кампаний недоступны. Успех подтверждается повторным чтением статуса «Остановлена».</p></section>
   </aside>;
 }
 
 function Header() {
-  return <header className="owner-topbar">
-    <Link className="brand" href="/" aria-label="MOX-ADV — на главную"><span>M</span>MOX-ADV</Link>
+  return <header className={styles.topbar}>
+    <Link className={styles.brand} href="/" aria-label="MOX-ADV — на главную"><b>M</b><span>MOX-ADV</span></Link>
     <nav aria-label="Основная навигация">
-      <Link className="owner-nav-active" href="/" aria-current="page">Стратегия</Link>
+      <Link className={styles.activeNav} href="/" aria-current="page">Стратегия</Link>
       <span>Управление<i>В РАЗРАБОТКЕ</i></span>
       <span>Мониторинг<i>В РАЗРАБОТКЕ</i></span>
       <span>SEO<i>В РАЗРАБОТКЕ</i></span>
       <span>Каналы<i>VK · В РАЗРАБОТКЕ</i></span>
     </nav>
-    <div className="owner-connection"><i />Агент готов</div>
+    <div className={styles.connectionState}><i />Агент готов</div>
   </header>;
 }
 

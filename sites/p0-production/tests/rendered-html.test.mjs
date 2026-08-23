@@ -43,7 +43,7 @@ test("owner interface fixes the accepted five stages and exposes only planned pr
   for (const label of ["Стратегия", "Управление", "Мониторинг", "SEO", "Каналы", "VK · В РАЗРАБОТКЕ"]) {
     assert.match(clientSource, new RegExp(label, "u"));
   }
-  assert.match(clientSource, /owner-nav-active/u);
+  assert.match(clientSource, /styles\.activeNav/u);
   assert.match(clientSource, /aria-current="page"/u);
   assert.doesNotMatch(clientSource, /Обзор/u);
   assert.doesNotMatch(clientSource, /owner-roadmap/u);
