@@ -84,8 +84,8 @@ export default function P0Client() {
     <Header />
     <main className="owner-page">
       <header className="owner-hero">
-        <div><p className="owner-eyebrow">РЕКЛАМНАЯ СТРАТЕГИЯ</p><h1>От цели до готовых кампаний</h1></div>
-        <span className={`owner-outcome-status ${projection.businessOutcome.status}`}>{projection.businessOutcome.status === "complete" ? "Готово" : projection.businessOutcome.status === "blocked" ? "Нужно внимание" : "В работе"}</span>
+        <div><p className="owner-eyebrow">P0 · ПРОИЗВОДСТВЕННЫЙ МОДУЛЬ</p><h1>Стратегия и рекламные кампании</h1><p>Агент ведёт владельца от бизнес-цели до точного пакета кампаний.</p></div>
+        <div className="owner-hero-outcome"><span>Текущий результат</span><strong>{projection.businessOutcome.headline}</strong><small>{projection.businessOutcome.summary}</small></div>
       </header>
 
       <ol className="owner-journey" aria-label="Путь владельца">
@@ -97,6 +97,7 @@ export default function P0Client() {
       {projection.introduction && <section className="owner-introduction"><p className="owner-eyebrow">КАК ЭТО РАБОТАЕТ</p><h2>{projection.introduction.title}</h2><p>{projection.introduction.body}</p></section>}
 
       <div className="owner-workspace">
+        <AgentRail projection={projection} />
         <section className="owner-main">
           <header className="owner-outcome">
             <p className="owner-eyebrow">ТЕКУЩИЙ БИЗНЕС-РЕЗУЛЬТАТ</p>
@@ -240,17 +241,39 @@ export default function P0Client() {
           {error && <p className="owner-error" role="alert">{error}</p>}
         </section>
 
-        <aside className="owner-aside">
-          <section><p className="owner-eyebrow">СУЩЕСТВЕННЫЕ НЕИЗВЕСТНЫЕ</p>{projection.materialUnknowns.length ? <ul>{projection.materialUnknowns.map((item) => <li key={item}>{item}</li>)}</ul> : <p>Нет неизвестных, требующих решения владельца сейчас.</p>}</section>
-          <section className="owner-roadmap" aria-label="Дорожная карта"><p className="owner-eyebrow">ДАЛЬШЕ В MOX-ADV</p><ul>{projection.roadmap.map((item) => <li key={item.label}><span>{item.label}</span><small>{item.horizon}</small></li>)}</ul></section>
-        </aside>
       </div>
     </main>
   </div>;
 }
 
+function AgentRail({ projection }: { projection: OwnerJourneyProjection }) {
+  const currentStage = projection.journey.stages.find((stage) => stage.status === "current") ?? projection.journey.stages.at(-1);
+  const agentWorking = projection.agentActivity?.status === "working" || projection.agentActivity?.status === "waiting";
+  return <aside className="owner-agent-rail" aria-label="Контекст работы агента">
+    <header><span>А</span><div><strong>Агент MOX</strong><small>{agentWorking ? "Выполняет безопасную работу" : "Готов к работе"}</small></div></header>
+    <section className="owner-agent-message"><p className="owner-eyebrow">ТЕКУЩИЙ ВЫВОД</p><strong>{projection.agentActivity?.summary ?? projection.businessOutcome.headline}</strong><p>{projection.agentActivity?.nextBusinessStep ?? projection.businessOutcome.summary}</p></section>
+    <section className="owner-rail-snapshot"><span>Текущий этап</span><strong>{currentStage?.label ?? "Проверка и создание"}</strong><small>{projection.businessOutcome.status === "blocked" ? "Нужно внимание владельца" : projection.businessOutcome.status === "complete" ? "Бизнес-результат подготовлен" : "Агент продолжает путь"}</small></section>
+    <section className="owner-automation-map" aria-label="Карта подготовки">
+      <h2>Карта подготовки</h2>
+      {projection.journey.stages.map((stage) => <div key={stage.id}><span>{stage.label}</span><strong className={stage.status}>{stage.status === "complete" ? "ГОТОВО" : stage.status === "current" ? "СЕЙЧАС" : "ДАЛЬШЕ"}</strong></div>)}
+    </section>
+    {projection.materialUnknowns.length > 0 && <section className="owner-rail-unknowns"><span>СУЩЕСТВЕННЫЕ НЕИЗВЕСТНЫЕ</span><ul>{projection.materialUnknowns.map((item) => <li key={item}>{item}</li>)}</ul></section>}
+    <section className="owner-safety-card"><span>ГРАНИЦА P0</span><strong>Создание без запуска</strong><p>Показы, расходы и возобновление кампаний недоступны. Любое полномочие подтверждается отдельно.</p></section>
+  </aside>;
+}
+
 function Header() {
-  return <header className="owner-topbar"><Link className="brand" href="/"><span>M</span>MOX-ADV</Link><nav aria-label="Основная навигация"><span>Реклама</span></nav><div className="owner-connection"><i />Агент готов</div></header>;
+  return <header className="owner-topbar">
+    <Link className="brand" href="/" aria-label="MOX-ADV — на главную"><span>M</span>MOX-ADV</Link>
+    <nav aria-label="Основная навигация">
+      <Link className="owner-nav-active" href="/" aria-current="page">Стратегия</Link>
+      <span>Управление<i>В РАЗРАБОТКЕ</i></span>
+      <span>Мониторинг<i>В РАЗРАБОТКЕ</i></span>
+      <span>SEO<i>В РАЗРАБОТКЕ</i></span>
+      <span>Каналы<i>VK · В РАЗРАБОТКЕ</i></span>
+    </nav>
+    <div className="owner-connection"><i />Агент готов</div>
+  </header>;
 }
 
 function OwnerField({ field }: { field: OwnerActionField }) {

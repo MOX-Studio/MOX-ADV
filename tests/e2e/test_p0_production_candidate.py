@@ -215,7 +215,16 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                     visible_copy_samples.append(page.locator("body").inner_text())
 
                 page.goto(base_url, wait_until="networkidle")
-                self.assertEqual("Путь владельца — MOX-ADV", page.title())
+                self.assertEqual("Стратегия и рекламные кампании — MOX-ADV", page.title())
+                navigation = page.get_by_role("navigation", name="Основная навигация")
+                self.assertEqual(
+                    ["Стратегия", "Управление", "Мониторинг", "SEO", "Каналы"],
+                    navigation.locator(":scope > *").evaluate_all(
+                        "elements => elements.map(element => element.childNodes[0].textContent.trim())"
+                    ),
+                )
+                self.assertEqual(0, navigation.get_by_text("Обзор", exact=True).count())
+                self.assertTrue(page.get_by_role("complementary", name="Контекст работы агента").is_visible())
                 steps = page.get_by_label("Путь владельца").locator("li")
                 self.assertEqual(5, steps.count())
                 self.assertEqual(
@@ -236,9 +245,9 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 self.assertTrue(page.get_by_text("Яндекс Директ", exact=True).is_visible())
                 self.assertTrue(page.get_by_text("Яндекс Метрика", exact=True).is_visible())
                 self.assertTrue(page.get_by_text("Яндекс Wordstat", exact=True).is_visible())
-                roadmap = page.get_by_label("Дорожная карта")
-                self.assertEqual(["Управление", "Мониторинг", "SEO", "VK"], roadmap.locator("li span").all_inner_texts())
-                self.assertEqual(0, roadmap.get_by_role("button").count())
+                self.assertTrue(navigation.get_by_role("link", name="Стратегия", exact=True).is_visible())
+                self.assertEqual(1, navigation.locator('[aria-current="page"]').count())
+                self.assertEqual(0, navigation.get_by_role("button").count())
                 checkpoint("Цель")
 
                 page.get_by_label("Исходная ситуация").select_option("existing")
@@ -264,7 +273,7 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                     "button", name="Подтвердить готовность доступа", exact=True
                 ).click()
                 page.get_by_role(
-                    "heading", name="От бизнес-цели до готовых кампаний", exact=True
+                    "button", name="Исследовать бизнес и предложить цель", exact=True
                 ).wait_for()
                 checkpoint("Цель")
 
@@ -432,8 +441,8 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 page.get_by_role(
                     "button", name="Подтвердить исправление", exact=True
                 ).click()
-                page.get_by_text(
-                    "Создание завершено без запуска показов", exact=True
+                page.get_by_role(
+                    "heading", name="Создание завершено без запуска показов", exact=True
                 ).wait_for(timeout=20_000)
                 checkpoint("Проверка и создание")
 

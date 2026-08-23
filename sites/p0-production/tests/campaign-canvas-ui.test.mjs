@@ -47,9 +47,10 @@ test("safe continuation and approved dispatch remain agent-owned without technic
   assert.doesNotMatch(clientSource, /Проверить запланированный элемент|Повторить запрос|Сверить идентификаторы|Продолжить создание без запуска/u);
 });
 
-test("1920 desktop layout uses minmax-zero columns and fixed five-stage hierarchy", () => {
+test("1920 desktop layout uses the accepted agent rail and fixed five-stage hierarchy", () => {
   assert.match(styles, /\.owner-journey \{[^}]*grid-template-columns: repeat\(5, minmax\(0, 1fr\)\)/u);
-  assert.match(styles, /\.owner-workspace \{[^}]*grid-template-columns: minmax\(0, 1fr\) 320px/u);
+  assert.match(styles, /\.owner-workspace \{[^}]*grid-template-columns: 280px minmax\(0, 1fr\)/u);
+  assert.match(styles, /\.owner-agent-rail \{[^}]*position: sticky/u);
   assert.match(styles, /\.owner-main \{[^}]*min-width: 0/u);
   assert.match(styles, /\.owner-campaigns article \{[^}]*min-width: 0/u);
 });

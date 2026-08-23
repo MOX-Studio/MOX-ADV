@@ -21,7 +21,7 @@ test("server-renders the MOX-ADV owner journey shell", async () => {
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
-  assert.match(html, /<title>Путь владельца — MOX-ADV<\/title>/i);
+  assert.match(html, /<title>Стратегия и рекламные кампании — MOX-ADV<\/title>/i);
   assert.match(html, /Готовлю путь владельца/u);
   assert.doesNotMatch(html, /Production Module|Test Scenario|schema_version|provider_ids/i);
 });
@@ -36,13 +36,15 @@ test("production page consumes only the typed owner projection", () => {
   assert.doesNotMatch(clientSource, /schema_version|revision_history|provider_ids|publish_fingerprint/u);
 });
 
-test("owner interface fixes the accepted five stages and keeps roadmap non-interactive", () => {
+test("owner interface fixes the accepted five stages and exposes only planned product modules", () => {
   for (const label of ["Цель", "Что узнал агент", "Стратегия", "Кампании", "Проверка и создание"]) {
     assert.match(ownerSource, new RegExp(label, "u"));
   }
-  for (const label of ["Управление", "Мониторинг", "SEO", "VK"]) {
-    assert.match(ownerSource, new RegExp(label, "u"));
+  for (const label of ["Стратегия", "Управление", "Мониторинг", "SEO", "Каналы", "VK · В РАЗРАБОТКЕ"]) {
+    assert.match(clientSource, new RegExp(label, "u"));
   }
-  assert.match(ownerSource, /interactive: false/u);
-  assert.doesNotMatch(clientSource, /owner-roadmap[\s\S]*<button/u);
+  assert.match(clientSource, /owner-nav-active/u);
+  assert.match(clientSource, /aria-current="page"/u);
+  assert.doesNotMatch(clientSource, /Обзор/u);
+  assert.doesNotMatch(clientSource, /owner-roadmap/u);
 });
