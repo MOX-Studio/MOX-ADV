@@ -118,6 +118,26 @@ export default function P0Client() {
             {projection.businessModel.materialQuestions.length > 0 && <div className="owner-model-questions"><h3>Только существенные вопросы</h3><ul>{projection.businessModel.materialQuestions.map((item) => <li key={item.question}><strong>{item.question}</strong><span>{item.consequence}</span></li>)}</ul></div>}
           </section>}
 
+          {projection.competitorMatrix && <section className="owner-competitor-matrix" aria-labelledby="owner-competitor-matrix-title">
+            <header><div><p className="owner-eyebrow">ПУБЛИЧНОЕ ПОЗИЦИОНИРОВАНИЕ</p><h2 id="owner-competitor-matrix-title">Матрица конкурентов</h2></div><strong>{projection.competitorMatrix.status}</strong></header>
+            <p className="owner-competitor-rule"><b>Как выбран набор:</b> {projection.competitorMatrix.competitorSetRule}</p>
+            <div className="owner-competitor-candidates">{projection.competitorMatrix.candidates.map((candidate) => <article key={candidate.competitor}><h3>{candidate.competitor}</h3><p>{candidate.rationale}</p><small>{candidate.exactDestinations.join(" · ")}</small></article>)}</div>
+            {projection.competitorMatrix.rows.length > 0 ? <div className="owner-competitor-rows">{projection.competitorMatrix.rows.map((row) => <article key={`${row.competitor}-${row.exactLanding}`}>
+              <header><h3>{row.competitor}</h3><span>{row.observationDate}</span></header>
+              <dl>
+                <div><dt>Продукты и услуги</dt><dd>{row.productsServices}</dd></div>
+                <div><dt>Наблюдаемое предложение</dt><dd>{row.observedOfferMessage}</dd></div>
+                <div><dt>Опубликованная цена</dt><dd>{row.publishedPrice}</dd></div>
+                <div><dt>Точная посадочная</dt><dd>{row.exactLanding}</dd></div>
+                <div><dt>Источник</dt><dd>{row.source}</dd></div>
+                <div><dt>География и устройство</dt><dd>{row.geography} · {row.device}</dd></div>
+                <div><dt>Срез рекламной видимости</dt><dd>{row.adVisibilitySample}</dd></div>
+              </dl>
+            </article>)}</div> : <p className="owner-competitor-unavailable">Публичные наблюдения не получены и остаются недоступными, а не нулевыми.</p>}
+            <div className="owner-competitor-aggregates"><h3>Выводы только по этому набору</h3>{projection.competitorMatrix.aggregateClaims.map((claim) => <article key={claim.claim}><strong>{claim.claim}</strong><span>{claim.result}</span><p>{claim.scope} {claim.limitation}</p></article>)}</div>
+            <div className="owner-competitor-limitations"><strong>Что эта матрица не доказывает</strong><ul>{projection.competitorMatrix.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}</ul></div>
+          </section>}
+
           {projection.agentActivity && <section className="owner-progress" aria-label="Ход работы агента">
             <i /><div><strong>{projection.agentActivity.summary}</strong><p>{projection.agentActivity.nextBusinessStep}</p></div>
             <span>{projection.agentActivity.completed} из {projection.agentActivity.total}</span>

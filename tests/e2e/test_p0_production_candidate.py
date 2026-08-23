@@ -217,6 +217,18 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                         "heading", name="От бизнес-цели до готовых кампаний", exact=True
                     ).count(),
                 )
+                competitor_matrix = page.locator(".owner-competitor-matrix")
+                self.assertTrue(
+                    competitor_matrix.get_by_role(
+                        "heading", name="Матрица конкурентов", exact=True
+                    ).is_visible()
+                )
+                self.assertEqual(2, competitor_matrix.locator(".owner-competitor-candidates article").count())
+                self.assertEqual(1, competitor_matrix.locator(".owner-competitor-rows > article").count())
+                self.assertTrue(competitor_matrix.get_by_text("от 120 000 ₽", exact=True).is_visible())
+                self.assertTrue(competitor_matrix.get_by_text("Наблюдалось: 1.", exact=True).first.is_visible())
+                self.assertIn("Знаменатель: 2", competitor_matrix.inner_text())
+                self.assertIn("Публичные наблюдения не показывают расходы, CPC, конверсии, CPA, ROI, прибыльность", competitor_matrix.inner_text())
                 checkpoint()
 
                 page.get_by_label("Кто и как принимает решение о покупке").fill(

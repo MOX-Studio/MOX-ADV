@@ -150,6 +150,59 @@ function context() {
       observed_at: "2026-08-21T10:00:00.000Z",
     },
     campaign_catalog: { total: 1, active: [] },
+    competitor_candidate_set: {
+      schema_version: "p0-bounded-competitor-research-v1",
+      competitor_set_rule: "Два прямых поставщика участия в промышленной выставке в Москве из ограниченного публичного поискового среза.",
+      candidates: [
+        {
+          competitor: "Экспо Альфа",
+          rationale: "Предлагает сопоставимый пакет участия на отдельной публичной странице.",
+          exact_destinations: ["https://alpha.example/participate"],
+        },
+        {
+          competitor: "Экспо Бета",
+          rationale: "Попала в тот же ограниченный срез с сопоставимой услугой для участников.",
+          exact_destinations: ["https://beta.example/exhibitors"],
+        },
+      ],
+    },
+    competitor_observations: [{
+      source_url: "https://alpha.example/participate",
+      observed_at: "2026-08-21T09:30:00.000Z",
+      collected_via: "PUBLIC_RESEARCH_EGRESS_V1",
+      locator: { url: "https://alpha.example/participate", selector: "main" },
+      policy: {
+        policy_id: "public-competitor-pages",
+        version: "2.0.0",
+        policy_url: "https://alpha.example/robots.txt",
+        access: "PUBLIC_NO_AUTH",
+        allowed_hosts: ["alpha.example"],
+        allowed_destinations: ["https://alpha.example/participate"],
+      },
+      scope: { host: "alpha.example", pages_observed: 1, observation_scope: "one exact public landing" },
+      claim: { subject: "competitor:expo-alpha", predicate: "published_offer", value: "Встречи с закупщиками для участников" },
+      raw_quote: "Встречи с закупщиками для участников. Стоимость участия от 120 000 ₽.",
+      matrix_row: {
+        competitor: "Экспо Альфа",
+        products_services: ["Промышленная выставка", "Пакет участника"],
+        observed_offer_message: "Встречи с закупщиками для участников",
+        published_price: { status: "PUBLISHED", value: "от 120 000 ₽" },
+        exact_landing: "https://alpha.example/participate",
+        source: { label: "Публичная страница предложения", url: "https://alpha.example/participate" },
+        geography: "Москва",
+        device: "desktop",
+        observation_date: "2026-08-21T09:30:00.000Z",
+        ad_visibility_sample: {
+          status: "OBSERVED",
+          query: "промышленная выставка участие",
+          source: "Публичная поисковая выдача",
+          geography: "Москва",
+          device: "desktop",
+          observation_date: "2026-08-21T09:25:00.000Z",
+        },
+      },
+      limitations: ["Публичная видимость является наблюдением, а не показателем эффективности."],
+    }],
     performance: {
       period_start: "2026-08-01",
       period_end: "2026-08-20",
@@ -1033,6 +1086,7 @@ test("cold-start research proceeds with unavailable account history and never pe
   const agentContract = await application.agentContract("owner", "COORDINATE_OWNER_JOURNEY");
   assert.deepEqual(agentContract.tools.map((tool) => tool.name), [
     "p0_read_owner_journey",
+    "p0_read_bounded_competitor_research",
     "p0_record_owner_journey_assessment",
   ]);
   assert.deepEqual(agentContract.policy.allowed_permissions, ["P0_APPLICATION_READ", "P0_OBSERVATION_RECORD"]);
@@ -3422,9 +3476,9 @@ test("authoritative application owns the agent objective, typed tool schema, per
   const initial = await value.application.agentContract("owner", "COORDINATE_OWNER_JOURNEY");
   assert.equal(initial.schema_version, "p0-agent-application-contract-v1");
   assert.equal(initial.objective.kind, "COORDINATE_OWNER_JOURNEY");
-  assert.deepEqual(initial.policy.allowed_tools, ["p0_read_owner_journey", "p0_audit_direct_account", "p0_continue_due_safe_work", "p0_dispatch_approved_package", "p0_record_owner_journey_assessment"]);
+  assert.deepEqual(initial.policy.allowed_tools, ["p0_read_owner_journey", "p0_read_bounded_competitor_research", "p0_audit_direct_account", "p0_continue_due_safe_work", "p0_dispatch_approved_package", "p0_record_owner_journey_assessment"]);
   assert.deepEqual(initial.policy.allowed_permissions, ["P0_APPLICATION_READ", "P0_PROVIDER_READ", "P0_APPROVED_DISPATCH", "P0_OBSERVATION_RECORD"]);
-  assert.deepEqual(initial.tools.map((tool) => tool.name), ["p0_read_owner_journey", "p0_audit_direct_account", "p0_continue_due_safe_work", "p0_dispatch_approved_package", "p0_record_owner_journey_assessment"]);
+  assert.deepEqual(initial.tools.map((tool) => tool.name), ["p0_read_owner_journey", "p0_read_bounded_competitor_research", "p0_audit_direct_account", "p0_continue_due_safe_work", "p0_dispatch_approved_package", "p0_record_owner_journey_assessment"]);
   assert.ok(initial.tools.every((tool) => tool.input_schema.additionalProperties === false));
   assert.equal(initial.authority.application_revision, 0);
   assert.match(initial.authority.authority_digest, /^sha256:[a-f0-9]{64}$/u);
@@ -3546,6 +3600,25 @@ test("authoritative application owns the agent objective, typed tool schema, per
   assert.equal(result.state.business_model.research.agent, "DETERMINISTIC_EVIDENCE_EXTRACTOR_V4");
   assert.equal(result.state.product_focus.decision_status, "HUMAN_DECISION_REQUIRED");
   const focusDecisionContract = await value.application.agentContract("owner", "COORDINATE_OWNER_JOURNEY");
+  const competitorResearch = await value.application.executeAgentTool({
+    owner_key: "owner",
+    run_id: "agent-run-1",
+    objective: focusDecisionContract.objective,
+    authority: focusDecisionContract.authority,
+    call: {
+      id: "competitor-matrix",
+      name: "p0_read_bounded_competitor_research",
+      arguments: { expected_revision: result.revision },
+    },
+    observation_sequence: 1,
+  });
+  assert.equal(competitorResearch.observation.trust, "UNTRUSTED_EVIDENCE");
+  assert.equal(competitorResearch.observation.facts.competitor_research_status, "PARTIAL");
+  assert.equal(competitorResearch.observation.facts.competitor_matrix.candidate_set.candidates.length, 2);
+  assert.equal(competitorResearch.observation.facts.competitor_matrix.aggregate_claims[0].denominator, 2);
+  assert.equal(competitorResearch.observation.facts.competitor_matrix.aggregate_claims[0].observed_count, 1);
+  assert.equal(competitorResearch.observation.source_references.some((source) => source.locator === "https://alpha.example/participate"), true);
+
   const focusDecision = await value.application.evaluateAgentObjective({
     owner_key: "owner",
     run_id: "agent-run-1",
@@ -3638,6 +3711,13 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
   ownerResponses.push(projection);
   assert.equal(projection.journey.currentStage, "findings");
   assert.equal(projection.introduction, undefined);
+  assert.equal(projection.competitorMatrix.status, "Частично");
+  assert.equal(projection.competitorMatrix.candidates.length, 2);
+  assert.equal(projection.competitorMatrix.rows[0].competitor, "Экспо Альфа");
+  assert.equal(projection.competitorMatrix.rows[0].publishedPrice, "от 120 000 ₽");
+  assert.match(projection.competitorMatrix.rows[0].adVisibilitySample, /Объявление наблюдалось/u);
+  assert.match(projection.competitorMatrix.aggregateClaims[0].scope, /Знаменатель: 2/u);
+  assert.match(projection.competitorMatrix.limitations.join(" "), /не показывают расходы, CPC, конверсии, CPA, ROI, прибыльность/u);
   await assert.rejects(
     journey.submit(ownerKey, { handle: staleHandle, values: {} }),
     (error) => error instanceof P0ApplicationError && error.code === "P0_OWNER_ACTION_STALE",

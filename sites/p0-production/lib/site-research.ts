@@ -25,7 +25,7 @@ type SiteResearchLimits = {
   maximumTotalBytes: number;
 };
 
-type SiteResearchDependencies = {
+export type SiteResearchDependencies = {
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
   resolveHostname(hostname: string): Promise<string[]>;
   now(): string;
@@ -34,6 +34,7 @@ type SiteResearchDependencies = {
 
 export type PublicCompetitorResearchPolicy = {
   allowedHosts: string[];
+  allowedDestinations?: string[];
   policyId: string;
   policyVersion: string;
   policyUrl: string;
@@ -51,6 +52,7 @@ export type PublicCompetitorPageObservation = {
     policy_url: string;
     access: "PUBLIC_NO_AUTH";
     allowed_hosts: string[];
+    allowed_destinations: string[];
   };
   scope: {
     host: string;
@@ -151,6 +153,7 @@ async function fetchPage(
   limits: SiteResearchLimits,
   remainingBytes: number,
   exactAllowedHosts?: Set<string>,
+  exactAllowedDestinations?: Set<string>,
 ) {
   let current = requirePublicHttpsUrl(rawUrl);
   for (let redirectCount = 0; ; redirectCount += 1) {
@@ -159,6 +162,9 @@ async function fetchPage(
     }
     if (exactAllowedHosts && !exactAllowedHosts.has(current.hostname.toLowerCase())) {
       fail("SITE_HOST_NOT_ALLOWLISTED", "Public research host отсутствует в exact allowlist.");
+    }
+    if (exactAllowedDestinations && !exactAllowedDestinations.has(current.toString())) {
+      fail("SITE_DESTINATION_NOT_ALLOWLISTED", "Public research URL отсутствует в exact destination allowlist.");
     }
     await assertPublicResolution(current, dependencies.resolveHostname);
     const response = await dependencies.fetch(current, {
@@ -173,6 +179,9 @@ async function fetchPage(
     });
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       await response.body?.cancel();
+      if (exactAllowedDestinations) {
+        fail("SITE_REDIRECT_UNSAFE", "Exact competitor destination не разрешает redirects.");
+      }
       if (redirectCount >= limits.maximumRedirects) {
         fail("SITE_REDIRECT_LIMIT", "Сайт превысил безопасный лимит redirects.");
       }
@@ -264,8 +273,13 @@ export async function researchAllowlistedPublicCompetitorPage(
 ): Promise<PublicCompetitorPageObservation> {
   const requested = normalizePublicHttpsUrl(rawUrl);
   const allowedHosts = [...new Set(policy.allowedHosts.map((item) => item.trim().toLowerCase()).filter(Boolean))].sort();
+  const allowedDestinations = [...new Set((policy.allowedDestinations ?? [requested.toString()])
+    .map((item) => normalizePublicHttpsUrl(item).toString()))].sort();
   if (!allowedHosts.includes(requested.hostname.toLowerCase())) {
     fail("SITE_HOST_NOT_ALLOWLISTED", "Public competitor host отсутствует в exact allowlist.");
+  }
+  if (!allowedDestinations.includes(requested.toString())) {
+    fail("SITE_DESTINATION_NOT_ALLOWLISTED", "Public competitor URL отсутствует в exact destination allowlist.");
   }
   if (!policy.policyId.trim() || !policy.policyVersion.trim() || !policy.policyUrl.trim() || !policy.observationScope.trim()) {
     fail("SITE_POLICY_REQUIRED", "Public competitor research требует policy, version, URL и observation scope.");
@@ -283,6 +297,7 @@ export async function researchAllowlistedPublicCompetitorPage(
     limits,
     limits.maximumTotalBytes,
     new Set(allowedHosts),
+    new Set(allowedDestinations),
   );
   const observedAt = dependencies.now();
   const finalUrl = new URL(result.page.url);
@@ -297,6 +312,7 @@ export async function researchAllowlistedPublicCompetitorPage(
       policy_url: requirePublicHttpsUrl(policy.policyUrl).toString(),
       access: "PUBLIC_NO_AUTH",
       allowed_hosts: allowedHosts,
+      allowed_destinations: allowedDestinations,
     },
     scope: {
       host: finalUrl.hostname.toLowerCase(),

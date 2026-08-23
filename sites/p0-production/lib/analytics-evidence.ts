@@ -10,10 +10,19 @@ import {
   unavailableWordstatBatch,
   type MarketEvidenceInput,
 } from "./market-evidence.ts";
+import {
+  BOUNDED_COMPETITOR_RESEARCH_SCHEMA,
+  buildCompetitorMatrix,
+  containsCompetitorPromptInjection,
+  containsHiddenCompetitorPerformance,
+  createBoundedCompetitorCandidateSet,
+  type CompetitorMatrix,
+  type CompetitorMatrixRowInput,
+} from "./competitor-research.ts";
 
-export const ANALYTICS_EVIDENCE_SCHEMA = "p0-analytics-evidence-v3";
-export const ANALYTICS_EVIDENCE_CONTRACT_VERSION = "3.0.0";
-const LEGACY_ANALYTICS_EVIDENCE_SCHEMAS = new Set(["p0-analytics-evidence-v1", "p0-analytics-evidence-v2"]);
+export const ANALYTICS_EVIDENCE_SCHEMA = "p0-analytics-evidence-v4";
+export const ANALYTICS_EVIDENCE_CONTRACT_VERSION = "4.0.0";
+const LEGACY_ANALYTICS_EVIDENCE_SCHEMAS = new Set(["p0-analytics-evidence-v1", "p0-analytics-evidence-v2", "p0-analytics-evidence-v3"]);
 const CANONICALIZATION_VERSION = "mox-canonical-json-v1";
 const NORMALIZER_VERSION = "mox-evidence-normalizer-v2";
 const REDACTION_VERSION = "mox-artifact-redaction-v1";
@@ -174,6 +183,7 @@ export type AnalyticsEvidenceBundle = {
   conflicts: EvidenceConflict[];
   gaps: EvidenceGap[];
   material_uncertainties: string[];
+  competitor_matrix: CompetitorMatrix | null;
   product_catalog: OfferCatalog;
   focus_opportunities: FocusOpportunitySet;
   market_evidence: Awaited<ReturnType<typeof buildMarketEvidence>>;
@@ -197,6 +207,7 @@ export type AnalyticsEvidenceBundle = {
     evidence_sha256: string;
     conflicts_sha256: string;
     gaps_sha256: string;
+    competitor_matrix_sha256: string;
     product_catalog_sha256: string;
     focus_opportunities_sha256: string;
     market_evidence_sha256: string;
@@ -542,10 +553,10 @@ function confidenceForClaim(input: Partial<ClaimConfidence> & Pick<ClaimConfiden
 }
 
 function containsForbiddenCompetitorPerformance(value: unknown) {
-  return /(?:\b(?:cpc|conversions?|spend|bids?|account state|internal strategy)\b|бюджет|цен[аы]\s+клик|стоимост\p{L}*\s+клик|конверс\p{L}*|внутренн\p{L}*\s+стратег|состояни\p{L}*\s+аккаунт|рекламн\p{L}*\s+расход|ставк\p{L}*)/iu.test(text(value).replace(/[_-]+/gu, " "));
+  return containsHiddenCompetitorPerformance(value);
 }
 
-function assertCompetitorObservation(observation: Record<string, unknown>) {
+function assertCompetitorObservation(observation: Record<string, unknown>, requireExactDestination = false) {
   const locator = record(observation.locator);
   const policy = record(observation.policy);
   const scope = record(observation.scope);
@@ -557,8 +568,17 @@ function assertCompetitorObservation(observation: Record<string, unknown>) {
     fail("PUBLIC_LOCATOR_UNSAFE", "Public competitor locator должен быть безопасным HTTPS URL.");
   }
   const allowedHosts = list(policy.allowed_hosts).map(text).map((item) => item.toLowerCase()).filter(Boolean);
+  const allowedDestinations = list(policy.allowed_destinations).map((item) => {
+    try { return normalizePublicHttpsUrl(text(item)).toString(); } catch { return ""; }
+  }).filter(Boolean);
   if (!allowedHosts.includes(url.hostname.toLowerCase()) || text(scope.host).toLowerCase() !== url.hostname.toLowerCase()) {
     fail("PUBLIC_HOST_NOT_ALLOWLISTED", "Public competitor host отсутствует в exact allowlist observation policy.");
+  }
+  if (requireExactDestination && !allowedDestinations.length) {
+    fail("PUBLIC_DESTINATION_ALLOWLIST_REQUIRED", "Detailed competitor matrix требует exact destination allowlist.");
+  }
+  if (allowedDestinations.length && !allowedDestinations.includes(url.toString())) {
+    fail("PUBLIC_DESTINATION_NOT_ALLOWLISTED", "Public competitor locator отсутствует в exact destination allowlist.");
   }
   if (observation.collected_via !== "PUBLIC_RESEARCH_EGRESS_V1" || policy.access !== "PUBLIC_NO_AUTH") {
     fail("PUBLIC_COLLECTION_POLICY_INVALID", "Competitor observation должен проходить credential-free public research egress.");
@@ -570,6 +590,9 @@ function assertCompetitorObservation(observation: Record<string, unknown>) {
     || containsForbiddenCompetitorPerformance(observation.raw_quote)
   ) {
     fail("COMPETITOR_HIDDEN_CLAIM_FORBIDDEN", "Скрытые performance/strategy claims конкурентов запрещены.");
+  }
+  if (containsCompetitorPromptInjection(claim.value) || containsCompetitorPromptInjection(observation.raw_quote)) {
+    fail("COMPETITOR_PROMPT_INJECTION_REJECTED", "Prompt injection из public competitor evidence отклонён.");
   }
   if (!predicate || !text(claim.subject)) {
     fail("COMPETITOR_CLAIM_INVALID", "Public competitor observation требует атомарный normalized claim.");
@@ -604,6 +627,54 @@ export async function buildAnalyticsEvidence({
   const competitorInputs = list(context.competitor_observations)
     .map(record)
     .sort((left, right) => compareText(text(record(left.locator).url), text(record(right.locator).url)));
+  const rawCandidateSet = record(context.competitor_candidate_set);
+  if (Object.keys(rawCandidateSet).length && text(rawCandidateSet.schema_version) !== BOUNDED_COMPETITOR_RESEARCH_SCHEMA) {
+    fail("COMPETITOR_SCHEMA_UNSUPPORTED", "Competitor candidate set schema не поддерживается.");
+  }
+  const competitorCandidateSet = Object.keys(rawCandidateSet).length
+    ? createBoundedCompetitorCandidateSet({
+        rule: text(rawCandidateSet.competitor_set_rule),
+        candidates: list(rawCandidateSet.candidates).map((candidateValue) => {
+          const candidate = record(candidateValue);
+          return {
+            competitor: text(candidate.competitor),
+            rationale: text(candidate.rationale),
+            exactDestinations: list(candidate.exact_destinations).map(text),
+          };
+        }),
+      })
+    : null;
+  const competitorMatrix = competitorCandidateSet
+    ? buildCompetitorMatrix({
+        candidateSet: competitorCandidateSet,
+        rows: competitorInputs.map((observation) => record(observation.matrix_row)).filter((row) => Object.keys(row).length).map((row) => {
+          const price = record(row.published_price);
+          const sample = record(row.ad_visibility_sample);
+          const source = record(row.source);
+          return {
+            competitor: text(row.competitor),
+            productsServices: list(row.products_services).map(text),
+            observedOfferMessage: text(row.observed_offer_message),
+            publishedPrice: price.status === "PUBLISHED"
+              ? { status: "PUBLISHED", value: text(price.value) }
+              : { status: "NOT_PUBLISHED", value: null },
+            exactLanding: text(row.exact_landing),
+            source: { label: text(source.label), url: text(source.url) },
+            geography: text(row.geography),
+            device: text(row.device),
+            observedAt: text(row.observation_date),
+            adVisibilitySample: {
+              status: text(sample.status) as CompetitorMatrixRowInput["adVisibilitySample"]["status"],
+              query: sample.query === null ? null : text(sample.query),
+              source: text(sample.source),
+              geography: text(sample.geography),
+              device: text(sample.device),
+              observedAt: text(sample.observation_date),
+            },
+          } satisfies CompetitorMatrixRowInput;
+        }),
+      })
+    : null;
   const competitorObservedAts = competitorInputs.map((item) => isoTimestamp(item.observed_at));
   const ownerObservedAts = Object.values(fieldEvidence).map((item) => isoTimestamp(record(item).owner_confirmed_at));
   const rawMarketInput = record(context.market_evidence_input);
@@ -1171,7 +1242,7 @@ export async function buildAnalyticsEvidence({
   }
 
   for (const observation of competitorInputs) {
-    const checked = assertCompetitorObservation(observation);
+    const checked = assertCompetitorObservation(observation, Boolean(competitorCandidateSet));
     const normalizedClaim = safeValue(checked.claim.value);
     const identity = await contentHash({
       subject: text(checked.claim.subject),
@@ -1206,6 +1277,7 @@ export async function buildAnalyticsEvidence({
         policy_url: text(checked.policy.policy_url),
         access: "PUBLIC_NO_AUTH",
         allowed_hosts: list(checked.policy.allowed_hosts).map(text).sort(compareText),
+        allowed_destinations: list(checked.policy.allowed_destinations).map(text).sort(compareText),
       },
       extraction: {
         method: "dom_selector",
@@ -1213,9 +1285,9 @@ export async function buildAnalyticsEvidence({
         selector_or_jsonpath: text(record(observation.locator).selector) || null,
         request_digest: await contentHash({ url: checked.url.toString(), access: "PUBLIC_NO_AUTH" }),
       },
-      rawValue: observation.raw_quote,
+      rawValue: { quote: observation.raw_quote, matrix_row: observation.matrix_row ?? null },
       rawQuote: text(observation.raw_quote),
-      normalized: { value: normalizedClaim, datatype: "string", language: "ru" },
+      normalized: { value: normalizedClaim, datatype: "string", language: "ru", matrix_row: observation.matrix_row ?? null },
       limitations,
       qualityFlags: ["PUBLIC_OBSERVATION_ONLY", "NO_HIDDEN_PERFORMANCE_INFERENCE"],
       providerMetadata: { collected_via: "PUBLIC_RESEARCH_EGRESS_V1" },
@@ -1614,11 +1686,20 @@ export async function buildAnalyticsEvidence({
       status: competitorStatus,
       observed_at: latestTimestamp(competitorObservedAts),
       generated_at: generated,
-      scope: { observations: sourceEvidence.competitors.length, collection: "PUBLIC_RESEARCH_EGRESS_V1" },
+      scope: {
+        observations: sourceEvidence.competitors.length,
+        collection: "PUBLIC_RESEARCH_EGRESS_V1",
+        competitor_set_rule: competitorMatrix?.candidate_set.competitor_set_rule ?? "UNAVAILABLE",
+        denominator: competitorMatrix?.candidate_set.candidates.length ?? null,
+        observed_count: competitorMatrix?.rows.length ? new Set(competitorMatrix.rows.map((row) => row.competitor)).size : null,
+      },
       access: competitorStatus === "UNAVAILABLE" ? "unavailable" : "public",
-      collection_policy: { policy_id: "public-competitor-pages", version: "1.0.0", exact_host_allowlist: true, public_no_auth: true },
-      versions: { schema: ANALYTICS_EVIDENCE_SCHEMA, extractor: "public-competitor-observation-v1", policy: "public-competitor-pages/1.0.0" },
-      facts: sourceEvidence.competitors.length ? [`${sourceEvidence.competitors.length} bounded public observations`] : [],
+      collection_policy: { policy_id: "public-competitor-pages", version: "2.0.0", exact_host_allowlist: true, exact_destination_allowlist: true, public_no_auth: true },
+      versions: { schema: ANALYTICS_EVIDENCE_SCHEMA, extractor: "bounded-competitor-matrix-v1", policy: "public-competitor-pages/2.0.0" },
+      facts: competitorMatrix?.rows.length ? [
+        `${competitorMatrix.rows.length} bounded public landing observations`,
+        `Candidate set denominator: ${competitorMatrix.candidate_set.candidates.length}`,
+      ] : [],
       limitations: [
         ...(sourceEvidence.competitors.length ? ["Public observations are indicative and do not prove prevalence or effectiveness."] : ["No policy-bound public competitor observations are available."]),
         "Budgets, CPC, conversions, account state and internal strategy remain unavailable.",
@@ -1701,7 +1782,7 @@ export async function buildAnalyticsEvidence({
     direct_adapter: "direct-v501-campaign-inventory-v2",
     metrika_adapter: "metrika-management-and-stat-v2",
     wordstat_adapter: "wordstat-v1-scoped-demand-v1",
-    competitor_policy: "public-competitor-pages-v1",
+    competitor_policy: "public-competitor-pages-v2",
   };
   const hashes = {
     input_root_sha256: await contentHash({
@@ -1714,6 +1795,7 @@ export async function buildAnalyticsEvidence({
       evidence,
       conflicts,
       gaps,
+      competitor_matrix: competitorMatrix,
       product_catalog: productFocus.catalog,
       focus_opportunities: productFocus.focus_opportunities,
       market_evidence: marketEvidence,
@@ -1723,6 +1805,7 @@ export async function buildAnalyticsEvidence({
     evidence_sha256: await contentHash(evidence),
     conflicts_sha256: await contentHash(conflicts),
     gaps_sha256: await contentHash(gaps),
+    competitor_matrix_sha256: await contentHash(competitorMatrix),
     product_catalog_sha256: await contentHash(productFocus.catalog),
     focus_opportunities_sha256: await contentHash(productFocus.focus_opportunities),
     market_evidence_sha256: await contentHash(marketEvidence),
@@ -1754,6 +1837,7 @@ export async function buildAnalyticsEvidence({
     conflicts,
     gaps,
     material_uncertainties: materialUncertainties,
+    competitor_matrix: competitorMatrix,
     product_catalog: productFocus.catalog,
     focus_opportunities: productFocus.focus_opportunities,
     market_evidence: marketEvidence,
@@ -1815,6 +1899,9 @@ export async function verifyAnalyticsEvidenceSnapshot(snapshot: AnalyticsEvidenc
     if (current.hashes.evidence_sha256 !== await contentHash(current.evidence)) return false;
     if (current.hashes.conflicts_sha256 !== await contentHash(current.conflicts)) return false;
     if (current.hashes.gaps_sha256 !== await contentHash(current.gaps)) return false;
+    const hasCompetitorMatrix = Object.hasOwn(current as unknown as Record<string, unknown>, "competitor_matrix");
+    if (candidate.schema_version === ANALYTICS_EVIDENCE_SCHEMA && !hasCompetitorMatrix) return false;
+    if (hasCompetitorMatrix && current.hashes.competitor_matrix_sha256 !== await contentHash(current.competitor_matrix)) return false;
     const hasMarketEvidence = Boolean((current as unknown as Record<string, unknown>).market_evidence);
     if (hasMarketEvidence && current.hashes.market_evidence_sha256 !== await contentHash(current.market_evidence)) return false;
     const hasProductFocus = Boolean(
@@ -1841,6 +1928,7 @@ export async function verifyAnalyticsEvidenceSnapshot(snapshot: AnalyticsEvidenc
       evidence: current.evidence,
       conflicts: current.conflicts,
       gaps: current.gaps,
+      ...(hasCompetitorMatrix ? { competitor_matrix: current.competitor_matrix } : {}),
       ...(hasProductFocus ? {
         product_catalog: current.product_catalog,
         focus_opportunities: current.focus_opportunities,

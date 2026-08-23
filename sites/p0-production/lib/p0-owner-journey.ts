@@ -51,6 +51,25 @@ export type OwnerJourneyProjection = {
     headline: string;
     rationale: string;
   } | null;
+  competitorMatrix: {
+    status: "Доступно" | "Частично" | "Недоступно";
+    competitorSetRule: string;
+    candidates: Array<{ competitor: string; rationale: string; exactDestinations: string[] }>;
+    rows: Array<{
+      competitor: string;
+      productsServices: string;
+      observedOfferMessage: string;
+      publishedPrice: string;
+      exactLanding: string;
+      source: string;
+      geography: string;
+      device: string;
+      observationDate: string;
+      adVisibilitySample: string;
+    }>;
+    aggregateClaims: Array<{ claim: string; scope: string; result: string; limitation: string }>;
+    limitations: string[];
+  } | null;
   businessModel: {
     fields: Array<{
       label: string;
@@ -437,6 +456,58 @@ const BUSINESS_MODEL_LABELS: Record<string, string> = {
   key_constraints: "Ключевые ограничения",
 };
 
+function competitorMatrixProjection(state: InternalState): OwnerJourneyProjection["competitorMatrix"] {
+  const matrix = record(record(state.analytics_evidence_snapshot).competitor_matrix);
+  const candidateSet = record(matrix.candidate_set);
+  if (!Object.keys(candidateSet).length) return null;
+  const candidates = list(candidateSet.candidates).map((candidateValue) => {
+    const candidate = record(candidateValue);
+    return {
+      competitor: ownerText(candidate.competitor),
+      rationale: ownerText(candidate.rationale),
+      exactDestinations: list(candidate.exact_destinations).map((destination) => ownerText(destination, "Недоступно", 1_500)),
+    };
+  });
+  const rows = list(matrix.rows).map((rowValue) => {
+    const row = record(rowValue);
+    const price = record(row.published_price);
+    const source = record(row.source);
+    const sample = record(row.ad_visibility_sample);
+    const sampleStatus = sample.status === "OBSERVED"
+      ? "Объявление наблюдалось"
+      : sample.status === "NOT_OBSERVED" ? "В этом срезе объявление не наблюдалось" : "Срез недоступен";
+    return {
+      competitor: ownerText(row.competitor),
+      productsServices: list(row.products_services).map((item) => ownerText(item)).join(", ") || "Недоступно",
+      observedOfferMessage: ownerText(row.observed_offer_message),
+      publishedPrice: price.status === "PUBLISHED" ? ownerText(price.value) : "Не опубликована",
+      exactLanding: ownerText(row.exact_landing, "Недоступно", 1_500),
+      source: `${ownerText(source.label)} · ${ownerText(source.url, "Недоступно", 1_500)}`,
+      geography: row.geography === "UNAVAILABLE" ? "Недоступна" : ownerText(row.geography),
+      device: row.device === "UNAVAILABLE" ? "Недоступно" : ownerText(row.device),
+      observationDate: ownerText(row.observation_date, "Дата недоступна", 100),
+      adVisibilitySample: `${sampleStatus}. Запрос: ${sample.query === null ? "недоступен" : ownerText(sample.query)}. География: ${sample.geography === "UNAVAILABLE" ? "недоступна" : ownerText(sample.geography)}. Устройство: ${sample.device === "UNAVAILABLE" ? "недоступно" : ownerText(sample.device)}. Дата: ${ownerText(sample.observation_date, "недоступна", 100)}. Источник: ${ownerText(sample.source)}.`,
+    };
+  });
+  return {
+    status: matrix.status === "AVAILABLE" ? "Доступно" : matrix.status === "PARTIAL" ? "Частично" : "Недоступно",
+    competitorSetRule: ownerText(candidateSet.competitor_set_rule),
+    candidates,
+    rows,
+    aggregateClaims: list(matrix.aggregate_claims).map((claimValue) => {
+      const claim = record(claimValue);
+      const observed = claim.observed_count === null || claim.observed_count === undefined ? "недоступно" : String(claim.observed_count);
+      return {
+        claim: ownerText(claim.claim),
+        scope: `${ownerText(claim.competitor_set_rule)} Знаменатель: ${Number(claim.denominator)}.`,
+        result: `Наблюдалось: ${observed}.`,
+        limitation: ownerText(claim.limitation),
+      };
+    }),
+    limitations: list(matrix.limitations).map((item) => ownerText(item)).filter(Boolean),
+  };
+}
+
 function businessModelProjection(state: InternalState): OwnerJourneyProjection["businessModel"] {
   const contract = record(record(state.business_model).owner_contract);
   const fields = record(contract.fields);
@@ -692,6 +763,7 @@ async function project(
     } : {}),
     businessOutcome: outcome(view, stage, unknowns),
     currentRecommendation: recommendation(view, stage),
+    competitorMatrix: competitorMatrixProjection(view.state),
     businessModel: businessModelProjection(view.state),
     materialUnknowns: unknowns,
     agentActivity: agent ? {
@@ -814,6 +886,7 @@ async function projectAccessOnly(
       headline: state.path === "NEW_ADVERTISER" ? "Продолжить с cold-start профилем" : "Использовать только подтверждённый доступ",
       rationale: access.history.explanation,
     },
+    competitorMatrix: null,
     businessModel: null,
     materialUnknowns: [...access.limitations],
     agentActivity: null,
