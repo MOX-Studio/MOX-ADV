@@ -1,3 +1,4 @@
+import { evaluateBrandClaimsContract } from "./campaign-creation-profile.ts";
 import { strategyAnswerValue, strategyPeriod } from "./campaign-strategy.ts";
 
 const SCORE_CONTRACT_VERSION = "viability-score/1.0.0";
@@ -514,8 +515,25 @@ function evaluateEligibility(
   const adGroup = record(direct.ad_group);
   const keyword = record(direct.keyword);
   const ad = record(direct.ad);
-  if (!campaign.UnifiedCampaign || !adGroup.UnifiedAdGroup || !text(keyword.Keyword) || !record(ad.TextAd).Title) {
-    blockers.push(blocker("PUBLISH_PROJECTION_INVALID", "/draft/publish_projection/direct", "Exact Direct projection должен содержать полную поддержанную campaign graph."));
+  const responsiveAd = record(ad.ResponsiveAd);
+  if (!campaign.UnifiedCampaign || !adGroup.UnifiedAdGroup || !text(keyword.Keyword)
+    || !list(responsiveAd.Titles).length || !list(responsiveAd.Texts).length || !text(responsiveAd.Href)) {
+    blockers.push(blocker("PUBLISH_PROJECTION_INVALID", "/draft/publish_projection/direct", "Exact Direct projection должен содержать полную поддержанную RESPONSIVE_AD campaign graph."));
+  }
+  const creationProfile = record(projection.creation_profile);
+  const advertiser = record(creationProfile.advertiser);
+  const measurementPlan = record(creationProfile.measurement_plan);
+  if (creationProfile.profile_id !== "p0-campaign-creation-profile-v1" || !text(advertiser.account) || !text(advertiser.currency)) {
+    blockers.push(blocker("CAMPAIGN_PROFILE_INVALID", "/draft/publish_projection/creation_profile", "Зафиксировать exact advertiser/currency Campaign Creation Profile v1."));
+  }
+  if (!text(measurementPlan.counter_id) || !text(measurementPlan.primary_goal_id) || !text(measurementPlan.readiness_id)) {
+    blockers.push(blocker("METRIKA_MEASUREMENT_PLAN_INCOMPLETE", "/draft/publish_projection/creation_profile/measurement_plan", "Зафиксировать точную Metrika measurement plan."));
+  }
+  for (const contractBlocker of evaluateBrandClaimsContract(
+    projection.brand_claims_contract,
+    [...list(responsiveAd.Titles), ...list(responsiveAd.Texts)],
+  )) {
+    blockers.push(blocker(contractBlocker.code, "/draft/publish_projection/brand_claims_contract", contractBlocker.message));
   }
   const safety = record(projection.safety);
   if (safety.must_end_non_serving !== true || safety.resume_allowed !== false || safety.network_serving !== false) {
@@ -872,7 +890,7 @@ function directDimension(draft: DraftCandidate, evidence: Record<string, unknown
       : unknownFeature("direct-account-currency-ready-v1", ["/analytics_evidence/sources/direct"], "direct-account-preflight"),
     feature({ rule: "direct-campaign-group-core-v1", pointers: ["/draft/publish_projection/direct/campaign", "/draft/publish_projection/direct/ad_group"], value: campaign.UnifiedCampaign && group.UnifiedAdGroup ? 100 : 0 }),
     feature({ rule: "direct-strategy-placement-core-v1", pointers: ["/draft/publish_projection/direct/campaign/UnifiedCampaign/BiddingStrategy"], value: expectedCore ? 100 : 0 }),
-    feature({ rule: "direct-criteria-ad-core-v1", pointers: ["/draft/publish_projection/direct/keyword", "/draft/publish_projection/direct/ad"], value: text(keyword.Keyword) && record(ad.TextAd).Title ? 100 : 0 }),
+    feature({ rule: "direct-criteria-ad-core-v1", pointers: ["/draft/publish_projection/direct/keyword", "/draft/publish_projection/direct/ad"], value: text(keyword.Keyword) && list(record(ad.ResponsiveAd).Titles).length && list(record(ad.ResponsiveAd).Texts).length ? 100 : 0 }),
     liveFitKnown
       ? feature({ rule: "direct-live-limits-fit-v1", pointers: ["/draft/capability_selection"], value: 100 })
       : unknownFeature("direct-live-limits-fit-v1", ["/draft/capability_selection"], "direct-live-restrictions"),

@@ -57,7 +57,8 @@ async function recommendationSet(analyticsEvidence = null, overrides = {}) {
     analyticsEvidence,
     playbookReleases: await defaultPlaybookFixtureReleases(),
     directCapabilitySnapshot: coreCapabilitySnapshot,
-    measurementDestinationReadiness: { measurement: { status: "READY" }, destination: { status: "READY" } },
+    measurementDestinationReadiness: { readiness_id: "measurement-ready-1", measurement: { status: "READY" }, destination: { status: "READY" } },
+    metrikaMeasurementPlan: { counter_id: "424242", primary_goal_id: "1717" },
     generatedAt: "2026-08-21T12:00:00.000Z",
     ...overrides,
   });
@@ -71,7 +72,7 @@ test("deterministically fans one approved Strategy revision out into multiple co
   const visible = first.drafts.filter((draft) => draft.visibility === "VISIBLE");
   assert.equal(visible.length, 3);
   assert.equal(first.schema_version, "campaign-recommendation-set-v4");
-  assert.equal(first.field_registry.schema_version, "direct-v501-draft-field-registry-v1");
+  assert.equal(first.field_registry.schema_version, "direct-v501-draft-field-registry-v2");
   assert.equal(first.field_registry.profile_id, first.capability_profile.profile_id);
   assert.equal(first.field_registry.fields.filter((field) => field.editable).length, 6);
   assert.equal(first.termination.contract, "FINITE_NON_RECURSIVE_ONE_PASS");
@@ -120,12 +121,12 @@ test("canonicalizes only provider-declared unordered arrays before fingerprintin
 
   const changed = structuredClone(projection);
   changed.direct.campaign.Name = "Материально новое имя";
-  changed.direct.ad.TextAd.Text = "Материально новый текст";
+  changed.direct.ad.ResponsiveAd.Texts = ["Материально новый текст", ...changed.direct.ad.ResponsiveAd.Texts.slice(1)];
   assert.deepEqual(directProjectionMaterialDelta(projection, changed), [
     {
-      pointer: "/direct/ad/TextAd/Text",
-      previous_normalized_value: projection.direct.ad.TextAd.Text,
-      current_normalized_value: "Материально новый текст",
+      pointer: "/direct/ad/ResponsiveAd/Texts",
+      previous_normalized_value: projection.direct.ad.ResponsiveAd.Texts,
+      current_normalized_value: changed.direct.ad.ResponsiveAd.Texts,
       reason_code: "SUPPORTED_PUBLISHABLE_FIELD_CHANGED",
     },
     {
@@ -146,7 +147,7 @@ test("canonicalizes only provider-declared unordered arrays before fingerprintin
   );
 
   const material = structuredClone(projection);
-  material.direct.ad.TextAd.Text = `${material.direct.ad.TextAd.Text} Материальное изменение`;
+  material.direct.ad.ResponsiveAd.Texts = [`${material.direct.ad.ResponsiveAd.Texts[0]} Материальное изменение`, ...material.direct.ad.ResponsiveAd.Texts.slice(1)];
   assert.notEqual(
     await fingerprintDirectProjection(projection),
     await fingerprintDirectProjection(material),
@@ -168,12 +169,12 @@ test("keeps the Direct comparison profile constant across business hypotheses", 
     assert.equal(draft.publish_projection.safety.network_serving, false);
     assert.ok(draft.keyword.split(/\s+/u).length <= 7);
   }
-  assert.equal(value.capability_profile.profile_id, "direct-v501-unified-search-explicit-text");
+  assert.equal(value.capability_profile.profile_id, "p0-campaign-creation-profile-v1");
   assert.equal(value.capability_profile.profile_version, "1.0.0");
   assert.equal(value.capability_profile.campaign_type, "UNIFIED_CAMPAIGN");
   assert.equal(value.capability_profile.ad_group_type, "UNIFIED_AD_GROUP");
   assert.deepEqual(value.capability_profile.criteria, ["EXPLICIT_KEYWORDS"]);
-  assert.equal(value.capability_profile.ad_type, "TEXT_AD");
+  assert.equal(value.capability_profile.ad_type, "RESPONSIVE_AD");
   assert.deepEqual(value.capability_profile.conditional_not_enabled, [
     "AUTOTARGETING",
     "SITELINKS",
@@ -255,7 +256,7 @@ function playbookRule(rule_id, overrides = {}) {
     approval_status: "APPROVED",
     changed_family: "QUALIFIED_ACTION",
     mechanism: "Одна проверяемая treatment-гипотеза.",
-    changed_fields: ["/direct/keyword/Keyword", "/direct/ad/TextAd/Text"],
+    changed_fields: ["/direct/keyword/Keyword", "/direct/ad/ResponsiveAd/Texts"],
     required_capabilities: [],
     evidence_quality: 80,
     priority: 10,
@@ -263,7 +264,7 @@ function playbookRule(rule_id, overrides = {}) {
     qualified_evidence_refs: [`https://yandex.ru/support/direct/ru/efficiency/improve-your-ads#${rule_id}`],
     applicability: {
       campaign_fanout_contract: "campaign-fanout-v1",
-      capability_profile_ids: ["direct-v501-unified-search-explicit-text"],
+      capability_profile_ids: ["p0-campaign-creation-profile-v1"],
       campaign_types: ["UNIFIED_CAMPAIGN"],
       placements: ["SEARCH"],
       required_strategy_fields: ["advertised_offer", "qualified_result"],
@@ -422,7 +423,7 @@ test("emits exactly one comparator and at most two improvements for every eviden
     geography: "Россия",
     landing: "https://innoprom.com/participant/",
     message: "Отдельный подтверждённый message regime",
-    management: "direct-v501-unified-search-explicit-text@1.0.0",
+    management: "p0-campaign-creation-profile-v1@1.0.0",
   };
   secondary.provisional_monthly_budget = 3_000;
   secondary.capacity = {
@@ -538,7 +539,7 @@ test("blocks conditional or unknown selected fields without silently dropping th
   assert.deepEqual(unavailable.unsupported_fields, [conditionalField]);
   assert.equal(unavailable.blockers[0].code, "CONDITIONAL_CAPABILITY_EVIDENCE_MISSING");
 
-  const unknown = evaluateDirectCapabilitySelection({ selectedFields: ["/direct/ad/TextAd/UnsupportedFutureField"] });
+  const unknown = evaluateDirectCapabilitySelection({ selectedFields: ["/direct/ad/ResponsiveAd/UnsupportedFutureField"] });
   assert.equal(unknown.eligible, false);
   assert.equal(unknown.blockers[0].code, "UNSUPPORTED_SELECTED_FIELD");
 
@@ -575,7 +576,7 @@ test("blocks conditional or unknown selected fields without silently dropping th
 
   const ownerEditedProjection = structuredClone(eligibleDraft.publish_projection);
   delete ownerEditedProjection.direct.keyword.AutotargetingSettings;
-  ownerEditedProjection.direct.ad.TextAd.Text = "Owner-edited text";
+  ownerEditedProjection.direct.ad.ResponsiveAd.Texts = ["Owner-edited text", ...ownerEditedProjection.direct.ad.ResponsiveAd.Texts.slice(1)];
   const preserved = preserveSelectedConditionalProjection({
     generatedDraft: eligibleDraft,
     editedProjection: ownerEditedProjection,
@@ -585,7 +586,7 @@ test("blocks conditional or unknown selected fields without silently dropping th
     preserved.projection.direct.keyword.AutotargetingSettings,
     eligibleDraft.publish_projection.direct.keyword.AutotargetingSettings,
   );
-  assert.equal(preserved.projection.direct.ad.TextAd.Text, "Owner-edited text");
+  assert.equal(preserved.projection.direct.ad.ResponsiveAd.Texts[0], "Owner-edited text");
   assert.equal(preserved.capability_selection.eligible, true);
 });
 

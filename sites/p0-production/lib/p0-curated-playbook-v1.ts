@@ -25,7 +25,7 @@ const qualifiedResultAlignment = await sealCuratedPlaybookRule({
   approval_status: "APPROVED",
   changed_family: "QUALIFIED_ACTION",
   mechanism: "Показать качественный результат прямо в формулировке предложения и проверить его как отдельную гипотезу.",
-  changed_fields: ["/direct/keyword/Keyword", "/direct/ad/TextAd/Text"],
+  changed_fields: ["/direct/keyword/Keyword", "/direct/ad/ResponsiveAd/Texts"],
   required_capabilities: [],
   evidence_quality: 100,
   priority: 10,
@@ -36,7 +36,7 @@ const qualifiedResultAlignment = await sealCuratedPlaybookRule({
   ],
   applicability: {
     campaign_fanout_contract: "campaign-fanout-v1",
-    capability_profile_ids: ["direct-v501-unified-search-explicit-text"],
+    capability_profile_ids: ["p0-campaign-creation-profile-v1"],
     campaign_types: ["UNIFIED_CAMPAIGN"],
     placements: ["SEARCH"],
     required_strategy_fields: ["advertised_offer", "qualified_result"],

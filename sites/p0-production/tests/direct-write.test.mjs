@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import JSONbigFactory from "json-bigint";
 
@@ -24,6 +25,7 @@ function projection() {
     {
       product: "Участие со стендом в выставке ИННОПРОМ",
       audience: "Руководители промышленных компаний",
+      value: "Участие со стендом в выставке ИННОПРОМ",
       qualified_result: "Заявка на участие",
     },
     {
@@ -42,8 +44,22 @@ function projection() {
       negative_keywords: "бесплатно, вакансии, билет",
       ad_title: "Участие в ИННОПРОМ",
       ad_text: "Подайте заявку на участие.",
+      advertiser_account: "moxstudio",
+      currency: "RUB",
+      capability_snapshot_id: "direct-capability:moxstudio:1",
+      metrika_counter_id: "424242",
+      metrika_goal_id: "1717",
+      measurement_readiness_id: "measurement-ready-1",
     },
   );
+}
+
+function responsiveReadback(value) {
+  return {
+    Titles: value.Titles.map((Title) => ({ Title, Status: "ACCEPTED", StatusClarification: null })),
+    Texts: value.Texts.map((Text) => ({ Text, Status: "ACCEPTED", StatusClarification: null })),
+    Href: value.Href,
+  };
 }
 
 function successfulFetcher(calls, adId = "401", options = {}) {
@@ -66,14 +82,11 @@ function successfulFetcher(calls, adId = "401", options = {}) {
     if (key === "campaigns.get") {
       campaignGetCalls += 1;
       return jsonResponse({ Campaigns: [{
+        ...expected.direct.campaign,
         Id: 101,
-        Name: expected.direct.campaign.Name,
         Type: "UNIFIED_CAMPAIGN",
         State: "SUSPENDED",
         Status: campaignGetCalls < 3 ? "DRAFT" : "MODERATION",
-        StartDate: expected.direct.campaign.StartDate,
-        EndDate: expected.direct.campaign.EndDate,
-        UnifiedCampaign: expected.direct.campaign.UnifiedCampaign,
       }] });
     }
     if (key === "adgroups.get") {
@@ -98,16 +111,55 @@ function successfulFetcher(calls, adId = "401", options = {}) {
         Id: BigInt(adId),
         CampaignId: 101,
         AdGroupId: 201,
-        Type: "TEXT_AD",
+        Type: "RESPONSIVE_AD",
         Status: adGetCalls === 1 ? "DRAFT" : "MODERATION",
         State: "OFF",
         StatusClarification: null,
-        TextAd: expected.direct.ad.TextAd,
+        ResponsiveAd: responsiveReadback(expected.direct.ad.ResponsiveAd),
       }] } }), { headers: { "Content-Type": "application/json" } });
     }
     return jsonResponse(results[key]);
   };
 }
+
+test("official-shape fixture proves create, explicit suspend and complete RESPONSIVE_AD semantic readback", async () => {
+  const fixture = JSON.parse(await readFile(new URL("./fixtures/direct/responsive-campaign-graph.json", import.meta.url), "utf8"));
+  const calls = [];
+  const fetcher = async (url, init) => {
+    const body = JSON.parse(String(init.body));
+    const service = new URL(url).pathname.split("/").at(-1);
+    const operation = `${service}.${body.method}`;
+    calls.push({ operation, params: body.params });
+    if (operation === "campaigns.add") return jsonResponse({ AddResults: [{ Id: fixture.ids.campaign }] });
+    if (operation === "campaigns.suspend") return jsonResponse({ SuspendResults: [{ Id: fixture.ids.campaign }] });
+    if (operation === "campaigns.get") return jsonResponse({ Campaigns: [fixture.campaign] });
+    if (operation === "adgroups.add") return jsonResponse({ AddResults: [{ Id: fixture.ids.ad_group }] });
+    if (operation === "adgroups.get") return jsonResponse({ AdGroups: [fixture.ad_group] });
+    if (operation === "keywords.add") return jsonResponse({ AddResults: [{ Id: fixture.ids.keyword }] });
+    if (operation === "keywords.get") return jsonResponse({ Keywords: [fixture.keyword] });
+    if (operation === "ads.add") return jsonResponse({ AddResults: [{ Id: fixture.ids.ad }] });
+    if (operation === "ads.get") return jsonResponse({ Ads: [fixture.ad] });
+    if (operation === "ads.moderate") return jsonResponse({ ModerateResults: [{ Id: fixture.ids.ad }] });
+    throw new Error(`Unexpected official-shape call ${operation}`);
+  };
+
+  const result = await createSuspendedCampaign(
+    { token: "fixture-only", account: "moxstudio" },
+    projection(),
+    fetcher,
+  );
+
+  assert.equal(result.supported_graph_verified, true);
+  assert.equal(result.semantic_graph.ad.Type, "RESPONSIVE_AD");
+  assert.equal(result.semantic_graph.ad.Titles.length, 2);
+  assert.equal(result.semantic_graph.ad.Texts.length, 2);
+  assert.equal(calls[0].operation, "campaigns.add");
+  assert.equal(calls[1].operation, "campaigns.suspend");
+  assert.equal(calls[2].operation, "campaigns.get");
+  assert.equal(calls.some((call) => call.operation === "campaigns.resume"), false);
+  assert.equal(Object.hasOwn(calls.find((call) => call.operation === "ads.add").params.Ads[0], "TextAd"), false);
+  assert.deepEqual(calls.find((call) => call.operation === "ads.get").params.ResponsiveAdFieldNames, ["Titles", "Texts", "Href"]);
+});
 
 test("creates a real-shape Direct graph and ends owner-suspended after moderation", async () => {
   const calls = [];
@@ -154,7 +206,7 @@ test("creates a real-shape Direct graph and ends owner-suspended after moderatio
 
 test("updates the exact suspended provider graph and resubmits only the corrected ad revision", async () => {
   const corrected = projection();
-  corrected.direct.ad.TextAd.Text = "Исправленный текст после provider clarification.";
+  corrected.direct.ad.ResponsiveAd.Texts[0] = "Исправленный текст после provider clarification.";
   const calls = [];
   let adReads = 0;
   const fetcher = async (url, init) => {
@@ -163,6 +215,7 @@ test("updates the exact suspended provider graph and resubmits only the correcte
     const operation = `${service}.${body.method}`;
     calls.push({ operation, params: body.params });
     if (operation === "campaigns.get") return jsonResponse({ Campaigns: [{
+      ...corrected.direct.campaign,
       Id: 101,
       Name: corrected.direct.campaign.Name,
       Type: "UNIFIED_CAMPAIGN",
@@ -180,11 +233,11 @@ test("updates the exact suspended provider graph and resubmits only the correcte
         Id: 401,
         CampaignId: 101,
         AdGroupId: 201,
-        Type: "TEXT_AD",
+        Type: "RESPONSIVE_AD",
         Status: adReads === 1 ? "DRAFT" : "MODERATION",
         State: "OFF",
         StatusClarification: null,
-        TextAd: corrected.direct.ad.TextAd,
+        ResponsiveAd: responsiveReadback(corrected.direct.ad.ResponsiveAd),
       }] });
     }
     if (body.method === "update") return jsonResponse({ UpdateResults: [{ Id: { campaigns: 101, adgroups: 201, keywords: 301, ads: 401 }[service] }] });
@@ -196,7 +249,7 @@ test("updates the exact suspended provider graph and resubmits only the correcte
     { token: "secret", account: "moxstudio" },
     corrected,
     { campaignId: "101", adGroupId: "201", keywordId: "301", adId: "401" },
-    ["/direct/ad/TextAd/Text"],
+    ["/direct/ad/ResponsiveAd/Texts"],
     fetcher,
   );
 
@@ -204,7 +257,7 @@ test("updates the exact suspended provider graph and resubmits only the correcte
   assert.equal(result.campaign_state, "SUSPENDED");
   assert.equal(result.provider_ids.campaign_id, "101");
   assert.equal(result.provider_ids.ad_ids[0], "401");
-  assert.equal(result.semantic_graph.ad.Text, "Исправленный текст после provider clarification.");
+  assert.equal(result.semantic_graph.ad.Texts[0], "Исправленный текст после provider clarification.");
   assert.equal(calls.some((call) => /\.(?:add|resume)$/u.test(call.operation)), false);
   assert.deepEqual(calls.filter((call) => call.operation.endsWith(".update")).map((call) => call.operation), ["ads.update"]);
   assert.equal(calls.find((call) => call.operation === "ads.update").params.Ads[0].Id, 401);
@@ -213,14 +266,14 @@ test("updates the exact suspended provider graph and resubmits only the correcte
 
 test("an ambiguous correction update holds reconciliation and is never retried or moderated", async () => {
   const corrected = projection();
-  corrected.direct.ad.TextAd.Text = "Исправленный текст после provider clarification.";
+  corrected.direct.ad.ResponsiveAd.Texts[0] = "Исправленный текст после provider clarification.";
   const calls = [];
   await assert.rejects(
     () => correctSuspendedCampaignAndResubmitModeration(
       { token: "secret", account: "moxstudio" },
       corrected,
       { campaignId: "101", adGroupId: "201", keywordId: "301", adId: "401" },
-      ["/direct/ad/TextAd/Text"],
+      ["/direct/ad/ResponsiveAd/Texts"],
       async (url, init) => {
         const body = JSON.parse(String(init.body));
         const service = new URL(url).pathname.split("/").at(-1);
@@ -252,6 +305,7 @@ test("polls one exact supported graph without mutation and preserves terminal ad
     const operation = `${service}.${body.method}`;
     calls.push(operation);
     if (operation === "campaigns.get") return jsonResponse({ Campaigns: [{
+      ...expected.direct.campaign,
       Id: 101,
       Name: expected.direct.campaign.Name,
       Type: "UNIFIED_CAMPAIGN",
@@ -276,11 +330,11 @@ test("polls one exact supported graph without mutation and preserves terminal ad
       Id: 401,
       CampaignId: 101,
       AdGroupId: 201,
-      Type: "TEXT_AD",
+      Type: "RESPONSIVE_AD",
       Status: "REJECTED",
       State: "OFF",
       StatusClarification: "Текст отклонён правилами площадки",
-      TextAd: expected.direct.ad.TextAd,
+      ResponsiveAd: responsiveReadback(expected.direct.ad.ResponsiveAd),
     }] });
     throw new Error(`Unexpected Direct call ${operation}`);
   };
@@ -316,6 +370,7 @@ test("official PREACCEPTED remains pending before the same suspended graph becom
     const operation = `${service}.${body.method}`;
     calls.push(operation);
     if (operation === "campaigns.get") return jsonResponse({ Campaigns: [{
+      ...expected.direct.campaign,
       Id: 101,
       Name: expected.direct.campaign.Name,
       Type: "UNIFIED_CAMPAIGN",
@@ -340,11 +395,11 @@ test("official PREACCEPTED remains pending before the same suspended graph becom
       Id: 401,
       CampaignId: 101,
       AdGroupId: 201,
-      Type: "TEXT_AD",
+      Type: "RESPONSIVE_AD",
       Status: adStatus,
       State: "OFF",
       StatusClarification: adStatus === "PREACCEPTED" ? "Автоматическая предварительная проверка" : null,
-      TextAd: expected.direct.ad.TextAd,
+      ResponsiveAd: responsiveReadback(expected.direct.ad.ResponsiveAd),
     }] });
     throw new Error(`Unexpected Direct call ${operation}`);
   };
@@ -550,6 +605,7 @@ test("rejects a silently altered selected field in the complete Direct graph", a
     if (key === "campaigns.get") {
       campaignGetCalls += 1;
       return jsonResponse({ Campaigns: [{
+        ...expected.direct.campaign,
         Id: 101,
         Name: expected.direct.campaign.Name,
         Type: "UNIFIED_CAMPAIGN",
@@ -579,10 +635,10 @@ test("rejects a silently altered selected field in the complete Direct graph", a
       Id: 401,
       CampaignId: 101,
       AdGroupId: 201,
-      Type: "TEXT_AD",
+      Type: "RESPONSIVE_AD",
       Status: "MODERATION",
       State: "OFF",
-      TextAd: expected.direct.ad.TextAd,
+      ResponsiveAd: responsiveReadback(expected.direct.ad.ResponsiveAd),
     }] });
     throw new Error(`Unexpected call ${key}`);
   };

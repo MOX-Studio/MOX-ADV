@@ -93,7 +93,7 @@
       "recommendation_set_id": "recommendation-set-revision:c2bf09a1aa0f5a929cb87d91",
       "selected_drafts": [
         {
-          "capability_profile_id": "direct-v501-unified-search-explicit-text",
+          "capability_profile_id": "p0-campaign-creation-profile-v1",
           "capability_profile_version": "1.0.0",
           "draft_id": "draft-61a2a2a36c1546fa889a",
           "draft_revision_id": "draft-61a2a2a36c1546fa889a-r2",
@@ -102,7 +102,7 @@
           "strategy_revision_id": "campaign-strategy-r5"
         },
         {
-          "capability_profile_id": "direct-v501-unified-search-explicit-text",
+          "capability_profile_id": "p0-campaign-creation-profile-v1",
           "capability_profile_version": "1.0.0",
           "draft_id": "draft-b36db1388dfcd72b2621",
           "draft_revision_id": "draft-b36db1388dfcd72b2621-r1",

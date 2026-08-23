@@ -348,7 +348,7 @@ export async function buildStrategyQuestionnaire({
     evaluatedAt: generatedAt,
     applicability: {
       campaign_fanout_contract: "campaign-fanout-v1",
-      capability_profile_id: "direct-v501-unified-search-explicit-text",
+      capability_profile_id: "p0-campaign-creation-profile-v1",
       campaign_type: "UNIFIED_CAMPAIGN",
       placement: "SEARCH",
       strategy_fields: ["advertised_offer", "qualified_result"],

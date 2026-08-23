@@ -1,6 +1,7 @@
 import { buildAdText, buildAdTitle } from "./ad-copy.ts";
 import { buildPublishProjection } from "./campaign-draft.ts";
 import { DIRECT_V501_DRAFT_FIELD_REGISTRY } from "./campaign-draft-fields.ts";
+import { evaluateBrandClaimsContract } from "./campaign-creation-profile.ts";
 import {
   resolveCuratedPlaybookReleases,
   type CompetitiveSampleRule,
@@ -25,13 +26,16 @@ const MAX_IMPROVEMENTS_PER_DELIVERY_BUCKET = 2;
 const PROVIDER_UNORDERED_ARRAY_PATHS = new Set([
   "/ad_group/RegionIds",
   "/ad_group/NegativeKeywords/Items",
-  "/campaign/UnifiedCampaign/CounterIds",
+  "/campaign/UnifiedCampaign/CounterIds/Items",
+  "/direct/ad_group/RegionIds",
+  "/direct/ad_group/NegativeKeywords/Items",
+  "/direct/campaign/UnifiedCampaign/CounterIds/Items",
 ]);
 const FORBIDDEN_PUBLISH_FINGERPRINT_FIELD = /(?:landing.*advisory|advisory.*landing|post.*launch|launch.*outcome|campaign.*outcome|moderation.*outcome|outcome.*learning|calibrat)/iu;
 
 
 export const CORE_DIRECT_CAPABILITY_PROFILE = Object.freeze({
-  profile_id: "direct-v501-unified-search-explicit-text",
+  profile_id: "p0-campaign-creation-profile-v1",
   profile_version: "1.0.0",
   api_family: "YANDEX_DIRECT_API",
   endpoint_version: "v501",
@@ -43,7 +47,8 @@ export const CORE_DIRECT_CAPABILITY_PROFILE = Object.freeze({
   product_gallery: "DISABLED",
   dynamic_places: "PLATFORM_LINKED_TO_SEARCH_RESULTS",
   criteria: Object.freeze(["EXPLICIT_KEYWORDS"]),
-  ad_type: "TEXT_AD",
+  autotargeting_policy: "EXPLICIT_KEYWORDS_ONLY",
+  ad_type: "RESPONSIVE_AD",
   conditional_not_enabled: Object.freeze(["AUTOTARGETING", "SITELINKS", "PRODUCT_GALLERY", "NETWORK"]),
 });
 
@@ -327,12 +332,16 @@ export async function fingerprintDirectProjection(projection: Record<string, unk
   const direct = projection.direct && typeof projection.direct === "object" && !Array.isArray(projection.direct)
     ? projection.direct as Record<string, unknown>
     : {};
-  const providerPublishSurface = Object.fromEntries(
-    ["campaign", "ad_group", "keyword", "ad", "sitelink_sets"]
-      .filter((field) => Object.hasOwn(direct, field))
-      .map((field) => [field, withoutForbiddenFingerprintFields(direct[field])]),
-  );
-  return sha256(providerPublishSurface);
+  const exactPublishSurface = {
+    creation_profile: withoutForbiddenFingerprintFields(projection.creation_profile),
+    brand_claims_contract: withoutForbiddenFingerprintFields(projection.brand_claims_contract),
+    direct: Object.fromEntries(
+      ["campaign", "ad_group", "keyword", "ad", "sitelink_sets"]
+        .filter((field) => Object.hasOwn(direct, field))
+        .map((field) => [field, withoutForbiddenFingerprintFields(direct[field])]),
+    ),
+  };
+  return sha256(exactPublishSurface);
 }
 
 export function evaluateCoreDirectCapability(snapshot?: DirectCapabilitySnapshot | null) {
@@ -437,6 +446,8 @@ export function preserveSelectedConditionalProjection({
   const projection = structuredClone(editedProjection);
   const sourceDirect = (generatedDraft.publish_projection as Record<string, unknown> | undefined)?.direct as Record<string, unknown> | undefined;
   const targetDirect = projection.direct as Record<string, unknown>;
+  const sourceProfile = (generatedDraft.publish_projection as Record<string, unknown> | undefined)?.creation_profile;
+  if (sourceProfile) projection.creation_profile = structuredClone(sourceProfile);
   const previousSelection = generatedDraft.capability_selection as Record<string, unknown> | undefined;
   const selectedCapabilities = Array.isArray(previousSelection?.selected_capabilities)
     ? previousSelection.selected_capabilities.map(text).filter(Boolean) : [];
@@ -634,6 +645,7 @@ export async function buildCampaignRecommendationSet({
   playbookReleases = [],
   directCapabilitySnapshot = null,
   measurementDestinationReadiness = null,
+  metrikaMeasurementPlan = null,
 }: {
   model: Record<string, unknown>;
   strategy: Record<string, unknown>;
@@ -642,6 +654,7 @@ export async function buildCampaignRecommendationSet({
   playbookReleases?: CuratedPlaybookRelease[];
   directCapabilitySnapshot?: DirectCapabilitySnapshot | null;
   measurementDestinationReadiness?: Record<string, unknown> | null;
+  metrikaMeasurementPlan?: { counter_id: string; primary_goal_id: string } | null;
 }): Promise<CampaignRecommendationSet> {
   const strategyRevisionId = text(strategy.strategy_revision_id);
   if (!strategyRevisionId) throw new Error("Campaign Strategy должна иметь immutable revision ID.");
@@ -804,6 +817,13 @@ export async function buildCampaignRecommendationSet({
         playbook_rule_id: rule?.rule_id ?? null,
         playbook_rule_version: rule?.rule_version ?? null,
         playbook_rule_digest: rule?.content_digest ?? null,
+        advertiser_account: directCapabilitySnapshot?.account ?? "",
+        currency: directCapabilitySnapshot?.currency ?? "",
+        capability_snapshot_id: directCapabilitySnapshot?.snapshot_id ?? "",
+        direct_capability_snapshot: directCapabilitySnapshot,
+        metrika_counter_id: metrikaMeasurementPlan?.counter_id ?? "",
+        metrika_goal_id: metrikaMeasurementPlan?.primary_goal_id ?? "",
+        measurement_readiness_id: text(measurementDestinationReadiness?.readiness_id),
       }) as unknown as Record<string, unknown>;
       applyConditionalProjection(projection, family);
       const actualChangedFields = comparator
@@ -822,6 +842,19 @@ export async function buildCampaignRecommendationSet({
         "MEASUREMENT_DESTINATION_READINESS_MISSING",
         "Hard eligibility requires the exact measurement and destination readiness revision before scoring.",
       ));
+      if (!directCapabilitySnapshot?.account || !directCapabilitySnapshot.currency) publicationBlockers.push(publicationBlocker(
+        "CAMPAIGN_PROFILE_ADVERTISER_CURRENCY_MISSING",
+        "Campaign Creation Profile v1 requires one exact advertiser and currency.",
+      ));
+      if (!metrikaMeasurementPlan?.counter_id || !metrikaMeasurementPlan.primary_goal_id || !text(measurementDestinationReadiness?.readiness_id)) publicationBlockers.push(publicationBlocker(
+        "METRIKA_MEASUREMENT_PLAN_INCOMPLETE",
+        "Campaign Creation Profile v1 requires an exact Metrika counter, primary goal and readiness revision.",
+      ));
+      const responsiveCopy = ((projection.direct as Record<string, unknown>).ad as Record<string, unknown>).ResponsiveAd as Record<string, unknown>;
+      publicationBlockers.push(...evaluateBrandClaimsContract(
+        projection.brand_claims_contract,
+        [...(Array.isArray(responsiveCopy.Titles) ? responsiveCopy.Titles : []), ...(Array.isArray(responsiveCopy.Texts) ? responsiveCopy.Texts : [])],
+      ).map((blocker) => publicationBlocker(blocker.code, blocker.message, "/brand_claims_contract")));
       if (measurementDestinationReadiness && readinessMeasurement.status !== "READY") publicationBlockers.push(publicationBlocker(
         "MEASUREMENT_READINESS_BLOCKED",
         "Выбранный бизнес-результат пока нельзя надёжно наблюдать; выполните подготовленный measurement repair plan.",
@@ -829,7 +862,7 @@ export async function buildCampaignRecommendationSet({
       if (measurementDestinationReadiness && readinessDestination.status !== "READY") publicationBlockers.push(publicationBlocker(
         "DESTINATION_SCOPE_BLOCKED",
         "Destination не готова для каждого device scope, который способен обслуживать Campaign Draft.",
-        "/direct/ad/TextAd/Href",
+        "/direct/ad/ResponsiveAd/Href",
       ));
       if (!playbook.release) publicationBlockers.push(publicationBlocker(
         "PLAYBOOK_RELEASE_UNAVAILABLE",
@@ -892,7 +925,7 @@ export async function buildCampaignRecommendationSet({
             mechanism: rule.mechanism,
             changed_family: rule.changed_family,
             changed_fields: actualChangedFields,
-            held_constant_fields: ["/direct/campaign/UnifiedCampaign/BiddingStrategy/Network", "/direct/ad/TextAd/Href"],
+            held_constant_fields: ["/direct/campaign/UnifiedCampaign/BiddingStrategy/Network", "/direct/ad/ResponsiveAd/Href"],
             comparator_draft_id: comparator?.draft_id ?? null,
             playbook_release_id: playbook.release?.release_id ?? null,
             playbook_rule_id: rule.rule_id,
@@ -944,11 +977,7 @@ export async function buildCampaignRecommendationSet({
             description: "Точный Auction Protocol ещё не пререгистрирован; Draft может сравниваться и входить в shortlist, но не должен называться VIABLE до отдельной immutable protocol revision.",
             required: false,
           },
-          {
-            code: "CAMPAIGN_CREATION_PROFILE_V1_PENDING",
-            description: "Текущая canvas projection проверена только в существующем bounded profile; frozen Campaign Creation Profile v1 и exact creative/claims surface остаются отдельной обязательной готовностью.",
-            required: false,
-          },
+
         ],
         visibility,
         suppression_reason: suppressionReason,

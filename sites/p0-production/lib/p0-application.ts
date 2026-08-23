@@ -669,6 +669,26 @@ function record(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function metrikaMeasurementPlan(state: P0Document) {
+  const facts = state.context_state?.facts.metrika;
+  return facts ? { counter_id: facts.counter_id, primary_goal_id: facts.goal_id } : null;
+}
+
+function creationProfileDraftMetadata(draft: Record<string, unknown>) {
+  const profile = record(record(draft.publish_projection).creation_profile);
+  const advertiser = record(profile.advertiser);
+  const measurement = record(profile.measurement_plan);
+  return {
+    advertiser_account: advertiser.account,
+    currency: advertiser.currency,
+    capability_snapshot_id: advertiser.capability_snapshot_id,
+    direct_capability_snapshot: draft.direct_capability_snapshot,
+    metrika_counter_id: measurement.counter_id,
+    metrika_goal_id: measurement.primary_goal_id,
+    measurement_readiness_id: measurement.readiness_id,
+  };
+}
+
 function activePlaybookReleaseIdentity(recommendationSet: CampaignRecommendationSet) {
   const release = record(recommendationSet.playbook_release);
   const appliedRuleLineage = Array.isArray(release.applied_rule_lineage)
@@ -1668,6 +1688,7 @@ async function buildMaterialDraftCorrection(
     playbook_rule_id: sourceDraft.playbook_rule_id,
     playbook_rule_version: sourceDraft.playbook_rule_version,
     playbook_rule_digest: sourceDraft.playbook_rule_digest,
+    ...creationProfileDraftMetadata(sourceDraft),
   };
   const basicProjection = buildPublishProjection(
     state.business_model as unknown as Record<string, unknown>,
@@ -2355,6 +2376,7 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
         playbookReleases: [],
         directCapabilitySnapshot: state.context_state?.facts.direct.capability_snapshot ?? null,
         measurementDestinationReadiness: state.measurement_destination_readiness as unknown as Record<string, unknown> | null,
+        metrikaMeasurementPlan: metrikaMeasurementPlan(state),
         generatedAt: updatedAt,
       });
       changed = true;
@@ -2432,8 +2454,17 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
       changed = true;
       draftChanged = true;
     }
-    if (record(draft.publish_projection).schema_version !== "p0-direct-projection-v3" || previousProduct || draftChanged) {
-      draft.publish_projection = buildPublishProjection(model as unknown as Record<string, unknown>, strategy, draft);
+    if (record(draft.publish_projection).schema_version !== "p0-direct-projection-v4" || previousProduct || draftChanged) {
+      draft.publish_projection = buildPublishProjection(model as unknown as Record<string, unknown>, strategy, {
+        ...draft,
+        advertiser_account: state.context_state?.facts.direct.account,
+        currency: state.context_state?.facts.direct.capability_snapshot.currency,
+        capability_snapshot_id: state.context_state?.facts.direct.capability_snapshot.snapshot_id,
+        direct_capability_snapshot: state.context_state?.facts.direct.capability_snapshot,
+        metrika_counter_id: state.context_state?.facts.metrika.counter_id,
+        metrika_goal_id: state.context_state?.facts.metrika.goal_id,
+        measurement_readiness_id: state.measurement_destination_readiness?.readiness_id,
+      });
       changed = true;
     }
     const projection = draft.publish_projection as Record<string, unknown> | undefined;
@@ -3869,6 +3900,7 @@ export class P0Application {
             playbookReleases: await this.playbookReleases(),
             directCapabilitySnapshot: state.context_state?.facts.direct.capability_snapshot ?? null,
             measurementDestinationReadiness: state.measurement_destination_readiness as unknown as Record<string, unknown>,
+            metrikaMeasurementPlan: metrikaMeasurementPlan(state),
             generatedAt: approvedAt,
           });
           state.landing_advisory_run = await this.buildLandingAdvisory(state);
@@ -3913,6 +3945,7 @@ export class P0Application {
         playbookReleases,
         directCapabilitySnapshot: state.context_state?.facts.direct.capability_snapshot ?? null,
         measurementDestinationReadiness: state.measurement_destination_readiness as unknown as Record<string, unknown> | null,
+        metrikaMeasurementPlan: metrikaMeasurementPlan(state),
         generatedAt: recalculatedAt,
       });
       const releaseChanged = JSON.stringify(activePlaybookReleaseIdentity(previousSet))
@@ -3980,6 +4013,7 @@ export class P0Application {
         playbook_rule_id: generated.playbook_rule_id,
         playbook_rule_version: generated.playbook_rule_version,
         playbook_rule_digest: generated.playbook_rule_digest,
+        ...creationProfileDraftMetadata(generated),
       };
       const normalized = { ...normalizedFields, ...lineage };
       const normalizedProjection = buildPublishProjection(

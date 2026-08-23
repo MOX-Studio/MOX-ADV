@@ -352,7 +352,7 @@ async function fixturePlaybookRelease() {
       approval_status: "APPROVED",
       changed_family: "QUALIFIED_ACTION",
       mechanism: "Deterministic governed fixture treatment.",
-      changed_fields: ["/direct/keyword/Keyword", "/direct/ad/TextAd/Text"],
+      changed_fields: ["/direct/keyword/Keyword", "/direct/ad/ResponsiveAd/Texts"],
       required_capabilities: [],
       evidence_quality: 80,
       priority: 10,
@@ -360,7 +360,7 @@ async function fixturePlaybookRelease() {
       qualified_evidence_refs: ["https://yandex.ru/support/direct/ru/efficiency/improve-your-ads"],
       applicability: {
         campaign_fanout_contract: "campaign-fanout-v1",
-        capability_profile_ids: ["direct-v501-unified-search-explicit-text"],
+        capability_profile_ids: ["p0-campaign-creation-profile-v1"],
         campaign_types: ["UNIFIED_CAMPAIGN"],
         placements: ["SEARCH"],
         required_strategy_fields: ["advertised_offer", "qualified_result"],
@@ -430,6 +430,17 @@ function recordProviderCall(
   });
 }
 
+function responsiveAdReadback(projection: DirectProjection) {
+  const responsive = projection.direct.ad.ResponsiveAd as Record<string, unknown>;
+  const titles = Array.isArray(responsive.Titles) ? responsive.Titles : [];
+  const texts = Array.isArray(responsive.Texts) ? responsive.Texts : [];
+  return {
+    Titles: titles.map((Title) => ({ Title, Status: "ACCEPTED", StatusClarification: null })),
+    Texts: texts.map((Text) => ({ Text, Status: "ACCEPTED", StatusClarification: null })),
+    Href: responsive.Href,
+  };
+}
+
 function officialCreateFetcher(
   projection: DirectProjection,
   ids: FixtureProviderIds,
@@ -475,11 +486,11 @@ function officialCreateFetcher(
         Id: Number(ids.adId),
         CampaignId: Number(ids.campaignId),
         AdGroupId: Number(ids.adGroupId),
-        Type: "TEXT_AD",
+        Type: "RESPONSIVE_AD",
         Status: adReads === 1 ? "DRAFT" : "MODERATION",
         State: "OFF",
         StatusClarification: null,
-        ...projection.direct.ad,
+        ResponsiveAd: responsiveAdReadback(projection),
       }] });
     }
     throw new Error(`Unexpected E2E Direct operation ${operation}`);
@@ -524,11 +535,11 @@ function officialPollFetcher(
       Id: Number(ids.adId),
       CampaignId: Number(ids.campaignId),
       AdGroupId: Number(ids.adGroupId),
-      Type: "TEXT_AD",
+      Type: "RESPONSIVE_AD",
       Status: status,
       State: "OFF",
       StatusClarification: clarification,
-      ...projection.direct.ad,
+      ResponsiveAd: responsiveAdReadback(projection),
     }] });
     throw new Error(`Unexpected E2E Direct poll operation ${operation}`);
   };
@@ -569,11 +580,11 @@ function officialCorrectionFetcher(
         Id: Number(ids.adId),
         CampaignId: Number(ids.campaignId),
         AdGroupId: Number(ids.adGroupId),
-        Type: "TEXT_AD",
+        Type: "RESPONSIVE_AD",
         Status: adReads === 1 ? "DRAFT" : "MODERATION",
         State: "OFF",
         StatusClarification: null,
-        ...projection.direct.ad,
+        ResponsiveAd: responsiveAdReadback(projection),
       }] });
     }
     if (body.method === "update") return directResponse({ UpdateResults: [{ Id: Number({ campaigns: ids.campaignId, adgroups: ids.adGroupId, keywords: ids.keywordId, ads: ids.adId }[String(service) as "campaigns" | "adgroups" | "keywords" | "ads"]) }] });
@@ -713,7 +724,7 @@ function fixtureAdapters(): {
       };
       providerIds.set(input.item_execution_id, ids);
       correctedItemIds.add(input.item_execution_id);
-      const changedPointers = ["/direct/ad/TextAd/Text"];
+      const changedPointers = ["/direct/ad/ResponsiveAd/Texts"];
       const result = await correctSuspendedCampaignAndResubmitModeration(
         { token: "e2e-fixture-only", account: "owner-account" },
         input.projection,

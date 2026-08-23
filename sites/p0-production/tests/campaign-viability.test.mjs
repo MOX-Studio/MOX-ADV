@@ -137,7 +137,7 @@ async function playbookFixture() {
     approval_status: "APPROVED",
     changed_family,
     mechanism: "Deterministic test-only improvement.",
-    changed_fields: ["/direct/keyword/Keyword", "/direct/ad/TextAd/Text"],
+    changed_fields: ["/direct/keyword/Keyword", "/direct/ad/ResponsiveAd/Texts"],
     required_capabilities: [],
     evidence_quality: 80,
     priority,
@@ -145,7 +145,7 @@ async function playbookFixture() {
     qualified_evidence_refs: ["https://yandex.ru/support/direct/ru/efficiency/improve-your-ads"],
     applicability: {
       campaign_fanout_contract: "campaign-fanout-v1",
-      capability_profile_ids: ["direct-v501-unified-search-explicit-text"],
+      capability_profile_ids: ["p0-campaign-creation-profile-v1"],
       campaign_types: ["UNIFIED_CAMPAIGN"],
       placements: ["SEARCH"],
       required_strategy_fields: ["advertised_offer", "qualified_result"],
@@ -187,7 +187,8 @@ async function recommendationSet(analyticsEvidence = evidence()) {
     analyticsEvidence,
     playbookReleases: await playbookFixture(),
     directCapabilitySnapshot: coreCapabilitySnapshot,
-    measurementDestinationReadiness: { measurement: { status: "READY" }, destination: { status: "READY" } },
+    measurementDestinationReadiness: { readiness_id: "measurement-ready-1", measurement: { status: "READY" }, destination: { status: "READY" } },
+    metrikaMeasurementPlan: { counter_id: "424242", primary_goal_id: "1717" },
     generatedAt: "2026-08-21T12:00:00.000Z",
   });
 }
@@ -523,8 +524,8 @@ test("LandingAdvisoryRun and post-launch outcomes cannot affect decisions or fin
   contaminatedProjection.direct.landing_advisory_run = { score: 100 };
   contaminatedProjection.direct.campaign.post_launch_outcome = { cpa: 1 };
   contaminatedProjection.direct.campaign.UnifiedCampaign.landing_advisory = { score: 100 };
-  contaminatedProjection.direct.ad.TextAd.moderation_outcome = { status: "ACCEPTED" };
-  contaminatedProjection.direct.ad.TextAd.outcome_learning = [{ calibrated_probability: 0.99 }];
+  contaminatedProjection.direct.ad.ResponsiveAd.moderation_outcome = { status: "ACCEPTED" };
+  contaminatedProjection.direct.ad.ResponsiveAd.outcome_learning = [{ calibrated_probability: 0.99 }];
   assert.equal(await fingerprintDirectProjection(contaminatedProjection), await fingerprintDirectProjection(projection));
 
   const regenerated = await recommendationSet(contaminatedEvidence);

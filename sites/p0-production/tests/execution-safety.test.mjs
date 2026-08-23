@@ -19,6 +19,7 @@ function projection() {
     {
       product: "Участие со стендом в выставке ИННОПРОМ",
       audience: "Руководители промышленных компаний",
+      value: "Встречи с заказчиками",
       qualified_result: "Заявка на участие",
     },
     {
@@ -34,7 +35,7 @@ function projection() {
       strategy_revision_id: "campaign-strategy-r7",
       draft_id: "draft-control-1",
       draft_revision_id: "draft-control-1-r3",
-      capability_profile_id: "direct-v501-unified-search-explicit-text",
+      capability_profile_id: "p0-campaign-creation-profile-v1",
       capability_profile_version: "1.0.0",
       playbook_release_id: "release-1",
       playbook_release_version: "1.0.0",
@@ -46,6 +47,12 @@ function projection() {
       negative_keywords: "бесплатно, вакансии, билет",
       ad_title: "Участие в ИННОПРОМ",
       ad_text: "Подайте заявку на участие.",
+      advertiser_account: "moxstudio",
+      currency: "RUB",
+      capability_snapshot_id: "direct-capability:moxstudio:1",
+      metrika_counter_id: "424242",
+      metrika_goal_id: "1717",
+      measurement_readiness_id: "measurement-ready-1",
     },
   );
 }
@@ -73,13 +80,13 @@ function authority(publishFingerprint) {
       conditional_capabilities: [],
     },
     capability_profile: {
-      profile_id: "direct-v501-unified-search-explicit-text",
+      profile_id: "p0-campaign-creation-profile-v1",
       profile_version: "1.0.0",
       api_version: "v501",
       campaign_type: "UNIFIED_CAMPAIGN",
       ad_group_type: "UNIFIED_AD_GROUP",
       criteria: ["EXPLICIT_KEYWORDS"],
-      ad_type: "TEXT_AD",
+      ad_type: "RESPONSIVE_AD",
       search_strategy: "WB_MAXIMUM_CLICKS",
       network_strategy: "SERVING_OFF",
       conditional_enabled: [],
@@ -149,6 +156,7 @@ function successfulFetcher(expected, journal, calls, options = {}) {
     if (operation === "campaigns.get") {
       campaignGets += 1;
       return jsonResponse({ Campaigns: [{
+        ...expected.direct.campaign,
         Id: 90071992547409931n,
         Name: expected.direct.campaign.Name,
         Type: "UNIFIED_CAMPAIGN",
@@ -182,11 +190,15 @@ function successfulFetcher(expected, journal, calls, options = {}) {
         Id: 90071992547409934n,
         CampaignId: 90071992547409931n,
         AdGroupId: 90071992547409932n,
-        Type: "TEXT_AD",
+        Type: "RESPONSIVE_AD",
         Status: adGets === 1 ? "DRAFT" : "MODERATION",
         State: "OFF",
         StatusClarification: null,
-        TextAd: expected.direct.ad.TextAd,
+        ResponsiveAd: {
+          Titles: expected.direct.ad.ResponsiveAd.Titles.map((Title) => ({ Title, Status: "ACCEPTED", StatusClarification: null })),
+          Texts: expected.direct.ad.ResponsiveAd.Texts.map((Text) => ({ Text, Status: "ACCEPTED", StatusClarification: null })),
+          Href: expected.direct.ad.ResponsiveAd.Href,
+        },
       }] });
     }
     throw new Error(`Unexpected Direct call ${operation}`);
@@ -503,7 +515,9 @@ test("fails account, capability, fingerprint, completeness and publication block
     ["P0_PUBLICATION_BLOCKED", (projectionValue, authorityValue) => { authorityValue.publication_blockers = [{ code: "EVIDENCE_GAP" }]; }],
     ["P0_CAPABILITY_OR_ACCOUNT_MISMATCH", (projectionValue, authorityValue) => { authorityValue.direct_account_binding.account = "other-account"; }],
     ["P0_CAPABILITY_OR_ACCOUNT_MISMATCH", (projectionValue, authorityValue) => { authorityValue.capability_profile.network_strategy = "NETWORK_DEFAULT"; }],
-    ["P0_PROJECTION_INCOMPLETE", (projectionValue) => { projectionValue.direct.campaign.TimeZone = "Europe/Moscow"; }],
+    ["P0_CAPABILITY_OR_ACCOUNT_MISMATCH", (projectionValue) => { projectionValue.creation_profile.advertiser.account = "other-account"; }],
+    ["P0_PROJECTION_INCOMPLETE", (projectionValue) => { delete projectionValue.direct.ad.ResponsiveAd.Texts; }],
+    ["P0_PROJECTION_INCOMPLETE", (projectionValue) => { projectionValue.creation_profile.measurement_plan.counter_id = "999"; }],
     ["P0_PROJECTION_FINGERPRINT_MISMATCH", (projectionValue, authorityValue) => { authorityValue.publish_fingerprint = `sha256:${"0".repeat(64)}`; }],
   ];
 
@@ -652,7 +666,7 @@ test("restart continues only from exact known provider IDs without duplicating p
     execution_id: "execution-1",
     account: "moxstudio",
     publish_fingerprint: publishFingerprint,
-    capability_profile_id: "direct-v501-unified-search-explicit-text",
+    capability_profile_id: "p0-campaign-creation-profile-v1",
     capability_profile_version: "1.0.0",
   };
   journal.records.set("execution-1", {

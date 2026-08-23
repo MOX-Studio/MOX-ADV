@@ -1,0 +1,86 @@
+{
+  "schema_version": "yandex-direct-v501-official-shape-fixture-v1",
+  "source_contracts": [
+    "https://yandex.com/dev/direct/doc/en/campaigns/add",
+    "https://yandex.com/dev/direct/doc/en/campaigns/suspend",
+    "https://yandex.com/dev/direct/doc/en/campaigns/get",
+    "https://yandex.com/dev/direct/doc/en/adgroups/add",
+    "https://yandex.com/dev/direct/doc/en/keywords/add",
+    "https://yandex.com/dev/direct/doc/en/ads/add",
+    "https://yandex.com/dev/direct/doc/en/ads/get"
+  ],
+  "ids": { "campaign": 101, "ad_group": 201, "keyword": 301, "ad": 401 },
+  "campaign": {
+    "Id": 101,
+    "Name": "ИННОПРОМ · Россия",
+    "Type": "UNIFIED_CAMPAIGN",
+    "Status": "DRAFT",
+    "State": "SUSPENDED",
+    "StartDate": "2026-09-01",
+    "EndDate": "2026-09-30",
+    "TimeZone": "Europe/Moscow",
+    "TimeTargeting": {
+      "Schedule": { "Items": [
+        "1,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100",
+        "2,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100",
+        "3,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100",
+        "4,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100",
+        "5,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100",
+        "6,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100",
+        "7,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100,100"
+      ] },
+      "ConsiderWorkingWeekends": "YES",
+      "HolidaysSchedule": { "SuspendOnHolidays": "NO", "BidPercent": 100, "StartHour": 0, "EndHour": 24 }
+    },
+    "UnifiedCampaign": {
+      "CounterIds": { "Items": [424242] },
+      "TrackingParams": "utm_source=yandex&utm_medium=cpc&utm_campaign={campaign_id}&utm_content={ad_id}&utm_term={keyword}",
+      "BiddingStrategy": {
+        "Search": {
+          "BiddingStrategyType": "WB_MAXIMUM_CLICKS",
+          "PlacementTypes": { "SearchResults": "YES", "ProductGallery": "NO" },
+          "WbMaximumClicks": { "WeeklySpendLimit": 10000000000, "BidCeiling": 100000000 }
+        },
+        "Network": { "BiddingStrategyType": "SERVING_OFF" }
+      }
+    }
+  },
+  "ad_group": {
+    "Id": 201,
+    "CampaignId": 101,
+    "Name": "Заявка на участие",
+    "Type": "UNIFIED_AD_GROUP",
+    "Status": "ACCEPTED",
+    "ServingStatus": "ELIGIBLE",
+    "RegionIds": [225],
+    "NegativeKeywords": { "Items": ["бесплатно", "вакансии", "билет"] },
+    "UnifiedAdGroup": { "OfferRetargeting": "NO" }
+  },
+  "keyword": {
+    "Id": 301,
+    "AdGroupId": 201,
+    "Keyword": "иннопром стать участником",
+    "Status": "ACCEPTED",
+    "State": "ON"
+  },
+  "ad": {
+    "Id": 401,
+    "CampaignId": 101,
+    "AdGroupId": 201,
+    "Type": "RESPONSIVE_AD",
+    "Status": "MODERATION",
+    "State": "OFF",
+    "StatusClarification": null,
+    "ResponsiveAd": {
+      "Titles": [
+        { "Title": "Участие в ИННОПРОМ", "Status": "ACCEPTED", "StatusClarification": null },
+        { "Title": "Заявка на участие", "Status": "ACCEPTED", "StatusClarification": null }
+      ],
+      "Texts": [
+        { "Text": "Подайте заявку на участие.", "Status": "ACCEPTED", "StatusClarification": null },
+        { "Text": "Участие со стендом в выставке ИННОПРОМ", "Status": "ACCEPTED", "StatusClarification": null }
+      ],
+      "Href": "https://innoprom.com/participant/"
+    }
+  }
+}

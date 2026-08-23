@@ -3,7 +3,7 @@
   "fixture_id": "qualified-result-alignment-ready",
   "applicability": {
     "campaign_fanout_contract": "campaign-fanout-v1",
-    "capability_profile_id": "direct-v501-unified-search-explicit-text",
+    "capability_profile_id": "p0-campaign-creation-profile-v1",
     "campaign_type": "UNIFIED_CAMPAIGN",
     "placement": "SEARCH",
     "strategy_fields": [
@@ -17,7 +17,7 @@
     "changed_family": "QUALIFIED_ACTION",
     "changed_fields": [
       "/direct/keyword/Keyword",
-      "/direct/ad/TextAd/Text"
+      "/direct/ad/ResponsiveAd/Texts"
     ],
     "authority_expanded": false
   }

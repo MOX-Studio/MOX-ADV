@@ -131,6 +131,13 @@
 .owner-campaigns dt { color: var(--owner-muted); font-size: 6px; }
 .owner-campaigns dd { margin: 0; font-size: 7px; font-weight: 700; overflow-wrap: anywhere; }
 .owner-campaigns article ul { margin: 9px 0 0; padding-left: 16px; color: var(--owner-danger); font-size: 7px; }
+.owner-publish-preview { margin-top: 10px; padding: 10px; border-radius: 7px; background: var(--owner-soft); font-size: 7px; }
+.owner-publish-preview h4 { margin: 0 0 8px; font-size: 10px; }
+.owner-publish-preview > div { margin-top: 7px; }
+.owner-publish-preview ul, .owner-publish-preview ol { color: var(--owner-ink) !important; }
+.owner-publish-preview p { overflow-wrap: anywhere; }
+.owner-publish-preview small { display: block; color: var(--owner-muted); }
+.owner-publish-preview details li { display: grid; gap: 2px; margin-top: 5px; }
 .owner-package > header { display: flex; gap: 16px; justify-content: space-between; align-items: flex-start; }
 .owner-package > header > strong { padding: 7px 9px; border-radius: 999px; color: var(--owner-green-dark); background: var(--owner-soft); font-size: 8px; }
 .owner-package > p { color: var(--owner-muted); font-size: 9px; }

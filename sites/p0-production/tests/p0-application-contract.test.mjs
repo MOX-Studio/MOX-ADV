@@ -1703,7 +1703,7 @@ test("legacy Sites state without grounded economics migrates fail-closed and can
       ad_title: "Owner product",
       ad_text: "Submit a qualified request",
       publish_projection: {
-        schema_version: "p0-direct-projection-v3",
+        schema_version: "p0-direct-projection-v4",
         direct: { campaign: { Name: "Owner product · Search" } },
         safety: { must_end_suspended: true, resume_allowed: false },
       },
@@ -1876,7 +1876,7 @@ test("normalization-only Draft save reports a no-op without inventing a Draft or
 });
 
 async function governedPlaybookRelease({ releaseId, releaseVersion, family, decisionId }) {
-  const changedFields = ["/direct/keyword/Keyword", "/direct/ad/TextAd/Text"];
+  const changedFields = ["/direct/keyword/Keyword", "/direct/ad/ResponsiveAd/Texts"];
   return sealCuratedPlaybookRelease({
     schema_version: "p0-curated-playbook-release-v1",
     contract_version: "1.0.0",
@@ -1908,7 +1908,7 @@ async function governedPlaybookRelease({ releaseId, releaseVersion, family, deci
       qualified_evidence_refs: ["https://yandex.ru/support/direct/ru/efficiency/improve-your-ads"],
       applicability: {
         campaign_fanout_contract: "campaign-fanout-v1",
-        capability_profile_ids: ["direct-v501-unified-search-explicit-text"],
+        capability_profile_ids: ["p0-campaign-creation-profile-v1"],
         campaign_types: ["UNIFIED_CAMPAIGN"],
         placements: ["SEARCH"],
         required_strategy_fields: ["advertised_offer", "qualified_result"],
@@ -3059,11 +3059,11 @@ test("rejected item correction requires a material Draft revision, fresh review 
   assert.equal(correction.status, "PACKAGE_REVIEW_REQUIRED");
   assert.notEqual(correction.corrected_draft.draft_revision_id, draft.draft_revision_id);
   assert.notEqual(correction.corrected_draft.publish_fingerprint, draft.publish_fingerprint);
-  assert.deepEqual(correction.corrected_draft.material_delta.fields.map((field) => field.pointer), ["/direct/ad/TextAd/Text"]);
-  assert.equal(correction.corrected_draft.score_delta.changed_pointers.includes("/direct/ad/TextAd/Text"), true);
+  assert.deepEqual(correction.corrected_draft.material_delta.fields.map((field) => field.pointer), ["/direct/ad/ResponsiveAd/Texts"]);
+  assert.equal(correction.corrected_draft.score_delta.changed_pointers.includes("/direct/ad/ResponsiveAd/Texts"), true);
   assert.equal(correction.decision_packet.recommendation.action, "RESUBMIT_CORRECTED_REVISION");
   assert.equal(correction.decision_packet.confidence.status, "MEDIUM");
-  assert.deepEqual(correction.decision_packet.evidence.changed_pointers, ["/direct/ad/TextAd/Text"]);
+  assert.deepEqual(correction.decision_packet.evidence.changed_pointers, ["/direct/ad/ResponsiveAd/Texts"]);
   assert.equal(correction.decision_packet.evidence.status_clarifications.includes("Исправьте формулировку объявления"), true);
   assert.equal(correction.decision_packet.alternatives[0].action, "KEEP_INITIAL_REJECTION");
   assert.equal(correction.decision_packet.consequences.length >= 3, true);
@@ -3570,8 +3570,8 @@ test("every editable Direct field round-trips into a material immutable Draft re
     ["group_name", `${current.group_name} · owner`, "/direct/ad_group/Name"],
     ["negative_keywords", `${current.negative_keywords}, реферат`, "/direct/ad_group/NegativeKeywords/Items"],
     ["keyword", `${current.keyword} цена`, "/direct/keyword/Keyword"],
-    ["ad_title", "Заявка на выставку", "/direct/ad/TextAd/Title"],
-    ["ad_text", "Оставьте заявку на участие в выставке прямо сейчас", "/direct/ad/TextAd/Text"],
+    ["ad_title", "Заявка на выставку", "/direct/ad/ResponsiveAd/Titles"],
+    ["ad_text", "Оставьте заявку на участие в выставке прямо сейчас", "/direct/ad/ResponsiveAd/Texts"],
   ];
   let expectedRevision = 1;
   for (const [inputName, nextValue, expectedPointer] of cases) {

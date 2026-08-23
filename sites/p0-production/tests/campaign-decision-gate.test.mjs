@@ -16,7 +16,7 @@ function eligibleDraft(overrides = {}) {
     draft_revision_id: "draft-eligible-r1",
     publish_fingerprint: `sha256:${"a".repeat(64)}`,
     strategy_revision_id: "strategy-r1",
-    capability_profile_id: "direct-v501-unified-search-explicit-text",
+    capability_profile_id: "p0-campaign-creation-profile-v1",
     capability_profile_version: "1.0.0",
     visibility: "VISIBLE",
     suppression_reason: null,
@@ -36,7 +36,7 @@ function recommendationSet(drafts = [eligibleDraft()]) {
     recommendation_set_id: "recommendation-set-r1",
     drafts,
     capability_profile: {
-      profile_id: "direct-v501-unified-search-explicit-text",
+      profile_id: "p0-campaign-creation-profile-v1",
       profile_version: "1.0.0",
     },
   };

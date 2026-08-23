@@ -1,4 +1,4 @@
-export const DIRECT_DRAFT_FIELD_REGISTRY_SCHEMA = "direct-v501-draft-field-registry-v1";
+export const DIRECT_DRAFT_FIELD_REGISTRY_SCHEMA = "direct-v501-draft-field-registry-v2";
 
 export type DraftFieldClassification =
   | "EDITABLE"
@@ -49,13 +49,17 @@ const field = (
 
 export const DIRECT_V501_DRAFT_FIELD_REGISTRY = Object.freeze({
   schema_version: DIRECT_DRAFT_FIELD_REGISTRY_SCHEMA,
-  profile_id: "direct-v501-unified-search-explicit-text",
+  profile_id: "p0-campaign-creation-profile-v1",
   profile_version: "1.0.0",
   api_version: "v501",
   fields: Object.freeze([
     field("/direct/campaign/Name", "CAMPAIGN", "Название кампании", "EDITABLE", { input_name: "campaign_name", normalization: "COLLAPSED_TEXT", maximum_length: 255 }),
     field("/direct/campaign/StartDate", "CAMPAIGN", "Дата начала", "FIXED_BY_STRATEGY"),
     field("/direct/campaign/EndDate", "CAMPAIGN", "Дата окончания", "FIXED_BY_STRATEGY"),
+    field("/direct/campaign/TimeZone", "CAMPAIGN", "Часовой пояс", "FIXED_BY_CAPABILITY"),
+    field("/direct/campaign/TimeTargeting", "CAMPAIGN", "Расписание", "FIXED_BY_CAPABILITY"),
+    field("/direct/campaign/UnifiedCampaign/CounterIds", "CAMPAIGN", "Счётчик Метрики", "FIXED_BY_CAPABILITY", { reason: "Значение зафиксировано exact Metrika binding в Campaign Creation Profile v1." }),
+    field("/direct/campaign/UnifiedCampaign/TrackingParams", "CAMPAIGN", "Параметры отслеживания", "FIXED_BY_CAPABILITY"),
     field("/direct/campaign/UnifiedCampaign/BiddingStrategy/Search/BiddingStrategyType", "CAMPAIGN", "Стратегия поиска", "FIXED_BY_CAPABILITY"),
     field("/direct/campaign/UnifiedCampaign/BiddingStrategy/Search/PlacementTypes/SearchResults", "CAMPAIGN", "Показы в результатах поиска", "FIXED_BY_CAPABILITY"),
     field("/direct/campaign/UnifiedCampaign/BiddingStrategy/Search/PlacementTypes/ProductGallery", "CAMPAIGN", "Товарная галерея", "FIXED_BY_CAPABILITY", { capability: "PRODUCT_GALLERY" }),
@@ -68,11 +72,10 @@ export const DIRECT_V501_DRAFT_FIELD_REGISTRY = Object.freeze({
     field("/direct/ad_group/UnifiedAdGroup/OfferRetargeting", "AD_GROUP", "Ретаргетинг офферов", "FIXED_BY_CAPABILITY"),
     field("/direct/keyword/Keyword", "CRITERION", "Ключевая фраза", "EDITABLE", { input_name: "keyword", normalization: "COLLAPSED_TEXT", maximum_length: 4_096 }),
     field("/direct/keyword/AutotargetingSettings", "CRITERION", "Настройки автотаргетинга", "CONDITIONALLY_ELIGIBLE", { presence: "NOT_PRESENT", capability: "AUTOTARGETING" }),
-    field("/direct/ad/TextAd/Title", "AD", "Заголовок объявления", "EDITABLE", { input_name: "ad_title", normalization: "COLLAPSED_TEXT", maximum_length: 56 }),
-    field("/direct/ad/TextAd/Text", "AD", "Текст объявления", "EDITABLE", { input_name: "ad_text", normalization: "COLLAPSED_TEXT", maximum_length: 81 }),
-    field("/direct/ad/TextAd/Href", "AD", "Посадочная страница", "FIXED_BY_STRATEGY"),
-    field("/direct/ad/TextAd/Mobile", "AD", "Мобильное объявление", "FIXED_BY_CAPABILITY"),
-    field("/direct/ad/TextAd/SitelinkSetId", "ASSET", "Привязка набора быстрых ссылок", "CONDITIONALLY_ELIGIBLE", { presence: "NOT_PRESENT", capability: "SITELINKS" }),
+    field("/direct/ad/ResponsiveAd/Titles", "AD", "Заголовки объявления", "EDITABLE", { input_name: "ad_title", normalization: "COLLAPSED_TEXT", maximum_length: 56 }),
+    field("/direct/ad/ResponsiveAd/Texts", "AD", "Тексты объявления", "EDITABLE", { input_name: "ad_text", normalization: "COLLAPSED_TEXT", maximum_length: 81 }),
+    field("/direct/ad/ResponsiveAd/Href", "AD", "Посадочная страница", "FIXED_BY_STRATEGY"),
+    field("/direct/ad/ResponsiveAd/SitelinkSetId", "ASSET", "Привязка набора быстрых ссылок", "CONDITIONALLY_ELIGIBLE", { presence: "NOT_PRESENT", capability: "SITELINKS" }),
     field("/direct/sitelink_sets", "ASSET", "Наборы быстрых ссылок", "CONDITIONALLY_ELIGIBLE", { presence: "NOT_PRESENT", capability: "SITELINKS" }),
   ] satisfies DraftFieldRegistryEntry[]),
 });

@@ -1,7 +1,7 @@
 {
   "schema_version": "campaign-recommendation-set-v4",
-  "recommendation_set_id": "recommendation-set-ffb4bd9bf8880d96c494",
-  "capability_profile": "direct-v501-unified-search-explicit-text@1.0.0",
+  "recommendation_set_id": "recommendation-set-f6b4a0ebdc6fd805a359",
+  "capability_profile": "p0-campaign-creation-profile-v1@1.0.0",
   "playbook_release": "test-curated-release-default@1.0.0",
   "coverage": {
     "status": "COMPLETE",
@@ -40,55 +40,55 @@
   },
   "draft_identities": [
     {
-      "draft_id": "draft-4013efb1889847c1f499",
-      "draft_revision_id": "draft-4013efb1889847c1f499-r1",
+      "draft_id": "draft-901b4f7196adc85d6765",
+      "draft_revision_id": "draft-901b4f7196adc85d6765-r1",
       "variant": "CONTROL",
       "playbook_rule_id": null,
       "visibility": "VISIBLE",
       "suppression_reason": null,
-      "publish_fingerprint": "sha256:cb4ab66a7b5cdb2a277f1813cc1f538608f8ec2b7e4bda16a00f58ba55655e21",
+      "publish_fingerprint": "sha256:8769528412c5f1fad1566c850ce70f841aaa1b07be0ad0628c73b738a51cb07b",
       "changed_fields": []
     },
     {
-      "draft_id": "draft-26d361be8a76582575c4",
-      "draft_revision_id": "draft-26d361be8a76582575c4-r1",
+      "draft_id": "draft-3bcfac40cd046fabc2d0",
+      "draft_revision_id": "draft-3bcfac40cd046fabc2d0-r1",
       "variant": "QUALIFIED_ACTION",
       "playbook_rule_id": "qualified-action-v1",
       "visibility": "VISIBLE",
       "suppression_reason": null,
-      "publish_fingerprint": "sha256:712ab5427d215d0d9a149e53b8aa717808267879ab6380094b3fe5e7a26b384b",
+      "publish_fingerprint": "sha256:1c2ba0c0655043a86635270e5861e1de7f8e1a6e7ecb36e963d6b5e007b00a7c",
       "changed_fields": [
-        "/direct/ad/TextAd/Text",
+        "/direct/ad/ResponsiveAd/Texts",
         "/direct/keyword/Keyword"
       ]
     },
     {
-      "draft_id": "draft-2fc90b7f24a3002d6b3f",
-      "draft_revision_id": "draft-2fc90b7f24a3002d6b3f-r1",
+      "draft_id": "draft-600a1dc108d504992770",
+      "draft_revision_id": "draft-600a1dc108d504992770-r1",
       "variant": "AUDIENCE_SPECIFICITY",
       "playbook_rule_id": "audience-specificity-v1",
       "visibility": "VISIBLE",
       "suppression_reason": null,
-      "publish_fingerprint": "sha256:3821c19d1c2791f0503aa31c2d05674cc1c546e66ff93daf10448edda262bd43",
+      "publish_fingerprint": "sha256:f11fbb1e1a179091fc38ff95ab2f7d453e8ffc47c2db2b7052ce31709cc8d195",
       "changed_fields": [
-        "/direct/ad/TextAd/Text",
+        "/direct/ad/ResponsiveAd/Texts",
         "/direct/keyword/Keyword"
       ]
     }
   ],
   "candidate_dispositions": [
     {
-      "candidate_id": "draft-candidate:draft-26d361be8a76582575c4",
+      "candidate_id": "draft-candidate:draft-3bcfac40cd046fabc2d0",
       "visibility": "VISIBLE",
       "reason_code": "VISIBLE:GENERATED_DRAFT"
     },
     {
-      "candidate_id": "draft-candidate:draft-2fc90b7f24a3002d6b3f",
+      "candidate_id": "draft-candidate:draft-600a1dc108d504992770",
       "visibility": "VISIBLE",
       "reason_code": "VISIBLE:GENERATED_DRAFT"
     },
     {
-      "candidate_id": "draft-candidate:draft-4013efb1889847c1f499",
+      "candidate_id": "draft-candidate:draft-901b4f7196adc85d6765",
       "visibility": "VISIBLE",
       "reason_code": "VISIBLE:GENERATED_DRAFT"
     },

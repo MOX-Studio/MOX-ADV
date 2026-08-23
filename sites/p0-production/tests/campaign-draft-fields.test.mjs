@@ -13,6 +13,10 @@ const EXPECTED_PUBLISHABLE_POINTERS = [
   "/direct/campaign/Name",
   "/direct/campaign/StartDate",
   "/direct/campaign/EndDate",
+  "/direct/campaign/TimeZone",
+  "/direct/campaign/TimeTargeting",
+  "/direct/campaign/UnifiedCampaign/CounterIds",
+  "/direct/campaign/UnifiedCampaign/TrackingParams",
   "/direct/campaign/UnifiedCampaign/BiddingStrategy/Search/BiddingStrategyType",
   "/direct/campaign/UnifiedCampaign/BiddingStrategy/Search/PlacementTypes/SearchResults",
   "/direct/campaign/UnifiedCampaign/BiddingStrategy/Search/PlacementTypes/ProductGallery",
@@ -25,11 +29,10 @@ const EXPECTED_PUBLISHABLE_POINTERS = [
   "/direct/ad_group/UnifiedAdGroup/OfferRetargeting",
   "/direct/keyword/Keyword",
   "/direct/keyword/AutotargetingSettings",
-  "/direct/ad/TextAd/Title",
-  "/direct/ad/TextAd/Text",
-  "/direct/ad/TextAd/Href",
-  "/direct/ad/TextAd/Mobile",
-  "/direct/ad/TextAd/SitelinkSetId",
+  "/direct/ad/ResponsiveAd/Titles",
+  "/direct/ad/ResponsiveAd/Texts",
+  "/direct/ad/ResponsiveAd/Href",
+  "/direct/ad/ResponsiveAd/SitelinkSetId",
   "/direct/sitelink_sets",
 ];
 
@@ -55,12 +58,12 @@ const projection = {
       UnifiedAdGroup: { OfferRetargeting: "NO" },
     },
     keyword: { Keyword: "участие в выставке" },
-    ad: { TextAd: { Title: "Участие в выставке", Text: "Оставьте заявку", Href: "https://owner.example/", Mobile: "NO" } },
+    ad: { ResponsiveAd: { Titles: ["Участие в выставке"], Texts: ["Оставьте заявку"], Href: "https://owner.example/" } },
   },
 };
 
 test("the accepted Direct v501 field registry covers every core campaign, group, criteria, ad and asset field without enabling absent capabilities", () => {
-  assert.equal(DIRECT_V501_DRAFT_FIELD_REGISTRY.profile_id, "direct-v501-unified-search-explicit-text");
+  assert.equal(DIRECT_V501_DRAFT_FIELD_REGISTRY.profile_id, "p0-campaign-creation-profile-v1");
   assert.equal(DIRECT_V501_DRAFT_FIELD_REGISTRY.profile_version, "1.0.0");
   assert.deepEqual(DIRECT_V501_DRAFT_FIELD_REGISTRY.fields.map((field) => field.pointer), EXPECTED_PUBLISHABLE_POINTERS);
   assert.deepEqual([...new Set(DIRECT_V501_DRAFT_FIELD_REGISTRY.fields.map((field) => field.object_kind))].sort(), ["AD", "AD_GROUP", "ASSET", "CAMPAIGN", "CRITERION"]);
@@ -70,7 +73,7 @@ test("the accepted Direct v501 field registry covers every core campaign, group,
   const absentConditional = DIRECT_V501_DRAFT_FIELD_REGISTRY.fields.filter((field) => field.classification === "CONDITIONALLY_ELIGIBLE");
   assert.deepEqual(absentConditional.map((field) => field.pointer), [
     "/direct/keyword/AutotargetingSettings",
-    "/direct/ad/TextAd/SitelinkSetId",
+    "/direct/ad/ResponsiveAd/SitelinkSetId",
     "/direct/sitelink_sets",
   ]);
   assert.equal(absentConditional.every((field) => field.editable === false && field.presence === "NOT_PRESENT"), true);

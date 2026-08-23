@@ -1,6 +1,7 @@
 import JSONbigFactory from "json-bigint";
 
 import { fingerprintDirectProjection } from "./campaign-fanout.ts";
+import { evaluateBrandClaimsContract } from "./campaign-creation-profile.ts";
 import {
   adReadback,
   campaignReadback,
@@ -127,7 +128,16 @@ function projectionShapeIsComplete(projection: DirectProjection) {
   const unifiedAdGroup = valueRecord(adGroup.UnifiedAdGroup);
   const keyword = valueRecord(direct.keyword);
   const ad = valueRecord(direct.ad);
-  const textAd = valueRecord(ad.TextAd);
+  const responsiveAd = valueRecord(ad.ResponsiveAd);
+  const timeTargeting = valueRecord(campaign.TimeTargeting);
+  const schedule = valueRecord(timeTargeting.Schedule);
+  const counters = valueRecord(unifiedCampaign.CounterIds);
+  const creationProfile = valueRecord(projection.creation_profile);
+  const advertiser = valueRecord(creationProfile.advertiser);
+  const measurementPlan = valueRecord(creationProfile.measurement_plan);
+  const counterItems = Array.isArray(counters.Items) ? counters.Items : [];
+  const responsiveTitles = Array.isArray(responsiveAd.Titles) ? responsiveAd.Titles : [];
+  const responsiveTexts = Array.isArray(responsiveAd.Texts) ? responsiveAd.Texts : [];
   const lineage = valueRecord(projection.lineage);
   const amount = (value: unknown) => Number.isSafeInteger(value) && Number(value) > 0;
   const textArray = (value: unknown) => Array.isArray(value)
@@ -137,10 +147,10 @@ function projectionShapeIsComplete(projection: DirectProjection) {
     && value.length > 0
     && value.every((item) => Number.isSafeInteger(item) && Number(item) > 0);
 
-  return projection.schema_version === "p0-direct-projection-v3"
+  return projection.schema_version === "p0-direct-projection-v4"
     && exactKeys(direct, ["campaign", "ad_group", "keyword", "ad"])
-    && exactKeys(campaign, ["Name", "StartDate", "EndDate", "UnifiedCampaign"])
-    && exactKeys(unifiedCampaign, ["BiddingStrategy"])
+    && exactKeys(campaign, ["Name", "StartDate", "EndDate", "TimeZone", "TimeTargeting", "UnifiedCampaign"])
+    && exactKeys(unifiedCampaign, ["BiddingStrategy", "CounterIds", "TrackingParams"])
     && exactKeys(bidding, ["Search", "Network"])
     && exactKeys(search, ["BiddingStrategyType", "PlacementTypes", "WbMaximumClicks"])
     && exactKeys(placementTypes, ["SearchResults", "ProductGallery"])
@@ -150,12 +160,34 @@ function projectionShapeIsComplete(projection: DirectProjection) {
     && exactKeys(negativeKeywords, ["Items"])
     && exactKeys(unifiedAdGroup, ["OfferRetargeting"])
     && exactKeys(keyword, ["Keyword"])
-    && exactKeys(ad, ["TextAd"])
-    && exactKeys(textAd, ["Title", "Text", "Href", "Mobile"])
+    && exactKeys(ad, ["ResponsiveAd"])
+    && exactKeys(responsiveAd, ["Titles", "Texts", "Href"])
+    && exactKeys(timeTargeting, ["Schedule", "ConsiderWorkingWeekends", "HolidaysSchedule"])
+    && exactKeys(schedule, ["Items"])
+    && exactKeys(counters, ["Items"])
     && ["strategy_revision_id", "draft_id", "draft_revision_id", "capability_profile_id", "capability_profile_version"]
       .every((key) => requiredText(lineage[key]))
-    && [campaign.Name, campaign.StartDate, campaign.EndDate, adGroup.Name, keyword.Keyword, textAd.Title, textAd.Text, textAd.Href]
+    && [campaign.Name, campaign.StartDate, campaign.EndDate, campaign.TimeZone, adGroup.Name, keyword.Keyword, responsiveAd.Href, unifiedCampaign.TrackingParams]
       .every(requiredText)
+    && textArray(responsiveAd.Titles)
+    && textArray(responsiveAd.Texts)
+    && Array.isArray(schedule.Items) && schedule.Items.length === 7
+    && idArray(counterItems) && counterItems.length === 1
+    && creationProfile.profile_id === "p0-campaign-creation-profile-v1"
+    && creationProfile.profile_version === "1.0.0"
+    && creationProfile.delivery === "SEARCH"
+    && creationProfile.campaign_type === "UNIFIED_CAMPAIGN"
+    && creationProfile.ad_group_type === "UNIFIED_AD_GROUP"
+    && creationProfile.ad_type === "RESPONSIVE_AD"
+    && requiredText(advertiser.account) && requiredText(advertiser.currency) && requiredText(advertiser.capability_snapshot_id)
+    && measurementPlan.source === "YANDEX_METRIKA_OFFICIAL_API"
+    && requiredText(measurementPlan.counter_id) && requiredText(measurementPlan.primary_goal_id) && requiredText(measurementPlan.readiness_id)
+    && measurementPlan.writes_required === false
+    && String(counterItems[0]) === String(measurementPlan.counter_id)
+    && evaluateBrandClaimsContract(
+      projection.brand_claims_contract,
+      [...responsiveTitles, ...responsiveTexts],
+    ).length === 0
     && idArray(adGroup.RegionIds)
     && textArray(negativeKeywords.Items)
     && amount(maximumClicks.WeeklySpendLimit)
@@ -164,8 +196,7 @@ function projectionShapeIsComplete(projection: DirectProjection) {
     && placementTypes.SearchResults === "YES"
     && placementTypes.ProductGallery === "NO"
     && network.BiddingStrategyType === "SERVING_OFF"
-    && unifiedAdGroup.OfferRetargeting === "NO"
-    && textAd.Mobile === "NO";
+    && unifiedAdGroup.OfferRetargeting === "NO";
 }
 
 function capabilityMatchesCore(
@@ -176,6 +207,8 @@ function capabilityMatchesCore(
   const binding = authority.direct_account_binding;
   const snapshot = valueRecord(authority.direct_capability_snapshot);
   const profile = valueRecord(authority.capability_profile);
+  const creationProfile = valueRecord(projection.creation_profile);
+  const advertiser = valueRecord(creationProfile.advertiser);
   const lineage = valueRecord(projection.lineage);
   const criteria = Array.isArray(profile.criteria) ? profile.criteria.map(String) : [];
   const conditionalNotEnabled = Array.isArray(profile.conditional_not_enabled)
@@ -194,7 +227,16 @@ function capabilityMatchesCore(
     && snapshot.edit_campaigns_grant === "YES"
     && Array.isArray(snapshot.available_campaign_types)
     && snapshot.available_campaign_types.includes("UNIFIED_CAMPAIGN")
-    && profile.profile_id === "direct-v501-unified-search-explicit-text"
+    && advertiser.account === binding.account
+    && advertiser.currency === snapshot.currency
+    && advertiser.capability_snapshot_id === snapshot.snapshot_id
+    && creationProfile.profile_id === profile.profile_id
+    && creationProfile.profile_version === profile.profile_version
+    && creationProfile.endpoint_version === (profile.endpoint_version ?? profile.api_version)
+    && creationProfile.campaign_type === profile.campaign_type
+    && creationProfile.ad_group_type === profile.ad_group_type
+    && creationProfile.ad_type === profile.ad_type
+    && profile.profile_id === "p0-campaign-creation-profile-v1"
     && profile.profile_version === "1.0.0"
     && (profile.endpoint_version ?? profile.api_version) === "v501"
     && profile.campaign_type === "UNIFIED_CAMPAIGN"
@@ -203,7 +245,7 @@ function capabilityMatchesCore(
     && profile.network_strategy === "SERVING_OFF"
     && criteria.length === 1
     && criteria[0] === "EXPLICIT_KEYWORDS"
-    && profile.ad_type === "TEXT_AD"
+    && profile.ad_type === "RESPONSIVE_AD"
     && JSON.stringify(conditionalNotEnabled) === JSON.stringify(["AUTOTARGETING", "NETWORK", "PRODUCT_GALLERY", "SITELINKS"])
     && lineage.capability_profile_id === profile.profile_id
     && lineage.capability_profile_version === profile.profile_version;

@@ -4,6 +4,7 @@ import {
 } from "./p0-application.ts";
 import { BUSINESS_MODEL_FIELD_ORDER } from "./business-model-contract.ts";
 import type { P0AgentOwnerProjection } from "./p0-agent-runtime.ts";
+import { buildOwnerPublishPreview } from "./campaign-creation-profile.ts";
 import {
   type AccessReadinessProjection,
   type AccessReadinessService,
@@ -174,6 +175,14 @@ export type OwnerJourneyProjection = {
     evidenceCoverage: string;
     sensitivity: string;
     reasons: string[];
+    publishPreview: {
+      titles: string[];
+      texts: string[];
+      urls: Array<{ landing: string; tracking: string }>;
+      creativeCombinations: Array<{ title: string; text: string; landing: string; tracking: string }>;
+      requiredDisclaimers: string[];
+      creativeProvenance: { family: string; source: string; rights: string };
+    };
     selected: boolean;
     agentRecommended: boolean;
   }>;
@@ -917,6 +926,7 @@ function campaignOptions(view: InternalView): OwnerJourneyProjection["campaignOp
         evidenceCoverage: `${Number(coverage.percent ?? 0)}%`,
         sensitivity: score.score_lower === null || score.score_lower === undefined ? "Недоступна до оценки" : `${score.score_lower}–${score.score_upper}`,
         reasons,
+        publishPreview: buildOwnerPublishPreview(record(draft.publish_projection)),
         selected,
         agentRecommended: recommendedIds.has(String(draft.draft_id)),
       };

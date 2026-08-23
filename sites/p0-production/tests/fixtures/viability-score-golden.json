@@ -24,27 +24,27 @@
   },
   "drafts": [
     {
-      "draft_id": "draft-ffdf74a5d993f0129c08",
+      "draft_id": "draft-5ce5e98ee8ecc1a95af4",
       "score": 90,
       "score_raw": 89.6667,
       "score_lower": 89.6667,
       "score_upper": 89.6667,
       "rank": 1,
       "tied_draft_ids": [
-        "draft-96f075285731aad26085",
-        "draft-ea99eb4245ec68dd2e19",
-        "draft-ffdf74a5d993f0129c08"
+        "draft-5ce5e98ee8ecc1a95af4",
+        "draft-ca93597b64d9b2de1faa",
+        "draft-eaf933da01e8f68373c6"
       ],
       "ranking": {
         "status": "RANKED",
-        "recommendation_set_id": "recommendation-set-4b0da2f7ccd0bd3f56ca",
-        "cohort_id": "capability-cohort:14df8f0a071a7c75a3f73a80",
-        "comparable_set_id": "comparable-set:922f72ea03521f56ec3841e6",
+        "recommendation_set_id": "recommendation-set-733e9b962dea5654e56d",
+        "cohort_id": "capability-cohort:3ad826840b790b260fa8ffe7",
+        "comparable_set_id": "comparable-set:22973d774ecaa9c48c1f1fb6",
         "rank": 1,
         "tied_draft_ids": [
-          "draft-96f075285731aad26085",
-          "draft-ea99eb4245ec68dd2e19",
-          "draft-ffdf74a5d993f0129c08"
+          "draft-5ce5e98ee8ecc1a95af4",
+          "draft-ca93597b64d9b2de1faa",
+          "draft-eaf933da01e8f68373c6"
         ],
         "semantic_tie_rule": "EXACT_SCORE_RAW_EQUALITY_WITHIN_COHORT",
         "stable_id_display_order_only": true
@@ -126,27 +126,27 @@
       }
     },
     {
-      "draft_id": "draft-ea99eb4245ec68dd2e19",
+      "draft_id": "draft-eaf933da01e8f68373c6",
       "score": 90,
       "score_raw": 89.6667,
       "score_lower": 89.6667,
       "score_upper": 89.6667,
       "rank": 1,
       "tied_draft_ids": [
-        "draft-96f075285731aad26085",
-        "draft-ea99eb4245ec68dd2e19",
-        "draft-ffdf74a5d993f0129c08"
+        "draft-5ce5e98ee8ecc1a95af4",
+        "draft-ca93597b64d9b2de1faa",
+        "draft-eaf933da01e8f68373c6"
       ],
       "ranking": {
         "status": "RANKED",
-        "recommendation_set_id": "recommendation-set-4b0da2f7ccd0bd3f56ca",
-        "cohort_id": "capability-cohort:14df8f0a071a7c75a3f73a80",
-        "comparable_set_id": "comparable-set:922f72ea03521f56ec3841e6",
+        "recommendation_set_id": "recommendation-set-733e9b962dea5654e56d",
+        "cohort_id": "capability-cohort:3ad826840b790b260fa8ffe7",
+        "comparable_set_id": "comparable-set:22973d774ecaa9c48c1f1fb6",
         "rank": 1,
         "tied_draft_ids": [
-          "draft-96f075285731aad26085",
-          "draft-ea99eb4245ec68dd2e19",
-          "draft-ffdf74a5d993f0129c08"
+          "draft-5ce5e98ee8ecc1a95af4",
+          "draft-ca93597b64d9b2de1faa",
+          "draft-eaf933da01e8f68373c6"
         ],
         "semantic_tie_rule": "EXACT_SCORE_RAW_EQUALITY_WITHIN_COHORT",
         "stable_id_display_order_only": true
@@ -228,27 +228,27 @@
       }
     },
     {
-      "draft_id": "draft-96f075285731aad26085",
+      "draft_id": "draft-ca93597b64d9b2de1faa",
       "score": 90,
       "score_raw": 89.6667,
       "score_lower": 89.6667,
       "score_upper": 89.6667,
       "rank": 1,
       "tied_draft_ids": [
-        "draft-96f075285731aad26085",
-        "draft-ea99eb4245ec68dd2e19",
-        "draft-ffdf74a5d993f0129c08"
+        "draft-5ce5e98ee8ecc1a95af4",
+        "draft-ca93597b64d9b2de1faa",
+        "draft-eaf933da01e8f68373c6"
       ],
       "ranking": {
         "status": "RANKED",
-        "recommendation_set_id": "recommendation-set-4b0da2f7ccd0bd3f56ca",
-        "cohort_id": "capability-cohort:14df8f0a071a7c75a3f73a80",
-        "comparable_set_id": "comparable-set:922f72ea03521f56ec3841e6",
+        "recommendation_set_id": "recommendation-set-733e9b962dea5654e56d",
+        "cohort_id": "capability-cohort:3ad826840b790b260fa8ffe7",
+        "comparable_set_id": "comparable-set:22973d774ecaa9c48c1f1fb6",
         "rank": 1,
         "tied_draft_ids": [
-          "draft-96f075285731aad26085",
-          "draft-ea99eb4245ec68dd2e19",
-          "draft-ffdf74a5d993f0129c08"
+          "draft-5ce5e98ee8ecc1a95af4",
+          "draft-ca93597b64d9b2de1faa",
+          "draft-eaf933da01e8f68373c6"
         ],
         "semantic_tie_rule": "EXACT_SCORE_RAW_EQUALITY_WITHIN_COHORT",
         "stable_id_display_order_only": true

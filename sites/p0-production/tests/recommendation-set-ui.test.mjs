@@ -26,14 +26,14 @@ const recommendationSet = {
     reconciliation: { generated_equals_visible_plus_hidden: true },
   },
   capability_profile: {
-    profile_id: "direct-v501-unified-search-explicit-text",
+    profile_id: "p0-campaign-creation-profile-v1",
     profile_version: "1.0.0",
     campaign_type: "UNIFIED_CAMPAIGN",
     ad_group_type: "UNIFIED_AD_GROUP",
     search_strategy: "WB_MAXIMUM_CLICKS",
     network_strategy: "SERVING_OFF",
     criteria: ["EXPLICIT_KEYWORDS"],
-    ad_type: "TEXT_AD",
+    ad_type: "RESPONSIVE_AD",
   },
   playbook_release: {
     status: "ACTIVE_APPROVED",
@@ -63,7 +63,7 @@ test("Recommendation Set UI discloses reconciled audit counts plus exact capabil
   assert.match(html, /3 видимых · 1 скрытых · сверка успешна/);
   assert.match(html, /p0-curated-playbook-2026-08@1.0.0/);
   assert.match(html, /Активно и утверждено/);
-  assert.match(html, /UNIFIED_CAMPAIGN · UNIFIED_AD_GROUP · EXPLICIT_KEYWORDS · TEXT_AD/);
+  assert.match(html, /UNIFIED_CAMPAIGN · UNIFIED_AD_GROUP · EXPLICIT_KEYWORDS · RESPONSIVE_AD/);
   assert.match(html, /стратегия поиска WB_MAXIMUM_CLICKS · стратегия сетей Показы отключены/);
   assert.match(html, /direct-capability:owner-account:core/);
   assert.match(html, /Проверка скрытых кандидатов · 1/);
@@ -77,7 +77,7 @@ test("Recommendation Set UI distinguishes comparator and one-factor improvement 
   const comparator = { variant: { kind: "CONTROL", control_basis: { kind: "STRATEGY_BASELINE_FALLBACK" } } };
   const improvement = {
     variant: { kind: "IMPROVEMENT" },
-    treatment_delta: { changed_family: "QUALIFIED_ACTION", changed_fields: ["/direct/keyword/Keyword", "/direct/ad/TextAd/Text"] },
+    treatment_delta: { changed_family: "QUALIFIED_ACTION", changed_fields: ["/direct/keyword/Keyword", "/direct/ad/ResponsiveAd/Texts"] },
     publication_blockers: [{
       code: "CONDITIONAL_CAPABILITY_EVIDENCE_MISSING",
       message: "AUTOTARGETING requires persisted official API and exact account eligibility evidence.",
@@ -86,7 +86,7 @@ test("Recommendation Set UI distinguishes comparator and one-factor improvement 
   };
   assert.match(renderToStaticMarkup(React.createElement(DraftVariantLabel, { draft: comparator })), /Контрольный вариант/);
   assert.match(renderToStaticMarkup(React.createElement(DraftVariantLabel, { draft: improvement })), /Улучшение · целевое действие/);
-  assert.match(renderToStaticMarkup(React.createElement(DraftTreatmentDelta, { draft: improvement })), /Изменение одного фактора: \/direct\/keyword\/Keyword · \/direct\/ad\/TextAd\/Text/);
+  assert.match(renderToStaticMarkup(React.createElement(DraftTreatmentDelta, { draft: improvement })), /Изменение одного фактора: \/direct\/keyword\/Keyword · \/direct\/ad\/ResponsiveAd\/Texts/);
   const blockers = renderToStaticMarkup(React.createElement(DraftPublicationBlockers, { draft: improvement }));
   assert.match(blockers, /aria-label="Причины блокировки публикации"/);
   assert.match(blockers, /CONDITIONAL_CAPABILITY_EVIDENCE_MISSING/);
@@ -198,12 +198,12 @@ test("drawer registry renders every accepted Direct field while only the six rou
         campaign: { Name: "Кампания", StartDate: "2026-09-01", EndDate: "2026-09-30", UnifiedCampaign: { BiddingStrategy: { Search: { BiddingStrategyType: "WB_MAXIMUM_CLICKS", PlacementTypes: { SearchResults: "YES", ProductGallery: "NO" }, WbMaximumClicks: { WeeklySpendLimit: 50000000000, BidCeiling: 500000000 } }, Network: { BiddingStrategyType: "SERVING_OFF" } } } },
         ad_group: { Name: "Группа", RegionIds: [213], NegativeKeywords: { Items: ["вакансии", "бесплатно"] }, UnifiedAdGroup: { OfferRetargeting: "NO" } },
         keyword: { Keyword: "участие в выставке" },
-        ad: { TextAd: { Title: "Участие в выставке", Text: "Оставьте заявку", Href: "https://owner.example/", Mobile: "NO" } },
+        ad: { ResponsiveAd: { Titles: ["Участие в выставке"], Texts: ["Оставьте заявку"], Href: "https://owner.example/" } },
       },
     },
   };
   const html = renderToStaticMarkup(React.createElement(DraftFieldRegistryDisclosure, { registry: DIRECT_V501_DRAFT_FIELD_REGISTRY, draft }));
-  assert.equal((html.match(/data-direct-field=/gu) || []).length, 21);
+  assert.equal((html.match(/data-direct-field=/gu) || []).length, 24);
   assert.equal((html.match(/data-editable="true"/gu) || []).length, 6);
   assert.match(html, /Название кампании/);
   assert.match(html, /Зафиксировано стратегией/);
@@ -221,12 +221,12 @@ test("material and normalization-only drawer feedback exposes field deltas and c
   const material = renderToStaticMarkup(React.createElement(DraftEditFeedback, { draft: {
     draft_save_result: { material_change: true, message: "Создана новая immutable Draft revision" },
     material_delta: {
-      fields: [{ pointer: "/direct/ad/TextAd/Text", previous_normalized_value: "Старый текст", current_normalized_value: "Новый текст" }],
+      fields: [{ pointer: "/direct/ad/ResponsiveAd/Texts", previous_normalized_value: "Старый текст", current_normalized_value: "Новый текст" }],
       policy_reason: { code: "WEIGHTED_SCORE_CHANGED_AFTER_FULL_RESCORE", message: "Comparative score changed through disclosed weighted dimensions." },
     },
     score_delta: { score: { previous: 70, current: 72, delta: 2 }, rank: { previous: 2, current: 1 }, dimensions: { demand: { delta: 1.2 } } },
   } }));
-  assert.match(material, /\/direct\/ad\/TextAd\/Text/);
+  assert.match(material, /\/direct\/ad\/ResponsiveAd\/Texts/);
   assert.match(material, /Старый текст/);
   assert.match(material, /Новый текст/);
   assert.match(material, /WEIGHTED_SCORE_CHANGED_AFTER_FULL_RESCORE/);

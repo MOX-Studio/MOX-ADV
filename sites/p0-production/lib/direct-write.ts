@@ -4,6 +4,8 @@ const JSONbig = JSONbigFactory({ useNativeBigInt: true });
 
 export type DirectProjection = {
   schema_version: string;
+  creation_profile: Record<string, unknown>;
+  brand_claims_contract: Record<string, unknown>;
   lineage: {
     strategy_revision_id?: unknown;
     draft_id?: unknown;
@@ -234,8 +236,9 @@ export async function campaignReadback(config: DirectConfig, campaignId: string,
     "get",
     {
       SelectionCriteria: { Ids: [directId(campaignId)] },
-      FieldNames: ["Id", "Name", "Type", "Status", "State", "StartDate", "EndDate"],
-      UnifiedCampaignFieldNames: ["BiddingStrategy"],
+      FieldNames: ["Id", "Name", "Type", "Status", "State", "StartDate", "EndDate", "TimeZone", "TimeTargeting"],
+      UnifiedCampaignFieldNames: ["BiddingStrategy", "CounterIds", "TrackingParams"],
+      UnifiedCampaignSearchStrategyPlacementTypesFieldNames: ["SearchResults", "ProductGallery"],
     },
     fetcher,
   ), "Campaigns", "Campaigns.get");
@@ -276,7 +279,7 @@ export async function adReadback(config: DirectConfig, adId: string, fetcher: Fe
     {
       SelectionCriteria: { Ids: [directId(adId)] },
       FieldNames: ["Id", "CampaignId", "AdGroupId", "Type", "Status", "State", "StatusClarification"],
-      TextAdFieldNames: ["Title", "Text", "Href", "Mobile"],
+      ResponsiveAdFieldNames: ["Titles", "Texts", "Href"],
     },
     fetcher,
   ), "Ads", "Ads.get");
@@ -315,6 +318,13 @@ function normalizedProviderTexts(value: unknown) {
     .sort((left, right) => left.localeCompare(right));
 }
 
+function responsiveValues(value: unknown, field: "Title" | "Text") {
+  return (Array.isArray(value) ? value : []).map((item) => {
+    const row = record(item);
+    return normalizedProviderText(Object.hasOwn(row, field) ? row[field] : item);
+  }).filter(Boolean);
+}
+
 function semanticGraph(
   projection: DirectProjection,
   ids: ProviderGraphIds,
@@ -330,8 +340,8 @@ function semanticGraph(
   const expectedGroupUnified = record(expectedGroup.UnifiedAdGroup);
   const actualNegativeKeywords = record(readback.adGroup.NegativeKeywords);
   const expectedNegativeKeywords = record(expectedGroup.NegativeKeywords);
-  const actualTextAd = record(readback.ad.TextAd);
-  const expectedTextAd = record(expectedAd.TextAd);
+  const actualResponsiveAd = record(readback.ad.ResponsiveAd);
+  const expectedResponsiveAd = record(expectedAd.ResponsiveAd);
   const expected = {
     campaign: {
       Id: ids.campaignId,
@@ -340,7 +350,11 @@ function semanticGraph(
       State: "SUSPENDED",
       StartDate: String(expectedCampaign.StartDate ?? ""),
       EndDate: String(expectedCampaign.EndDate ?? ""),
+      TimeZone: String(expectedCampaign.TimeZone ?? ""),
+      TimeTargeting: normalizedProviderValue(expectedCampaign.TimeTargeting),
       BiddingStrategy: normalizedProviderValue(expectedCampaignUnified.BiddingStrategy),
+      CounterIds: normalizedProviderValue(expectedCampaignUnified.CounterIds),
+      TrackingParams: String(expectedCampaignUnified.TrackingParams ?? ""),
     },
     ad_group: {
       Id: ids.adGroupId,
@@ -360,11 +374,10 @@ function semanticGraph(
       Id: ids.adId,
       CampaignId: ids.campaignId,
       AdGroupId: ids.adGroupId,
-      Type: "TEXT_AD",
-      Title: normalizedProviderText(expectedTextAd.Title),
-      Text: normalizedProviderText(expectedTextAd.Text),
-      Href: String(expectedTextAd.Href ?? ""),
-      Mobile: String(expectedTextAd.Mobile ?? ""),
+      Type: "RESPONSIVE_AD",
+      Titles: responsiveValues(expectedResponsiveAd.Titles, "Title"),
+      Texts: responsiveValues(expectedResponsiveAd.Texts, "Text"),
+      Href: String(expectedResponsiveAd.Href ?? ""),
     },
   };
   const actual = {
@@ -375,7 +388,11 @@ function semanticGraph(
       State: String(readback.campaign.State ?? ""),
       StartDate: String(readback.campaign.StartDate ?? ""),
       EndDate: String(readback.campaign.EndDate ?? ""),
+      TimeZone: String(readback.campaign.TimeZone ?? ""),
+      TimeTargeting: normalizedProviderValue(readback.campaign.TimeTargeting),
       BiddingStrategy: normalizedProviderValue(actualCampaignUnified.BiddingStrategy),
+      CounterIds: normalizedProviderValue(actualCampaignUnified.CounterIds),
+      TrackingParams: String(actualCampaignUnified.TrackingParams ?? ""),
     },
     ad_group: {
       Id: String(readback.adGroup.Id ?? ""),
@@ -396,10 +413,9 @@ function semanticGraph(
       CampaignId: String(readback.ad.CampaignId ?? ""),
       AdGroupId: String(readback.ad.AdGroupId ?? ""),
       Type: String(readback.ad.Type ?? ""),
-      Title: normalizedProviderText(actualTextAd.Title),
-      Text: normalizedProviderText(actualTextAd.Text),
-      Href: String(actualTextAd.Href ?? ""),
-      Mobile: String(actualTextAd.Mobile ?? ""),
+      Titles: responsiveValues(actualResponsiveAd.Titles, "Title"),
+      Texts: responsiveValues(actualResponsiveAd.Texts, "Text"),
+      Href: String(actualResponsiveAd.Href ?? ""),
     },
   };
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -437,7 +453,7 @@ export async function pollSuspendedCampaignModeration(
   if (providerIds.adIds.length !== 1) {
     throw new DirectWriteError(
       "P0_PROJECTION_INCOMPLETE",
-      "Core Direct moderation poll requires exactly one known TEXT_AD ID.",
+      "Campaign Creation Profile v1 moderation poll requires exactly one known RESPONSIVE_AD ID.",
     );
   }
   for (const providerId of [providerIds.campaignId, providerIds.adGroupId, providerIds.keywordId, ...providerIds.adIds]) {
