@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import test from "node:test";
 
+import { runP0ProductMvpPilots } from "../lib/p0-product-mvp-pilots.ts";
 import {
   P0_PRODUCT_MVP_EVAL_IDS,
   P0_PRODUCT_MVP_EXPLAINABILITY_TOPICS,
@@ -11,6 +12,7 @@ import {
 
 const sourceUrl = new URL("./fixtures/product-mvp/product-mvp-source.json", import.meta.url);
 const goldenUrl = new URL("./fixtures/product-mvp/product-mvp-acceptance.json", import.meta.url);
+const pilotRunnerUrl = new URL("../lib/p0-product-mvp-pilots.ts", import.meta.url);
 const source = JSON.parse(await readFile(sourceUrl, "utf8"));
 
 async function artifact(value = source) {
@@ -44,6 +46,27 @@ test("agent eval contour covers every required adversarial and resilience scenar
   assert.equal(value.agent_evals.find((item) => item.id === "provider-delay").observed.owner_polling_controls, 0);
   assert.equal(value.agent_evals.find((item) => item.id === "restart-compaction").observed.remaining_budgets_preserved, true);
   await Promise.all(value.agent_evals.map((item) => readFile(new URL(`./${item.executable_test}`, import.meta.url), "utf8")));
+});
+
+test("independent pilots execute deterministically through authoritative pure product contracts without a write capability", async () => {
+  const first = await runP0ProductMvpPilots();
+  const second = await runP0ProductMvpPilots();
+  assert.deepEqual(first, second);
+  assert.equal(first.positive.execution_mode, "EXECUTABLE_PURE_PRODUCT_CONTOUR_NO_WRITE");
+  assert.equal(first.positive.business_name, "Контур.Маркет");
+  assert.doesNotMatch(JSON.stringify(first.positive.business_model), /выстав/u);
+  assert.equal(first.positive.execution_proof.external_write_calls, 0);
+  assert.equal(first.positive.execution_proof.provider_mutation_capability_present, false);
+  assert.deepEqual(first.positive.execution_proof.authoritative_contracts_executed, [
+    "p0-business-model-v1",
+    "campaign-fanout-v1",
+    "viability-score/1.0.0",
+    "p0-campaign-creation-profile-v1",
+  ]);
+  assert.equal(first.honesty.cases.every((item) => item.execution_proof.viable_count === 0), true);
+  assert.equal(first.honesty.cases.every((item) => item.execution_proof.external_write_calls === 0), true);
+  const runnerSource = await readFile(pilotRunnerUrl, "utf8");
+  assert.doesNotMatch(runnerSource, /direct-write|P0Application|fetch\s*\(|Campaigns\.(?:add|update|suspend|resume)/u);
 });
 
 test("positive real-business pilot exposes an editable VIABLE Draft only after every hard gate and complete Profile v1 projection", async () => {
@@ -95,11 +118,10 @@ test("artifact prepares browser and non-specialist explainability acceptance wit
 
 test("fails closed on a false positive, fixture-substituted pilot, missing eval, or production-write evidence", async () => {
   const mutations = [
-    (value) => { value.pilots.positive.campaigns[0].hard_gates[0].status = "FAILED"; },
-    (value) => { value.pilots.positive.derived_from_fixture = true; },
+    (value) => { value.pilots.kind = "CONTROLLED_FIXTURE_EVIDENCE"; },
+    (value) => { value.pilots.positive_scenario_id = "mixed-correction"; },
     (value) => { value.agent_evals.pop(); },
     (value) => { value.safety.production_write_attempts = 1; },
-    (value) => { value.pilots.honesty.cases[0].campaigns[0].status = "VIABLE"; },
   ];
   for (const mutate of mutations) {
     const changed = structuredClone(source);

@@ -8,7 +8,7 @@ This script prepares checkpoint [#176](https://github.com/ElJeskos/MOX-ADV/issue
 - Use the local Dashboard only at `http://127.0.0.1:8878/` with a `1920×1080` viewport.
 - Drive the Dashboard through its visible UI. Do not call its API directly or manipulate state.
 - The localhost browser run is controlled fixture evidence. It proves deterministic interaction and must not be presented as either independent pilot.
-- Independent pilot evidence is under `tests/fixtures/product-mvp/product-mvp-source.json`; the generated artifact keeps it in a separate `INDEPENDENT_PILOT_EVIDENCE` partition.
+- Independent pilot identities are declared in `tests/fixtures/product-mvp/product-mvp-source.json`; `lib/p0-product-mvp-pilots.ts` executes them through current pure product contracts, and the generated artifact keeps their outputs in a separate `INDEPENDENT_PILOT_EVIDENCE` partition.
 
 ## Reproduce the prepared contour
 

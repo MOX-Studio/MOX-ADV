@@ -1,3 +1,5 @@
+import { runP0ProductMvpPilots } from "./p0-product-mvp-pilots.ts";
+
 export const P0_PRODUCT_MVP_HARD_GATES = [
   "LINEAGE",
   "ECONOMICS",
@@ -195,7 +197,8 @@ function validateAgentEvals(source: JsonRecord) {
 
 function validatePositivePilot(pilots: JsonRecord, fixture: JsonRecord) {
   const positive = record(pilots.positive, "pilots.positive");
-  if (positive.evidence_kind !== "INDEPENDENT_PILOT_EVIDENCE" || positive.real_business !== true || positive.derived_from_fixture !== false) {
+  if (positive.evidence_kind !== "INDEPENDENT_PILOT_EVIDENCE" || positive.real_business !== true || positive.derived_from_fixture !== false
+    || positive.checkpoint_evidence_status !== "PREPARED_FOR_ISSUE_176") {
     invalid("Positive pilot must be independent real-business pilot evidence, never a fixture substitute.");
   }
   text(positive.scenario_id, "positive.scenario_id");
@@ -230,18 +233,26 @@ function validatePositivePilot(pilots: JsonRecord, fixture: JsonRecord) {
     for (const field of ["control", "tested_change", "traffic_split", "test_budget_rub", "period_days", "success_signal", "stop_condition"]) text(String(protocol[field] ?? ""), `positive auction_protocol.${field}`);
   }
   const packageConfirmation = record(positive.package_confirmation, "positive.package_confirmation");
-  if (packageConfirmation.state !== "PREVIEW_ONLY_NO_LIVE_AUTHORITY" || packageConfirmation.preflight !== "9/9") invalid("Positive package confirmation must remain a complete no-authority preview.");
+  const executionProof = record(positive.execution_proof, "positive.execution_proof");
+  if (packageConfirmation.state !== "PREVIEW_ONLY_NO_LIVE_AUTHORITY" || packageConfirmation.preview_complete !== true) invalid("Positive package confirmation must remain a complete no-authority preview.");
+  if (executionProof.external_write_calls !== 0 || executionProof.provider_mutation_capability_present !== false
+    || list(executionProof.authoritative_contracts_executed, "positive authoritative contracts").length < 4) {
+    invalid("Positive pilot was not produced by the authoritative no-write product contour.");
+  }
   return structuredClone(positive);
 }
 
 function validateHonestyPilot(pilots: JsonRecord) {
   const honesty = record(pilots.honesty, "pilots.honesty");
-  if (honesty.evidence_kind !== "INDEPENDENT_PILOT_EVIDENCE" || honesty.derived_from_fixture !== false) invalid("Honesty pilot must be independent pilot evidence.");
+  if (honesty.evidence_kind !== "INDEPENDENT_PILOT_EVIDENCE" || honesty.derived_from_fixture !== false
+    || honesty.checkpoint_evidence_status !== "PREPARED_FOR_ISSUE_176") invalid("Honesty pilot must be independent pilot evidence prepared for #176.");
   const cases = list(honesty.cases, "honesty.cases").map((value, index) => record(value, `honesty.cases[${index}]`));
   exactOrder(cases.map((item) => item.insufficient_area), HONESTY_AREAS, "honesty insufficient areas");
   for (const item of cases) {
     const campaigns = list(item.campaigns, `${item.case_id}.campaigns`).map((value, index) => record(value, `${item.case_id}.campaigns[${index}]`));
     if (!campaigns.length || campaigns.some((campaign) => !["BLOCKED", "INSUFFICIENT_EVIDENCE"].includes(String(campaign.status)))) invalid(`${item.case_id} produced a false VIABLE outcome.`);
+    const executionProof = record(item.execution_proof, `${item.case_id}.execution_proof`);
+    if (executionProof.recommendation_set_status !== "NO_VIABLE_DRAFTS" || executionProof.viable_count !== 0 || executionProof.external_write_calls !== 0) invalid(`${item.case_id} lacks authoritative no-write honesty proof.`);
     const repairs = list(item.repair_plan, `${item.case_id}.repair_plan`).map((value, index) => record(value, `${item.case_id}.repair_plan[${index}]`));
     if (!repairs.length || repairs[0].area !== item.insufficient_area) invalid(`${item.case_id} does not prioritize its material blocker.`);
     repairs.forEach((repair, index) => {
@@ -284,8 +295,14 @@ export async function buildP0ProductMvpAcceptanceArtifact(sourceValue: unknown) 
   if (!Number.isFinite(Date.parse(String(source.observed_at ?? "")))) invalid("Source observation time is invalid.");
   const fixture = record(source.fixture_evidence, "fixture_evidence");
   if (fixture.kind !== "CONTROLLED_FIXTURE_EVIDENCE") invalid("Fixture evidence must be explicitly labelled.");
-  const pilots = record(source.pilots, "pilots");
-  if (pilots.kind !== "INDEPENDENT_PILOT_EVIDENCE") invalid("Pilot evidence partition is invalid.");
+  const pilotDeclaration = record(source.pilots, "pilots");
+  if (pilotDeclaration.kind !== "INDEPENDENT_PILOT_SCENARIOS") invalid("Pilot scenario declaration is invalid.");
+  const executedPilots = await runP0ProductMvpPilots();
+  if (pilotDeclaration.positive_scenario_id !== executedPilots.positive.scenario_id
+    || pilotDeclaration.honesty_scenario_id !== executedPilots.honesty.scenario_id) {
+    invalid("Executed pilot identities differ from the declared independent scenarios.");
+  }
+  const pilots = executedPilots as unknown as JsonRecord;
   const safety = validateSafety(source);
   const agentEvals = validateAgentEvals(source);
   const positive = validatePositivePilot(pilots, fixture);

@@ -3,7 +3,7 @@
   "generated_at": "2026-08-25T09:00:00.000Z",
   "scope": "PRODUCT_MVP_NO_PRODUCTION_WRITE",
   "status": "READY_FOR_HUMAN_CHECKPOINT",
-  "source_digest": "sha256:a6af49d5cc89f986e0baccd96764bd1bfcd5c1be90facc0a20b3e408e6c60c53",
+  "source_digest": "sha256:349b254bc54f3374932725817751ccd88009219e64afd87aa8387ef6f21d25d9",
   "evidence": {
     "fixture": {
       "kind": "CONTROLLED_FIXTURE_EVIDENCE",
@@ -18,18 +18,20 @@
         "evidence_kind": "INDEPENDENT_PILOT_EVIDENCE",
         "real_business": true,
         "derived_from_fixture": false,
-        "execution_mode": "FROZEN_NO_WRITE_PILOT_SCENARIO",
+        "execution_mode": "EXECUTABLE_PURE_PRODUCT_CONTOUR_NO_WRITE",
+        "checkpoint_evidence_status": "PREPARED_FOR_ISSUE_176",
         "business_name": "Контур.Маркет",
         "public_sources": [
           "https://kontur.ru/market",
           "https://kontur.ru/market/price"
         ],
-        "source_note": "Independent product scenario based on a public real-business offer plus explicitly scoped owner-confirmed and read-only pilot observations; no fixture values or live credentials are used.",
+        "source_note": "Независимый product scenario проходит действующие Business Model, Campaign Draft, Profile v1 и Pre-launch Viability contracts без provider mutation.",
         "business_model": {
           "editable": true,
           "complete": true,
+          "model_revision_id": "business-model:b897344ed95720dab1c1d612",
           "fields": {
-            "qualified_outcome": "Подключённая торговая точка, которая завершила первичную настройку товарного учёта",
+            "qualified_outcome": "Подключённая торговая точка с завершённой первичной настройкой товарного учёта",
             "customer_context": "Владелец или операционный руководитель небольшой розничной сети",
             "buying_context": "Выбирает сервис перед обязательной маркировкой или заменой разрознённого учёта",
             "revenue_model": "Подписка на сервис",
@@ -45,22 +47,31 @@
           },
           "economics": {
             "status": "CONFIRMED",
-            "target_result_cost_rub": 3780
+            "target_result_cost_rub": 3780,
+            "formula": {
+              "expression": "average_sale_value_rub × gross_margin_percent ÷ 100 × lead_to_sale_percent ÷ 100",
+              "input_fields": [
+                "average_sale_value_rub",
+                "gross_margin_percent",
+                "lead_to_sale_percent"
+              ]
+            },
+            "limitation": null
           },
           "provenance_complete": true
         },
         "goal": {
           "editable": true,
           "value": "Получать завершённые подключения торговых точек",
-          "qualified_result": "Первичная настройка товарного учёта завершена",
+          "qualified_result": "Подключённая торговая точка с завершённой первичной настройкой товарного учёта",
           "evidence_refs": [
-            "pilot-owner-confirmation",
-            "pilot-first-party-offer"
+            "pilot-first-party-offer",
+            "pilot-owner-confirmation"
           ]
         },
         "evidence_quality": {
           "status": "SUFFICIENT_FOR_SCOPE",
-          "coverage_percent": 92,
+          "coverage_percent": 100,
           "sources": [
             "PUBLIC_FIRST_PARTY",
             "OWNER_CONFIRMED_PILOT",
@@ -74,54 +85,76 @@
         },
         "campaigns": [
           {
-            "name": "Маркировка · подключение товарного учёта",
+            "name": "Товарный учёт маркированных товаров · STRATEGY_BASELINE_FALLBACK",
             "status": "VIABLE",
             "editable": true,
-            "difference": "Контроль: явный спрос на подключение учёта маркированных товаров.",
+            "difference": "Контроль: текущая подтверждённая поисковая формулировка.",
             "hard_gates": [
               {
                 "gate": "LINEAGE",
-                "status": "PASSED"
+                "evaluated_before_score": true,
+                "status": "PASSED",
+                "blocker_codes": []
               },
               {
                 "gate": "ECONOMICS",
-                "status": "PASSED"
+                "evaluated_before_score": true,
+                "status": "PASSED",
+                "blocker_codes": []
               },
               {
                 "gate": "DESTINATION",
-                "status": "PASSED"
+                "evaluated_before_score": true,
+                "status": "PASSED",
+                "blocker_codes": []
               },
               {
                 "gate": "MEASUREMENT",
-                "status": "PASSED"
+                "evaluated_before_score": true,
+                "status": "PASSED",
+                "blocker_codes": []
               },
               {
                 "gate": "DEMAND",
-                "status": "PASSED"
+                "evaluated_before_score": true,
+                "status": "PASSED",
+                "blocker_codes": []
               },
               {
                 "gate": "CAPABILITY",
-                "status": "PASSED"
+                "evaluated_before_score": true,
+                "status": "PASSED",
+                "blocker_codes": []
               },
               {
                 "gate": "POLICY",
-                "status": "PASSED"
+                "evaluated_before_score": true,
+                "status": "PASSED",
+                "blocker_codes": []
               },
               {
                 "gate": "DUPLICATE_PROTECTION",
-                "status": "PASSED"
+                "evaluated_before_score": true,
+                "status": "PASSED",
+                "blocker_codes": []
               },
               {
                 "gate": "PROJECTION",
-                "status": "PASSED"
+                "evaluated_before_score": true,
+                "status": "PASSED",
+                "blocker_codes": []
               },
               {
                 "gate": "PROTOCOL_BUDGET_READINESS",
-                "status": "PASSED"
+                "evaluated_before_score": true,
+                "status": "PASSED",
+                "blocker_codes": []
               },
               {
                 "gate": "NON_SERVING_SAFETY",
-                "status": "PASSED"
+                "evaluated_before_score": true,
+                "status": "PASSED",
+                "blocker_codes": []
               }
             ],
             "profile_v1": {
@@ -147,182 +180,337 @@
               "unsupported_selected_fields": []
             },
             "score": {
-              "value": 78,
-              "coverage_percent": 92,
+              "value": 91,
+              "coverage_percent": 100,
               "sensitivity": [
-                71,
-                83
+                91,
+                91
               ],
               "comparative_not_predictive": true
             },
             "auction_protocol": {
-              "control": "Явный коммерческий спрос",
-              "tested_change": "Уточнение категории маркируемого товара",
-              "traffic_split": "50/50",
+              "control": "Текущая подтверждённая поисковая формулировка",
+              "tested_change": "Контроль без дополнительного изменения",
+              "traffic_split": "100% / 0%",
               "test_budget_rub": 28000,
-              "period_days": 21,
-              "success_signal": "Завершённое подключение",
-              "stop_condition": "Бюджет исчерпан без подтверждённого подключения"
+              "period_days": 30,
+              "success_signal": "К моменту окончания теста primary measurement goal достигается без нарушения stop condition; вывод остаётся scoped evidence, не прогнозом.",
+              "stop_condition": "Остановить treatment при исчерпании test budget, завершении периода, потере измеримости или любом нарушении non-serving safety/authority."
             },
             "risks": [
-              "Сроки маркировки меняют структуру спроса",
-              "Результат требует корректной цели аналитики"
+              "Pre-launch Viability Score не прогнозирует CPA, прибыль или фактического победителя.",
+              "Сроки обязательной маркировки могут изменить структуру спроса."
             ]
           },
           {
-            "name": "Розница · переход с таблиц на товарный учёт",
-            "status": "TESTABLE_WITH_GAPS",
+            "name": "Товарный учёт маркированных товаров · Целевое действие",
+            "status": "VIABLE",
             "editable": true,
-            "difference": "Однофакторное изменение сообщения для аудитории с ручным учётом.",
-            "hard_gates": [],
+            "difference": "Однофакторное изменение: QUALIFIED_ACTION.",
+            "hard_gates": [
+              {
+                "gate": "LINEAGE",
+                "evaluated_before_score": true,
+                "status": "PASSED",
+                "blocker_codes": []
+              },
+              {
+                "gate": "ECONOMICS",
+                "evaluated_before_score": true,
+                "status": "PASSED",
+                "blocker_codes": []
+              },
+              {
+                "gate": "DESTINATION",
+                "evaluated_before_score": true,
+                "status": "PASSED",
+                "blocker_codes": []
+              },
+              {
+                "gate": "MEASUREMENT",
+                "evaluated_before_score": true,
+                "status": "PASSED",
+                "blocker_codes": []
+              },
+              {
+                "gate": "DEMAND",
+                "evaluated_before_score": true,
+                "status": "PASSED",
+                "blocker_codes": []
+              },
+              {
+                "gate": "CAPABILITY",
+                "evaluated_before_score": true,
+                "status": "PASSED",
+                "blocker_codes": []
+              },
+              {
+                "gate": "POLICY",
+                "evaluated_before_score": true,
+                "status": "PASSED",
+                "blocker_codes": []
+              },
+              {
+                "gate": "DUPLICATE_PROTECTION",
+                "evaluated_before_score": true,
+                "status": "PASSED",
+                "blocker_codes": []
+              },
+              {
+                "gate": "PROJECTION",
+                "evaluated_before_score": true,
+                "status": "PASSED",
+                "blocker_codes": []
+              },
+              {
+                "gate": "PROTOCOL_BUDGET_READINESS",
+                "evaluated_before_score": true,
+                "status": "PASSED",
+                "blocker_codes": []
+              },
+              {
+                "gate": "NON_SERVING_SAFETY",
+                "evaluated_before_score": true,
+                "status": "PASSED",
+                "blocker_codes": []
+              }
+            ],
             "profile_v1": {
               "profile_id": "p0-campaign-creation-profile-v1",
               "version": "1.0.0",
               "complete": true,
               "fields": [
-                "responsive_ad"
+                "advertiser_currency",
+                "unified_campaign",
+                "unified_ad_group",
+                "search_delivery",
+                "responsive_ad",
+                "geography",
+                "schedule",
+                "landing",
+                "tracking",
+                "negative_phrases",
+                "explicit_keywords",
+                "autotargeting_policy",
+                "metrika_binding",
+                "measurement_plan"
               ],
               "unsupported_selected_fields": []
             },
             "score": {
-              "value": 66,
-              "coverage_percent": 74,
+              "value": 91,
+              "coverage_percent": 100,
               "sensitivity": [
-                54,
-                78
+                91,
+                91
               ],
               "comparative_not_predictive": true
             },
             "auction_protocol": {
-              "control": "Базовое сообщение",
-              "tested_change": "Переход с таблиц",
-              "traffic_split": "50/50",
-              "test_budget_rub": 14000,
-              "period_days": 21,
-              "success_signal": "Завершённое подключение",
-              "stop_condition": "Бюджет исчерпан без подтверждённого подключения"
+              "control": "Точная исходная кампания для сравнения",
+              "tested_change": "Показать качественный результат прямо в формулировке предложения и проверить его как отдельную гипотезу.",
+              "traffic_split": "50% / 50%",
+              "test_budget_rub": 28000,
+              "period_days": 30,
+              "success_signal": "К моменту окончания теста primary measurement goal достигается без нарушения stop condition; вывод остаётся scoped evidence, не прогнозом.",
+              "stop_condition": "Остановить treatment при исчерпании test budget, завершении периода, потере измеримости или любом нарушении non-serving safety/authority."
             },
             "risks": [
-              "Ниже evidence coverage по формулировке проблемы"
+              "Pre-launch Viability Score не прогнозирует CPA, прибыль или фактического победителя.",
+              "Сроки обязательной маркировки могут изменить структуру спроса."
             ]
           }
         ],
         "package_confirmation": {
           "state": "PREVIEW_ONLY_NO_LIVE_AUTHORITY",
-          "preflight": "9/9",
+          "preview_complete": true,
           "ordered_campaigns": [
-            "Маркировка · подключение товарного учёта"
+            "Товарный учёт маркированных товаров · Целевое действие",
+            "Товарный учёт маркированных товаров · STRATEGY_BASELINE_FALLBACK"
           ],
           "budget_alignment": "LIMITED_TEST_WITHIN_STRATEGY",
-          "meaning": "Подтверждение относилось бы только к показанной неизменяемой версии кампании и протокола; в Product MVP полномочие и запись не выдаются."
+          "meaning": "Подтверждение относилось бы только к показанной неизменяемой версии Campaign Draft и Auction Protocol; Product MVP не выдаёт live authority и не выполняет запись."
+        },
+        "execution_proof": {
+          "authoritative_contracts_executed": [
+            "p0-business-model-v1",
+            "campaign-fanout-v1",
+            "viability-score/1.0.0",
+            "p0-campaign-creation-profile-v1"
+          ],
+          "external_write_calls": 0,
+          "provider_mutation_capability_present": false
         }
       },
       "honesty": {
         "scenario_id": "honesty-material-insufficiency-matrix",
         "evidence_kind": "INDEPENDENT_PILOT_EVIDENCE",
         "derived_from_fixture": false,
-        "execution_mode": "FROZEN_NO_WRITE_PILOT_SCENARIO",
+        "execution_mode": "EXECUTABLE_PURE_PRODUCT_CONTOUR_NO_WRITE",
+        "checkpoint_evidence_status": "PREPARED_FOR_ISSUE_176",
         "cases": [
           {
-            "case_id": "economics-unconfirmed",
+            "case_id": "economics-insufficient",
             "insufficient_area": "ECONOMICS",
             "campaigns": [
               {
-                "name": "Кандидат",
-                "status": "BLOCKED",
-                "blocker": "ECONOMICS_MATERIAL_UNCERTAINTY"
+                "name": "Товарный учёт маркированных товаров · STRATEGY_BASELINE_FALLBACK",
+                "status": "INSUFFICIENT_EVIDENCE",
+                "blockers": [
+                  "ECONOMICS_MATERIAL_UNCERTAINTY"
+                ]
+              },
+              {
+                "name": "Товарный учёт маркированных товаров · Целевое действие",
+                "status": "INSUFFICIENT_EVIDENCE",
+                "blockers": [
+                  "ECONOMICS_MATERIAL_UNCERTAINTY"
+                ]
               }
             ],
             "repair_plan": [
               {
                 "priority": 1,
                 "area": "ECONOMICS",
-                "action": "Подтвердить среднюю ценность продажи, маржу и долю обращений, переходящих в продажу.",
-                "expected_result": "Обоснованный экономический предел стоимости результата."
-              },
-              {
-                "priority": 2,
-                "area": "MEASUREMENT",
-                "action": "Сверить экономический результат с основной целью аналитики.",
-                "expected_result": "Измеряемый qualified outcome."
+                "code": "ECONOMICS_MATERIAL_UNCERTAINTY",
+                "action": "Подтвердить value, margin и lead-to-sale inputs; положительный бюджет или вручную введённая стоимость результата не заменяют economics.",
+                "expected_result": "Повторная проверка ECONOMICS проходит до нового решения о VIABLE."
               }
-            ]
+            ],
+            "execution_proof": {
+              "recommendation_set_status": "NO_VIABLE_DRAFTS",
+              "viable_count": 0,
+              "external_write_calls": 0
+            }
           },
           {
-            "case_id": "demand-unavailable",
+            "case_id": "demand-insufficient",
             "insufficient_area": "DEMAND",
             "campaigns": [
               {
-                "name": "Кандидат",
+                "name": "Товарный учёт маркированных товаров · STRATEGY_BASELINE_FALLBACK",
                 "status": "INSUFFICIENT_EVIDENCE",
-                "blocker": "DEMAND_EVIDENCE_GAP"
+                "blockers": [
+                  "DEMAND_EVIDENCE_GAP"
+                ]
+              },
+              {
+                "name": "Товарный учёт маркированных товаров · Целевое действие",
+                "status": "INSUFFICIENT_EVIDENCE",
+                "blockers": [
+                  "DEMAND_EVIDENCE_GAP"
+                ]
               }
             ],
             "repair_plan": [
               {
                 "priority": 1,
                 "area": "DEMAND",
-                "action": "Повторить scoped multi-seed read-only исследование спроса после восстановления источника.",
-                "expected_result": "Наблюдаемая ненулевая нижняя граница релевантного спроса или честное решение не запускать тест."
+                "code": "DEMAND_EVIDENCE_GAP",
+                "action": "Campaign Draft lacks required comparable demand evidence; unavailable is not zero demand.",
+                "expected_result": "Повторная проверка DEMAND проходит до нового решения о VIABLE."
               }
-            ]
+            ],
+            "execution_proof": {
+              "recommendation_set_status": "NO_VIABLE_DRAFTS",
+              "viable_count": 0,
+              "external_write_calls": 0
+            }
           },
           {
-            "case_id": "measurement-unready",
+            "case_id": "measurement-insufficient",
             "insufficient_area": "MEASUREMENT",
             "campaigns": [
               {
-                "name": "Кандидат",
+                "name": "Товарный учёт маркированных товаров · STRATEGY_BASELINE_FALLBACK",
                 "status": "BLOCKED",
-                "blocker": "MEASUREMENT_NOT_READY"
+                "blockers": [
+                  "PUBLICATION_MEASUREMENT_READINESS_BLOCKED"
+                ]
               }
             ],
             "repair_plan": [
               {
                 "priority": 1,
                 "area": "MEASUREMENT",
-                "action": "Выбрать существующую цель, точно означающую qualified outcome, и подтвердить свежие достижения.",
-                "expected_result": "Exact-bound измеримый бизнес-результат."
+                "code": "PUBLICATION_MEASUREMENT_READINESS_BLOCKED",
+                "action": "Выбранный бизнес-результат пока нельзя надёжно наблюдать; выполните подготовленный measurement repair plan.",
+                "expected_result": "Повторная проверка MEASUREMENT проходит до нового решения о VIABLE."
               }
-            ]
+            ],
+            "execution_proof": {
+              "recommendation_set_status": "NO_VIABLE_DRAFTS",
+              "viable_count": 0,
+              "external_write_calls": 0
+            }
           },
           {
-            "case_id": "destination-missing",
+            "case_id": "destination-insufficient",
             "insufficient_area": "DESTINATION",
             "campaigns": [
               {
-                "name": "Кандидат",
+                "name": "Товарный учёт маркированных товаров · STRATEGY_BASELINE_FALLBACK",
                 "status": "BLOCKED",
-                "blocker": "FUTURE_LANDING_REQUIRED"
+                "blockers": [
+                  "PUBLICATION_DESTINATION_SCOPE_BLOCKED"
+                ]
+              },
+              {
+                "name": "Товарный учёт маркированных товаров · Целевое действие",
+                "status": "BLOCKED",
+                "blockers": [
+                  "PUBLICATION_DESTINATION_SCOPE_BLOCKED"
+                ]
               }
             ],
             "repair_plan": [
               {
                 "priority": 1,
                 "area": "DESTINATION",
-                "action": "Подготовить отдельную релевантную посадочную с ясным путём к qualified outcome и повторить desktop/mobile read-only проверку.",
-                "expected_result": "Существующая готовая destination для всех обслуживаемых устройств."
+                "code": "PUBLICATION_DESTINATION_SCOPE_BLOCKED",
+                "action": "Destination не готова для каждого device scope, который способен обслуживать Campaign Draft.",
+                "expected_result": "Повторная проверка DESTINATION проходит до нового решения о VIABLE."
               }
-            ]
+            ],
+            "execution_proof": {
+              "recommendation_set_status": "NO_VIABLE_DRAFTS",
+              "viable_count": 0,
+              "external_write_calls": 0
+            }
           },
           {
-            "case_id": "capability-unsupported",
+            "case_id": "capability-insufficient",
             "insufficient_area": "CAPABILITY",
             "campaigns": [
               {
-                "name": "Кандидат",
+                "name": "Товарный учёт маркированных товаров · STRATEGY_BASELINE_FALLBACK",
                 "status": "BLOCKED",
-                "blocker": "SELECTED_CAPABILITY_UNSUPPORTED"
+                "blockers": [
+                  "PUBLICATION_DIRECT_UNIFIED_CAMPAIGN_UNAVAILABLE"
+                ]
+              },
+              {
+                "name": "Товарный учёт маркированных товаров · Целевое действие",
+                "status": "BLOCKED",
+                "blockers": [
+                  "PUBLICATION_DIRECT_UNIFIED_CAMPAIGN_UNAVAILABLE"
+                ]
               }
             ],
             "repair_plan": [
               {
                 "priority": 1,
                 "area": "CAPABILITY",
-                "action": "Убрать неподдержанное выбранное поле или подтвердить exact-account eligibility официальным read-only evidence.",
-                "expected_result": "Полная поддерживаемая проекция Profile v1 без молча отброшенных полей."
+                "code": "PUBLICATION_DIRECT_UNIFIED_CAMPAIGN_UNAVAILABLE",
+                "action": "Exact Direct account does not report UNIFIED_CAMPAIGN eligibility.",
+                "expected_result": "Повторная проверка CAPABILITY проходит до нового решения о VIABLE."
               }
-            ]
+            ],
+            "execution_proof": {
+              "recommendation_set_status": "NO_VIABLE_DRAFTS",
+              "viable_count": 0,
+              "external_write_calls": 0
+            }
           }
         ]
       }
@@ -332,7 +520,7 @@
     {
       "id": "unfamiliar-business",
       "evidence_kind": "CONTROLLED_EVAL_FIXTURE",
-      "executable_test": "business-model-contract.test.mjs",
+      "executable_test": "product-mvp-acceptance.test.mjs",
       "input": "Сервис обязательной маркировки товаров для небольших розничных сетей; лексика выставок отсутствует.",
       "observed": {
         "business_model_created": true,
@@ -349,7 +537,7 @@
     {
       "id": "multiple-offers",
       "evidence_kind": "CONTROLLED_EVAL_FIXTURE",
-      "executable_test": "campaign-fanout.test.mjs",
+      "executable_test": "business-model.test.mjs",
       "input": "У бизнеса три предложения: учёт товаров, касса и электронный документооборот.",
       "observed": {
         "offers_found": 3,
