@@ -142,7 +142,7 @@ import {
 } from "./landing-advisory.ts";
 
 export const P0_APPLICATION_CONTRACT = "mox-adv.p0.application";
-export const P0_APPLICATION_CONTRACT_VERSION = "1.15.0";
+export const P0_APPLICATION_CONTRACT_VERSION = "1.16.0";
 export const P0_DOCUMENT_SCHEMA = "p0-application-document-v11";
 const P0_LEGACY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4", "p0-application-document-v5", "p0-application-document-v6", "p0-application-document-v7", "p0-application-document-v8", "p0-application-document-v9", "p0-application-document-v10"]);
 const P0_PRE_PACKAGE_AUTHORITY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4"]);
@@ -400,6 +400,7 @@ export interface P0ApplicationAdapters {
   researchSite(url: string): Promise<SiteAnalysis>;
   readCurrencyLimits(): Promise<{ minimum_weekly_budget_rub: number }>;
   readMarketEvidence?(input: {
+    ownerKey: string;
     model: BusinessModel;
     context: P0Context;
     generatedAt: string;
@@ -2787,17 +2788,63 @@ export class P0Application {
             : state.business_model
               ? "findings"
               : "goal";
+      const market = record(state.analytics_evidence_snapshot?.market_evidence);
+      const frequency = record(market.frequency);
+      const cost = record(market.cost);
+      const plan = record(market.research_plan);
+      const selectedCostScope = record(record(cost.scope).comparison);
+      const selectedRange = record(cost.range);
+      const sample = record(cost.sample_size);
+      const planScope = record(plan.scope);
+      const planRegions = Array.isArray(planScope.regions) ? planScope.regions : [];
+      const planDevices = Array.isArray(planScope.devices) ? planScope.devices : [];
+      const planSeeds = Array.isArray(plan.seeds) ? plan.seeds : [];
       facts = {
         revision: stored.revision,
         owner_stage: journeyStage,
         analytics_evidence_status: state.analytics_evidence_snapshot ? "AVAILABLE" : "MISSING",
+        demand_cost_research: {
+          demand: {
+            status: String(frequency.status ?? "UNAVAILABLE"),
+            source: "Яндекс Wordstat",
+            observed_at: String(market.batch_finished_at ?? ""),
+            observed_lower_bound: record(frequency.observed_unique_count).value ?? null,
+            scope: {
+              regions: planRegions.map((item) => String(record(item).name ?? "")).filter(Boolean),
+              devices: planDevices.map(String),
+              formulation_count: planSeeds.length,
+            },
+            lower_bound: true,
+          },
+          cost: cost.status === "AVAILABLE" ? {
+            status: "AVAILABLE",
+            source: String(cost.compact_source ?? ""),
+            observed_at: String(cost.as_of ?? ""),
+            currency: String(cost.currency ?? ""),
+            vat_treatment: String(cost.vat_treatment ?? ""),
+            sample: { unit: String(sample.unit ?? ""), value: Number(sample.value ?? 0) },
+            scope: selectedCostScope,
+            range: { low: Number(selectedRange.low), high: Number(selectedRange.high) },
+            aggregation: "ONE_COMPATIBLE_SOURCE_NO_AVERAGING",
+          } : {
+            status: "UNAVAILABLE",
+            source: null,
+            observed_at: null,
+            currency: null,
+            vat_treatment: null,
+            sample: null,
+            scope: null,
+            range: null,
+            aggregation: "NO_QUALIFIED_SOURCE",
+          },
+        },
         next_boundary: agentNextBoundary(state),
         human_decision_reason: agentHumanDecisionBoundary(state),
         queued_safe_work: Boolean(pendingAgentSafeWork(state)),
         approved_dispatch_ready: Boolean(approvedAgentDispatch(state)),
         package_outcome: state.package_execution?.verdict ?? null,
       } as unknown as Record<string, JsonValue>;
-      summary = `Authoritative owner journey at ${journeyStage} was read; next boundary is ${facts.next_boundary}.`;
+      summary = `Authoritative owner journey at ${journeyStage} preserves scoped demand and one compatible source-labelled cost range or explicit unavailable; next boundary is ${facts.next_boundary}.`;
     } else if (input.call.name === "p0_read_bounded_competitor_research") {
       if (JSON.stringify(Object.keys(argumentsValue)) !== JSON.stringify(["expected_revision"])) {
         fail("P0_AGENT_TOOL_INPUT_INVALID", "Competitor research read input не соответствует closed schema.");
@@ -3131,8 +3178,9 @@ export class P0Application {
     return rows.slice(0, 50).map((row) => summarizeP0Revision(row, currentRevision));
   }
 
-  private async buildModelEvidence(site: SiteAnalysis, model: BusinessModel, context: P0Context, generatedAt: string) {
+  private async buildModelEvidence(ownerKey: string, site: SiteAnalysis, model: BusinessModel, context: P0Context, generatedAt: string) {
     const marketEvidenceInput: MarketEvidenceInput | undefined = await this.adapters.readMarketEvidence?.({
+      ownerKey,
       model,
       context,
       generatedAt,
@@ -3382,6 +3430,7 @@ export class P0Application {
       if (!state.business_model) {
         state.business_model = await inferModel(state.site_analysis, context);
         state.analytics_evidence_snapshot = await this.buildModelEvidence(
+          key,
           state.site_analysis,
           state.business_model,
           context,
@@ -3487,6 +3536,7 @@ export class P0Application {
             : []);
         state.business_model.missing_questions = revisedOwnerContract.questions.map((item) => item.question);
         state.analytics_evidence_snapshot = await this.buildModelEvidence(
+          key,
           state.site_analysis,
           state.business_model,
           context,
@@ -3594,6 +3644,7 @@ export class P0Application {
       state.business_model.qualified_outcome = String(state.business_model.owner_contract.fields.qualified_outcome.value ?? "");
       state.business_model.missing_questions = state.business_model.owner_contract.questions.map((item) => item.question);
       state.analytics_evidence_snapshot = await this.buildModelEvidence(
+        key,
         state.site_analysis,
         state.business_model,
         context,

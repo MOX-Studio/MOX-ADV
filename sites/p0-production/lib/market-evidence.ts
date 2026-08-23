@@ -65,6 +65,49 @@ export type WordstatObservationBatch = {
   calls: WordstatCall[];
 };
 
+export const DEMAND_COST_RESEARCH_PLAN_SCHEMA = "demand-cost-research-plan-v1";
+export type DemandSeedDimension = "OFFER_LANGUAGE" | "CUSTOMER_PROBLEM" | "HIGH_INTENT_ACTION" | "BRAND" | "NON_BRAND";
+export type DemandCostResearchPlan = {
+  schema_version: typeof DEMAND_COST_RESEARCH_PLAN_SCHEMA;
+  plan_id: string;
+  generated_at: string;
+  quota: {
+    maximum_seed_formulations: 8;
+    maximum_provider_calls: 24;
+    planned_seed_formulations: number;
+    planned_provider_calls: number;
+  };
+  scope: {
+    regions: Array<{ id: number; name: string }>;
+    devices: WordstatSeed["device"][];
+    seasonality: {
+      business_context: string | null;
+      method: "MONTHLY_DYNAMICS_SAME_PERIOD";
+      from_date: string;
+      to_date: string;
+    };
+  };
+  exclusions: string[];
+  dimensions: Array<{
+    dimension: DemandSeedDimension;
+    status: "PLANNED" | "UNAVAILABLE";
+    formulation_count: number;
+    limitation: string | null;
+  }>;
+  seeds: Array<WordstatSeed & { dimension: DemandSeedDimension }>;
+  comparable_cost_scope: {
+    required_direct_audit: "COMPLETE";
+    phrase: "EXACT";
+    geography: "SAME_REGION_SET";
+    placement: "SEARCH_RESULTS";
+    strategy: "WB_MAXIMUM_CLICKS";
+    season: "CURRENT_AUDIT_WINDOW";
+    minimum_click_sample: number;
+    sources: ["KEYWORDBIDS_V5_CURRENT_PROXY", "DIRECT_HISTORY_OWN_EMPIRICAL"];
+    averaging_allowed: false;
+  };
+};
+
 function normalizedText(value: unknown) {
   return String(value ?? "").normalize("NFKC").replace(/\s+/gu, " ").trim();
 }
@@ -87,6 +130,135 @@ async function sha256(value: unknown) {
 function finiteNonNegative(value: unknown) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function boundedPhrase(value: unknown) {
+  const words = normalizedText(value)
+    .replace(/[!"[\]()|+]/gu, " ")
+    .replace(/[^\p{L}\p{N}\s-]/gu, " ")
+    .split(/\s+/u)
+    .filter(Boolean);
+  const selected: string[] = [];
+  for (const word of words) {
+    if (selected.join(" ").length + word.length + 1 > 200) break;
+    selected.push(word);
+  }
+  return selected.join(" ");
+}
+
+function plusPhrase(value: string) {
+  return value.split(/\s+/u).filter(Boolean).map((item) => `+${item}`).join(" ");
+}
+
+export async function buildDemandCostResearchPlan(input: {
+  generatedAt: string;
+  offerLanguage: string;
+  customerProblems: string[];
+  highIntentActions: string[];
+  brandTerms: string[];
+  exclusions: string[];
+  regionIds: number[];
+  regionNames: string[];
+  device: WordstatSeed["device"];
+  seasonality: string;
+  dynamicsFromDate: string;
+  dynamicsToDate: string;
+  minimumClickSample?: number;
+}): Promise<DemandCostResearchPlan> {
+  if (!Number.isFinite(Date.parse(input.generatedAt))) throw new Error("Demand research plan requires a generated timestamp.");
+  if (input.regionNames.length !== input.regionIds.length
+    || input.regionIds.some((item) => !Number.isSafeInteger(item) || item <= 0)
+    || !WORDSTAT_DEVICES.has(input.device)) {
+    throw new Error("Demand research plan requires an explicit valid region and device scope.");
+  }
+  if (!Number.isFinite(Date.parse(input.dynamicsFromDate))
+    || !Number.isFinite(Date.parse(input.dynamicsToDate))
+    || input.dynamicsFromDate > input.dynamicsToDate) {
+    throw new Error("Demand research plan requires a valid bounded seasonality window.");
+  }
+  const offer = boundedPhrase(input.offerLanguage);
+  if (!offer) throw new Error("Demand research plan requires offer language.");
+  const brandTokens = new Set(input.brandTerms.flatMap((value) => boundedPhrase(value).toLocaleLowerCase("ru-RU").split(/\s+/u)).filter(Boolean));
+  const nonBrandOffer = offer.split(/\s+/u).filter((word) => !brandTokens.has(word.toLocaleLowerCase("ru-RU"))).join(" ") || offer;
+  const candidates: Array<{ dimension: DemandSeedDimension; phrase: string }> = [
+    { dimension: "OFFER_LANGUAGE", phrase: offer },
+    ...input.customerProblems.map((value) => ({ dimension: "CUSTOMER_PROBLEM" as const, phrase: boundedPhrase(`${value} ${nonBrandOffer}`) })),
+    ...input.highIntentActions.map((value) => ({ dimension: "HIGH_INTENT_ACTION" as const, phrase: boundedPhrase(`${value} ${nonBrandOffer}`) })),
+    ...input.brandTerms.map((value) => ({ dimension: "BRAND" as const, phrase: boundedPhrase(`${value} ${nonBrandOffer}`) })),
+    { dimension: "NON_BRAND", phrase: nonBrandOffer },
+  ];
+  const unique = new Map<string, { dimension: DemandSeedDimension; phrase: string }>();
+  for (const candidate of candidates) {
+    const identity = candidate.phrase.toLocaleLowerCase("ru-RU");
+    if (!candidate.phrase || unique.has(`${candidate.dimension}:${identity}`)) continue;
+    unique.set(`${candidate.dimension}:${identity}`, candidate);
+  }
+  const selected = [...unique.values()].slice(0, 8);
+  const dimensionCounters = new Map<DemandSeedDimension, number>();
+  const seeds = selected.map((candidate, index) => {
+    const ordinal = (dimensionCounters.get(candidate.dimension) ?? 0) + 1;
+    dimensionCounters.set(candidate.dimension, ordinal);
+    const dimensionSlug = candidate.dimension.toLocaleLowerCase("en-US").replaceAll("_", "-");
+    return {
+      seed_id: `${dimensionSlug}-${ordinal}`,
+      cluster_id: index === 0 ? "demand-cluster-primary" : `demand-cluster-${dimensionSlug}-${ordinal}`,
+      dimension: candidate.dimension,
+      phrase: candidate.phrase,
+      dynamics_phrase: plusPhrase(candidate.phrase),
+      dynamics_period: "monthly" as const,
+      dynamics_from_date: input.dynamicsFromDate,
+      dynamics_to_date: input.dynamicsToDate,
+      operator_profile: "BROAD_CONTAINING" as const,
+      region_ids: [...input.regionIds],
+      region_names: input.regionNames.map(normalizedText),
+      device: input.device,
+    };
+  });
+  const dimensions = (["OFFER_LANGUAGE", "CUSTOMER_PROBLEM", "HIGH_INTENT_ACTION", "BRAND", "NON_BRAND"] as DemandSeedDimension[])
+    .map((dimension) => {
+      const formulationCount = seeds.filter((seed) => seed.dimension === dimension).length;
+      return {
+        dimension,
+        status: formulationCount ? "PLANNED" as const : "UNAVAILABLE" as const,
+        formulation_count: formulationCount,
+        limitation: formulationCount ? null : `${dimension} formulation is unavailable from the current Business Model evidence.`,
+      };
+    });
+  const planBody = {
+    schema_version: DEMAND_COST_RESEARCH_PLAN_SCHEMA as typeof DEMAND_COST_RESEARCH_PLAN_SCHEMA,
+    generated_at: new Date(input.generatedAt).toISOString(),
+    quota: {
+      maximum_seed_formulations: 8 as const,
+      maximum_provider_calls: 24 as const,
+      planned_seed_formulations: seeds.length,
+      planned_provider_calls: input.regionIds.length ? seeds.length * WORDSTAT_METHODS.length : 0,
+    },
+    scope: {
+      regions: input.regionIds.map((id, index) => ({ id, name: normalizedText(input.regionNames[index]) })),
+      devices: [input.device],
+      seasonality: {
+        business_context: normalizedText(input.seasonality) || null,
+        method: "MONTHLY_DYNAMICS_SAME_PERIOD" as const,
+        from_date: input.dynamicsFromDate,
+        to_date: input.dynamicsToDate,
+      },
+    },
+    exclusions: [...new Set(input.exclusions.map(boundedPhrase).filter(Boolean))].sort((left, right) => left.localeCompare(right, "ru-RU")),
+    dimensions,
+    seeds,
+    comparable_cost_scope: {
+      required_direct_audit: "COMPLETE" as const,
+      phrase: "EXACT" as const,
+      geography: "SAME_REGION_SET" as const,
+      placement: "SEARCH_RESULTS" as const,
+      strategy: "WB_MAXIMUM_CLICKS" as const,
+      season: "CURRENT_AUDIT_WINDOW" as const,
+      minimum_click_sample: Math.max(1, Math.trunc(Number(input.minimumClickSample) || 3)),
+      sources: ["KEYWORDBIDS_V5_CURRENT_PROXY", "DIRECT_HISTORY_OWN_EMPIRICAL"] as ["KEYWORDBIDS_V5_CURRENT_PROXY", "DIRECT_HISTORY_OWN_EMPIRICAL"],
+      averaging_allowed: false as const,
+    },
+  };
+  return { ...planBody, plan_id: await sha256(planBody) };
 }
 
 function wordstatRows(method: WordstatMethod, payload: Record<string, unknown>) {
@@ -581,6 +753,224 @@ export async function buildScopedDemandEvidence(batch: WordstatObservationBatch,
   };
 }
 
+export type DirectComparableCandidate = {
+  candidate_key: string;
+  keyword_id: string;
+  phrase: string;
+  owner_scope: {
+    phrase: "Точное совпадение";
+    geography: string;
+    placement: "Результаты поиска";
+    strategy: "Максимум кликов";
+    season: string;
+  };
+  qualification: {
+    complete_direct_audit: true;
+    phrase: "SAME";
+    geography: "SAME";
+    placement: "SAME";
+    strategy: "SAME";
+    season: "SAME";
+    sample: "SUFFICIENT";
+  };
+  sample: {
+    clicks: number;
+    unit: "clicks";
+    period_from: string;
+    period_to: string;
+    daily_cpc: number[];
+  };
+};
+
+type DirectComparableAudit = {
+  status?: unknown;
+  graph_complete?: unknown;
+  methods_not_read?: unknown;
+  observed_at?: unknown;
+};
+
+function objectRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function exactSet(left: unknown[], right: unknown[]) {
+  const normalized = (values: unknown[]) => [...new Set(values.map(String))].sort();
+  return JSON.stringify(normalized(left)) === JSON.stringify(normalized(right));
+}
+
+function nestedRecord(value: unknown, ...keys: string[]) {
+  let current = objectRecord(value);
+  for (const key of keys) current = objectRecord(current[key]);
+  return current;
+}
+
+function parseTsv(value: unknown) {
+  const lines = String(value ?? "").split(/\r?\n/u).filter(Boolean);
+  if (lines.length < 2) return [];
+  const headers = lines[0].split("\t");
+  return lines.slice(1).map((line) => Object.fromEntries(headers.map((header, index) => [header, line.split("\t")[index] ?? ""])));
+}
+
+function currentAuditSeason(date: string, observedAt: string) {
+  const value = Date.parse(`${date}T00:00:00.000Z`);
+  const observed = Date.parse(observedAt);
+  return Number.isFinite(value) && Number.isFinite(observed)
+    && value <= observed
+    && value >= observed - 93 * 24 * 60 * 60 * 1_000;
+}
+
+function percentile(values: number[], fraction: number) {
+  const sorted = [...values].sort((left, right) => left - right);
+  if (!sorted.length) return null;
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(fraction * sorted.length) - 1));
+  return Math.round(sorted[index] * 100) / 100;
+}
+
+export async function qualifyDirectComparableCandidates(input: {
+  audit: DirectComparableAudit;
+  artifacts: unknown[];
+  targetPhrases: string[];
+  targetRegionIds: number[];
+  targetRegionNames: string[];
+  targetPlacement: "SEARCH_RESULTS";
+  targetStrategy: "WB_MAXIMUM_CLICKS";
+  observedAt: string;
+  minimumClicks: number;
+}) {
+  const methodsNotRead = Array.isArray(input.audit.methods_not_read) ? input.audit.methods_not_read : [];
+  const complete = input.audit.status === "COMPLETE"
+    && input.audit.graph_complete === true
+    && methodsNotRead.length === 0
+    && Number.isFinite(Date.parse(input.observedAt));
+  if (!complete) {
+    return {
+      status: "UNAVAILABLE" as const,
+      qualified: [] as DirectComparableCandidate[],
+      rejected_count: 0,
+      reason: "COMPLETE_DIRECT_AUDIT_REQUIRED" as const,
+      owner_summary: {
+        source: "Собственная история Яндекс Директа",
+        conclusion: "Сопоставимая стоимость недоступна: полный аудит аккаунта не завершён.",
+      },
+    };
+  }
+  const records = input.artifacts.map(objectRecord);
+  const collectionObjects = (collection: string) => records
+    .filter((artifact) => artifact.collection === collection)
+    .flatMap((artifact) => Array.isArray(artifact.objects) ? artifact.objects.map(objectRecord) : []);
+  const campaigns = new Map(collectionObjects("campaigns").map((item) => [String(item.Id ?? ""), item]));
+  const adGroups = new Map(collectionObjects("adgroups").map((item) => [String(item.Id ?? ""), item]));
+  const keywords = collectionObjects("keywords");
+  const reportArtifacts = records.filter((artifact) => {
+    if (artifact.report_type !== "SEARCH_QUERY_PERFORMANCE_REPORT") return false;
+    const params = nestedRecord(artifact, "exact_request", "params");
+    const criteria = objectRecord(params.SelectionCriteria);
+    return params.IncludeVAT === "YES"
+      && Number.isFinite(Date.parse(String(criteria.DateFrom ?? "")))
+      && Number.isFinite(Date.parse(String(criteria.DateTo ?? "")));
+  });
+  if (!campaigns.size || !adGroups.size || !keywords.length || !reportArtifacts.length) {
+    return {
+      status: "UNAVAILABLE" as const,
+      qualified: [] as DirectComparableCandidate[],
+      rejected_count: keywords.length,
+      reason: "COMPLETE_DIRECT_COMPARISON_ARTIFACTS_REQUIRED" as const,
+      owner_summary: {
+        source: "Собственная история Яндекс Директа",
+        conclusion: "Сопоставимая стоимость недоступна: в полном аудите нет всех объектов и выборки для квалификации.",
+      },
+    };
+  }
+  const targetPhrases = new Set(input.targetPhrases.map(normalizedPhrase).filter(Boolean));
+  const reportRows = reportArtifacts.flatMap((artifact) => parseTsv(artifact.tsv));
+  const qualified: DirectComparableCandidate[] = [];
+  for (const keyword of keywords) {
+    const keywordId = String(keyword.Id ?? "");
+    const campaignId = String(keyword.CampaignId ?? "");
+    const adGroupId = String(keyword.AdGroupId ?? "");
+    const phrase = normalizedText(keyword.Keyword);
+    const campaign = campaigns.get(campaignId);
+    const adGroup = adGroups.get(adGroupId);
+    if (!keywordId || !campaign || !adGroup || !targetPhrases.has(normalizedPhrase(phrase))) continue;
+    if (keyword.State !== "ON" || !["ACCEPTED", "DRAFT"].includes(String(keyword.Status ?? ""))) continue;
+    if (!exactSet(Array.isArray(adGroup.RegionIds) ? adGroup.RegionIds : [], input.targetRegionIds)) continue;
+    const bidding = nestedRecord(campaign, "UnifiedCampaign", "BiddingStrategy");
+    const search = objectRecord(bidding.Search);
+    const placements = objectRecord(search.PlacementTypes);
+    const placementSame = input.targetPlacement === "SEARCH_RESULTS"
+      && placements.SearchResults === "YES"
+      && placements.ProductGallery !== "YES"
+      && objectRecord(bidding.Network).BiddingStrategyType === "SERVING_OFF";
+    if (!placementSame || search.BiddingStrategyType !== input.targetStrategy) continue;
+    const rows = reportRows.filter((row) => String(row.CriteriaId ?? "") === keywordId
+      && String(row.CampaignId ?? "") === campaignId
+      && String(row.AdGroupId ?? "") === adGroupId
+      && normalizedPhrase(row.MatchedKeyword) === normalizedPhrase(phrase)
+      && currentAuditSeason(String(row.Date ?? ""), input.observedAt));
+    const clicks = rows.reduce((sum, row) => sum + (finiteNonNegative(row.Clicks) ?? 0), 0);
+    if (clicks < Math.max(1, input.minimumClicks)) continue;
+    const daily = Map.groupBy(rows, (row) => String(row.Date ?? ""));
+    const dailyCpc = [...daily.values()].map((dayRows) => {
+      const dayClicks = dayRows.reduce((sum, row) => sum + (finiteNonNegative(row.Clicks) ?? 0), 0);
+      const dayCost = dayRows.reduce((sum, row) => sum + (finiteNonNegative(row.Cost) ?? 0), 0);
+      return dayClicks > 0 ? Math.round((dayCost / dayClicks) * 100) / 100 : null;
+    }).filter((value): value is number => value !== null);
+    if (!dailyCpc.length) continue;
+    const period = rows.map((row) => String(row.Date ?? "")).filter(Boolean).sort();
+    const candidateKey = await sha256({
+      audit_observed_at: input.audit.observed_at ?? input.observedAt,
+      phrase: normalizedPhrase(phrase),
+      regions: [...input.targetRegionIds].sort((left, right) => left - right),
+      placement: input.targetPlacement,
+      strategy: input.targetStrategy,
+      period_from: period[0],
+      period_to: period.at(-1),
+      clicks,
+    });
+    qualified.push({
+      candidate_key: candidateKey,
+      keyword_id: keywordId,
+      phrase,
+      owner_scope: {
+        phrase: "Точное совпадение",
+        geography: input.targetRegionNames.map(normalizedText).join(", "),
+        placement: "Результаты поиска",
+        strategy: "Максимум кликов",
+        season: `${period[0]} — ${period.at(-1)}`,
+      },
+      qualification: {
+        complete_direct_audit: true,
+        phrase: "SAME",
+        geography: "SAME",
+        placement: "SAME",
+        strategy: "SAME",
+        season: "SAME",
+        sample: "SUFFICIENT",
+      },
+      sample: {
+        clicks,
+        unit: "clicks",
+        period_from: period[0],
+        period_to: period.at(-1) ?? period[0],
+        daily_cpc: dailyCpc.sort((left, right) => left - right),
+      },
+    });
+  }
+  qualified.sort((left, right) => right.sample.clicks - left.sample.clicks || left.candidate_key.localeCompare(right.candidate_key));
+  return {
+    status: qualified.length ? "AVAILABLE" as const : "UNAVAILABLE" as const,
+    qualified,
+    rejected_count: Math.max(0, keywords.length - qualified.length),
+    reason: qualified.length ? null : "NO_FULLY_QUALIFIED_COMPARABLE_CANDIDATE" as const,
+    owner_summary: {
+      source: "Собственная история Яндекс Директа",
+      conclusion: qualified.length
+        ? `${qualified.length} сопоставимых вариантов прошли проверку фразы, географии, размещения, стратегии, периода и выборки.`
+        : "Сопоставимая стоимость недоступна: ни один вариант не прошёл все проверки.",
+    },
+  };
+}
+
 export type CostSource = "LEGACY_LIVE4_SCENARIO" | "KEYWORDBIDS_V5_CURRENT_PROXY" | "DIRECT_HISTORY_OWN_EMPIRICAL";
 export type CostObservation = {
   observation_id: string;
@@ -597,6 +987,52 @@ export type CostObservation = {
   unavailable_reason?: string;
   capacity?: { forecast_clicks: number; forecast_total_spend: number };
 };
+
+export function buildOwnHistoryCostObservation(
+  candidate: DirectComparableCandidate,
+  input: {
+    observedAt: string;
+    currency: string;
+    vatTreatment: CostObservation["vat_treatment"];
+  },
+): CostObservation {
+  const low = percentile(candidate.sample.daily_cpc, 0.25);
+  const high = percentile(candidate.sample.daily_cpc, 0.75);
+  const available = low !== null && high !== null && candidate.sample.clicks > 0;
+  return {
+    observation_id: `direct-history:${candidate.candidate_key}:${input.observedAt}`,
+    source: "DIRECT_HISTORY_OWN_EMPIRICAL",
+    status: available ? "AVAILABLE" : "UNAVAILABLE",
+    scenario: "Собственный дневной CPC, межквартильный диапазон",
+    scope: {
+      phrase: "EXACT",
+      geography: "SAME",
+      placement: "SAME",
+      strategy: "SAME",
+      season: "SAME",
+      comparison: candidate.owner_scope,
+      period_from: candidate.sample.period_from,
+      period_to: candidate.sample.period_to,
+    },
+    as_of: input.observedAt,
+    currency: normalizedText(input.currency),
+    vat_treatment: input.vatTreatment,
+    sample_size: { unit: candidate.sample.unit, value: candidate.sample.clicks },
+    range: available ? { low, high, kind: "EMPIRICAL_IQR" } : null,
+    qualification: {
+      first_party: true,
+      clicks: candidate.sample.clicks,
+      complete_direct_audit: true,
+      phrase: "QUALIFIED",
+      geography: "QUALIFIED",
+      placement: "QUALIFIED",
+      strategy: "QUALIFIED",
+      season: "QUALIFIED",
+      sample: available ? "QUALIFIED" : "UNAVAILABLE",
+    },
+    ...(!available ? { unavailable_reason: "DIRECT_HISTORY_SAMPLE_UNAVAILABLE" } : {}),
+  };
+}
 
 const COST_PRECEDENCE: CostSource[] = [
   "LEGACY_LIVE4_SCENARIO",
@@ -637,14 +1073,16 @@ function qualifiedCost(observation: CostObservation) {
   if (observation.source === "KEYWORDBIDS_V5_CURRENT_PROXY") {
     return observation.qualification.current === true
       && observation.qualification.existing_comparable_keyword === true
+      && observation.qualification.complete_direct_audit === true
+      && observation.qualification.sample === "QUALIFIED"
       && observation.scope.phrase === "EXACT"
       && sameOrMapped(observation.scope.geography)
       && observation.scope.placement === "SAME"
       && observation.scope.strategy === "SAME"
-      && observation.scope.season === "SAME"
-      && Boolean(normalizedText(observation.scope.keyword_id));
+      && observation.scope.season === "SAME";
   }
   return observation.qualification.first_party === true
+    && observation.qualification.complete_direct_audit === true
     && Number(observation.qualification.clicks) > 0
     && ["EXACT", "CLUSTER"].includes(String(observation.scope.phrase))
     && sameOrMapped(observation.scope.geography)
@@ -718,21 +1156,23 @@ const DIRECT_COST_ENDPOINTS = {
 function unavailableAuctionObservation(input: {
   account: string;
   keyword_id: string;
+  candidate_key?: string;
   expected_phrase: string;
   currency: string;
   vat_treatment: CostObservation["vat_treatment"];
   comparability: { geography: unknown; placement: unknown; strategy: unknown; season: unknown };
+  comparison_scope?: Record<string, unknown>;
+  sample_clicks?: number;
 }, observedAt: string, reason: string): CostObservation {
   return {
-    observation_id: `keywordbids:${input.keyword_id}:${observedAt}`,
+    observation_id: `keywordbids:${input.candidate_key ?? "unavailable"}:${observedAt}`,
     source: "KEYWORDBIDS_V5_CURRENT_PROXY",
     status: "UNAVAILABLE",
     scenario: "current auction proxy for an existing comparable keyword",
     scope: {
-      account: input.account,
-      keyword_id: input.keyword_id,
       phrase: "UNKNOWN",
       ...input.comparability,
+      ...(input.comparison_scope ? { comparison: input.comparison_scope } : {}),
     },
     as_of: observedAt,
     currency: input.currency,
@@ -748,11 +1188,15 @@ export async function collectCurrentAuctionCostObservation(input: {
   token: string;
   account: string;
   keyword_id: string;
+  candidate_key?: string;
   expected_phrase: string;
   currency: string;
   vat_treatment: CostObservation["vat_treatment"];
   traffic_volumes: number[];
   comparability: { geography: "SAME" | "MAPPED" | "DIFFERENT" | "UNKNOWN"; placement: "SAME" | "DIFFERENT" | "UNKNOWN"; strategy: "SAME" | "DIFFERENT" | "UNKNOWN"; season: "SAME" | "DIFFERENT" | "UNKNOWN" };
+  comparison_scope?: Record<string, unknown>;
+  complete_direct_audit?: boolean;
+  sample_clicks?: number;
 }, fetchImpl: FetchLike, now: () => string): Promise<CostObservation> {
   const observedAt = now();
   if (!normalizedText(input.token) || !normalizedText(input.account) || !/^\d+$/u.test(input.keyword_id)) {
@@ -816,24 +1260,26 @@ export async function collectCurrentAuctionCostObservation(input: {
       return unavailableAuctionObservation(input, observedAt, "KEYWORDBIDS_AUCTION_BIDS_UNAVAILABLE");
     }
     return {
-      observation_id: `keywordbids:${input.keyword_id}:${observedAt}`,
+      observation_id: `keywordbids:${input.candidate_key ?? await sha256({ phrase: normalizedPhrase(input.expected_phrase), observed_at: observedAt })}:${observedAt}`,
       source: "KEYWORDBIDS_V5_CURRENT_PROXY",
       status: "AVAILABLE",
       scenario: `Direct auction traffic volumes ${[...allowed].sort((left, right) => left - right).join(",") || "all returned"}`,
       scope: {
-        account: input.account,
-        campaign_id: String(keyword.CampaignId ?? ""),
-        ad_group_id: String(keyword.AdGroupId ?? ""),
-        keyword_id: input.keyword_id,
         phrase: "EXACT",
         ...input.comparability,
+        ...(input.comparison_scope ? { comparison: input.comparison_scope } : {}),
       },
       as_of: observedAt,
       currency: input.currency,
       vat_treatment: input.vat_treatment,
       sample_size: { unit: "auction_scenarios", value: prices.length },
       range: { low: Math.min(...prices), high: Math.max(...prices), kind: "SCENARIO" },
-      qualification: { current: true, existing_comparable_keyword: true },
+      qualification: {
+        current: true,
+        existing_comparable_keyword: true,
+        complete_direct_audit: input.complete_direct_audit === true,
+        sample: Number(input.sample_clicks) > 0 ? "QUALIFIED" : "UNAVAILABLE",
+      },
     };
   } catch {
     return unavailableAuctionObservation(input, observedAt, "KEYWORDBIDS_PROVIDER_ERROR");
@@ -1025,6 +1471,7 @@ export async function packDemandClusters(input: PackableDemandCluster[]) {
 }
 
 export type MarketEvidenceInput = {
+  research_plan?: DemandCostResearchPlan;
   wordstat_batch: WordstatObservationBatch;
   demand_clusters: DemandClusterSpec[];
   cost_observations: CostObservation[];
@@ -1036,7 +1483,7 @@ function containsSensitiveMarketInput(value: unknown): boolean {
   if (Array.isArray(value)) return value.some(containsSensitiveMarketInput);
   if (!value || typeof value !== "object") return false;
   return Object.entries(value as Record<string, unknown>).some(([key, item]) =>
-    /(?:authorization|cookie|credential|oauth|token|password|passwd|secret|api[_-]?key)/iu.test(key)
+    /(?:^|_)(?:authorization|cookie|credential|oauth|access_token|oauth_token|password|passwd|secret|api_key)(?:$|_)/iu.test(key)
     || containsSensitiveMarketInput(item));
 }
 
@@ -1053,6 +1500,7 @@ export async function buildMarketEvidence(input: MarketEvidenceInput) {
       }));
   return {
     contract_version: MARKET_EVIDENCE_CONTRACT,
+    research_plan: input.research_plan ?? null,
     snapshot_batch_id: input.wordstat_batch.batch_id,
     batch_started_at: input.wordstat_batch.batch_started_at,
     batch_finished_at: input.wordstat_batch.batch_finished_at,

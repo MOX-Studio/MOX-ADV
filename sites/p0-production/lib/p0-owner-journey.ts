@@ -70,6 +70,29 @@ export type OwnerJourneyProjection = {
     aggregateClaims: Array<{ claim: string; scope: string; result: string; limitation: string }>;
     limitations: string[];
   } | null;
+  demandCostResearch: {
+    demand: {
+      status: "Доступно" | "Частично" | "Недоступно";
+      conclusion: string;
+      source: string;
+      observedAt: string;
+      scope: string;
+      formulations: Array<{ category: string; phrase: string; status: "Запланировано" | "Недоступно" }>;
+      seasonality: string;
+      limitation: string;
+    };
+    cost: {
+      status: "Доступно" | "Недоступно";
+      range: string;
+      source: string;
+      observedAt: string;
+      currency: string;
+      vat: string;
+      sample: string;
+      scope: string;
+      limitation: string;
+    };
+  } | null;
   businessModel: {
     fields: Array<{
       label: string;
@@ -508,6 +531,84 @@ function competitorMatrixProjection(state: InternalState): OwnerJourneyProjectio
   };
 }
 
+const DEMAND_DIMENSION_LABELS: Record<string, string> = {
+  OFFER_LANGUAGE: "Язык предложения",
+  CUSTOMER_PROBLEM: "Проблема клиента",
+  HIGH_INTENT_ACTION: "Целевое действие",
+  BRAND: "Брендовый спрос",
+  NON_BRAND: "Небрендовый спрос",
+};
+
+const COST_SOURCE_LABELS: Record<string, string> = {
+  LEGACY_LIVE4_SCENARIO: "Сценарная оценка выбранного рекламного аккаунта",
+  KEYWORDBIDS_V5_CURRENT_PROXY: "Текущая аукционная оценка Яндекс Директа",
+  DIRECT_HISTORY_OWN_EMPIRICAL: "Собственная сопоставимая история Яндекс Директа",
+};
+
+export function projectDemandCostResearchForOwner(snapshot: unknown): OwnerJourneyProjection["demandCostResearch"] {
+  const market = record(record(snapshot).market_evidence);
+  const frequency = record(market.frequency);
+  const cost = record(market.cost);
+  const plan = record(market.research_plan);
+  if (!Object.keys(frequency).length && !Object.keys(cost).length && !Object.keys(plan).length) return null;
+  const dimensions = list(plan.dimensions).map(record);
+  const seeds = list(plan.seeds).map(record);
+  const formulations: NonNullable<OwnerJourneyProjection["demandCostResearch"]>["demand"]["formulations"] = dimensions.flatMap((dimension): NonNullable<OwnerJourneyProjection["demandCostResearch"]>["demand"]["formulations"] => {
+    const matches = seeds.filter((seed) => seed.dimension === dimension.dimension);
+    if (matches.length) return matches.map((seed) => ({
+      category: ownerText(DEMAND_DIMENSION_LABELS[String(dimension.dimension)]),
+      phrase: ownerText(seed.phrase),
+      status: "Запланировано" as const,
+    }));
+    return [{
+      category: ownerText(DEMAND_DIMENSION_LABELS[String(dimension.dimension)]),
+      phrase: "Формулировка недоступна из текущих подтверждённых данных",
+      status: "Недоступно" as const,
+    }];
+  });
+  const demandStatus = frequency.status === "AVAILABLE" ? "Доступно" as const : frequency.status === "PARTIAL" ? "Частично" as const : "Недоступно" as const;
+  const observed = record(frequency.observed_unique_count).value;
+  const planScope = record(plan.scope);
+  const regions = list(planScope.regions).map((item) => ownerText(record(item).name, "")).filter(Boolean);
+  const devices = list(planScope.devices).map((item) => ownerText(item, "")).filter(Boolean);
+  const seasonality = record(planScope.seasonality);
+  const costAvailable = cost.status === "AVAILABLE" && record(cost.range).low !== undefined && record(cost.range).high !== undefined;
+  const selectedRange = record(cost.range);
+  const sample = record(cost.sample_size);
+  const comparison = record(record(cost.scope).comparison);
+  const costScope = Object.values(comparison).map((item) => ownerText(item, "")).filter(Boolean).join(" · ");
+  const gapReasons = list(cost.missing_or_conflict_reasons).map((item) => ownerText(item, "", 200)).filter(Boolean);
+  return {
+    demand: {
+      status: demandStatus,
+      conclusion: observed === null || observed === undefined
+        ? "Наблюдаемая нижняя граница спроса недоступна; это не нулевой спрос."
+        : `Наблюдаемая нижняя граница: ${Number(observed).toLocaleString("ru-RU")} запросов в возвращённых верхних строках.`,
+      source: "Яндекс Wordstat · официальное наблюдение",
+      observedAt: ownerText(market.batch_finished_at, "Дата наблюдения недоступна", 100),
+      scope: [...regions, ...devices].join(" · ") || "Область наблюдения недоступна",
+      formulations,
+      seasonality: seasonality.business_context
+        ? `${ownerText(seasonality.business_context)} · месячная динамика ${ownerText(seasonality.from_date, "")} — ${ownerText(seasonality.to_date, "")}`
+        : "Сезонный бизнес-контекст недоступен; месячная динамика сохраняется отдельно.",
+      limitation: "Это нижняя граница возвращённых строк, а не число людей, кликов, показов или прогноз бюджета.",
+    },
+    cost: {
+      status: costAvailable ? "Доступно" : "Недоступно",
+      range: costAvailable ? `${Number(selectedRange.low).toLocaleString("ru-RU")}–${Number(selectedRange.high).toLocaleString("ru-RU")} ${ownerText(cost.currency, "")}` : "Сопоставимая стоимость недоступна",
+      source: costAvailable ? ownerText(COST_SOURCE_LABELS[String(cost.compact_source)], "Сопоставимый источник") : "Квалифицированный источник не найден",
+      observedAt: costAvailable ? ownerText(cost.as_of, "Дата недоступна", 100) : "Дата недоступна",
+      currency: costAvailable ? ownerText(cost.currency, "Не указана", 20) : "Недоступна",
+      vat: costAvailable ? cost.vat_treatment === "INCLUDED" ? "НДС включён" : cost.vat_treatment === "EXCLUDED" ? "Без НДС" : "Режим НДС неизвестен" : "Недоступен",
+      sample: costAvailable ? `${Number(sample.value).toLocaleString("ru-RU")} ${ownerText(sample.unit, "наблюдений", 50)}` : "Недоступна",
+      scope: costAvailable ? costScope || "Сопоставимый scope сохранён" : "Нет полностью сопоставимого scope",
+      limitation: costAvailable
+        ? "Выбран один совместимый источник без усреднения с другими; диапазон не является гарантией результата."
+        : gapReasons.join(" · ") || "Нет источника, прошедшего проверки фразы, географии, размещения, стратегии, сезона и выборки.",
+    },
+  };
+}
+
 function businessModelProjection(state: InternalState): OwnerJourneyProjection["businessModel"] {
   const contract = record(record(state.business_model).owner_contract);
   const fields = record(contract.fields);
@@ -764,6 +865,7 @@ async function project(
     businessOutcome: outcome(view, stage, unknowns),
     currentRecommendation: recommendation(view, stage),
     competitorMatrix: competitorMatrixProjection(view.state),
+    demandCostResearch: projectDemandCostResearchForOwner(view.state.analytics_evidence_snapshot),
     businessModel: businessModelProjection(view.state),
     materialUnknowns: unknowns,
     agentActivity: agent ? {
@@ -887,6 +989,7 @@ async function projectAccessOnly(
       rationale: access.history.explanation,
     },
     competitorMatrix: null,
+    demandCostResearch: null,
     businessModel: null,
     materialUnknowns: [...access.limitations],
     agentActivity: null,

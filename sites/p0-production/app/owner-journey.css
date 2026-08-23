@@ -63,6 +63,24 @@
 .owner-model-questions ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .owner-model-questions li { display: grid; gap: 2px; font-size: 7px; }
 .owner-model-questions li span { color: var(--owner-muted); }
+.owner-demand-cost { min-width: 0; margin-top: 18px; padding: 18px; border: 1px solid var(--owner-line); border-radius: 10px; background: #fbfdfb; }
+.owner-demand-cost > header { display: flex; gap: 16px; justify-content: space-between; align-items: flex-start; }
+.owner-demand-cost > header h2 { margin: 5px 0 0; font-size: 21px; }
+.owner-demand-cost > header > strong { padding: 7px 9px; border-radius: 999px; color: var(--owner-green-dark); background: var(--owner-soft); font-size: 8px; }
+.owner-demand-cost-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin-top: 12px; }
+.owner-demand-cost-grid > article { min-width: 0; padding: 13px; border: 1px solid var(--owner-line); border-radius: 8px; background: white; }
+.owner-demand-cost-grid > article > span { color: var(--owner-green-dark); font-size: 7px; font-weight: 850; text-transform: uppercase; }
+.owner-demand-cost-grid h3 { margin: 6px 0 9px; font-size: 13px; line-height: 1.35; }
+.owner-demand-cost-grid dl { display: grid; gap: 5px; margin: 0; }
+.owner-demand-cost-grid dl div { padding-top: 5px; border-top: 1px solid #edf1ee; }
+.owner-demand-cost-grid dt { color: var(--owner-muted); font-size: 6px; }
+.owner-demand-cost-grid dd { margin: 2px 0 0; font-size: 7px; line-height: 1.4; overflow-wrap: anywhere; }
+.owner-demand-cost-grid article > p { margin: 9px 0 0; color: var(--owner-muted); font-size: 7px; line-height: 1.45; }
+.owner-demand-formulations { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 10px; }
+.owner-demand-formulations h3 { grid-column: 1 / -1; margin: 0 0 2px; font-size: 10px; }
+.owner-demand-formulations article { display: grid; grid-template-columns: 92px 1fr auto; gap: 7px; align-items: center; min-width: 0; padding: 8px 9px; border: 1px solid var(--owner-line); border-radius: 7px; background: white; }
+.owner-demand-formulations span, .owner-demand-formulations small { color: var(--owner-muted); font-size: 6px; }
+.owner-demand-formulations strong { min-width: 0; font-size: 7px; overflow-wrap: anywhere; }
 .owner-competitor-matrix { min-width: 0; margin-top: 18px; padding: 18px; border: 1px solid var(--owner-line); border-radius: 10px; background: #fbfdfb; }
 .owner-competitor-matrix > header { display: flex; gap: 16px; justify-content: space-between; align-items: flex-start; }
 .owner-competitor-matrix > header h2 { margin: 5px 0 0; font-size: 21px; }

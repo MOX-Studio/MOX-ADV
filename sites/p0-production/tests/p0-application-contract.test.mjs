@@ -16,7 +16,7 @@ import {
 } from "../lib/campaign-package-execution.ts";
 import { sealCuratedPlaybookRelease } from "../lib/campaign-playbook.ts";
 import { collectOfficialWordstatBatch } from "../lib/market-evidence.ts";
-import { P0OwnerJourney } from "../lib/p0-owner-journey.ts";
+import { P0OwnerJourney, projectDemandCostResearchForOwner } from "../lib/p0-owner-journey.ts";
 
 class JsonDurableStore {
   constructor(path) {
@@ -419,6 +419,45 @@ async function approveStrategy(application, result, overrides = {}) {
   });
 }
 
+test("owner demand and cost projection preserves business provenance without technical identifiers", () => {
+  const projection = projectDemandCostResearchForOwner({
+    market_evidence: {
+      batch_finished_at: "2026-08-21T10:00:00.000Z",
+      research_plan: {
+        scope: {
+          regions: [{ id: 213, name: "Москва" }],
+          devices: ["all"],
+          seasonality: { business_context: "Спрос перед выставкой", from_date: "2023-08-01", to_date: "2026-07-31" },
+        },
+        dimensions: [
+          { dimension: "OFFER_LANGUAGE", status: "PLANNED" },
+          { dimension: "BRAND", status: "UNAVAILABLE" },
+        ],
+        seeds: [{ dimension: "OFFER_LANGUAGE", phrase: "участие в выставке", seed_id: "technical-seed-id" }],
+      },
+      frequency: { status: "PARTIAL", observed_unique_count: { value: 67 } },
+      cost: {
+        status: "AVAILABLE",
+        compact_source: "DIRECT_HISTORY_OWN_EMPIRICAL",
+        as_of: "2026-08-20T00:00:00.000Z",
+        currency: "RUB",
+        vat_treatment: "INCLUDED",
+        sample_size: { unit: "clicks", value: 42 },
+        range: { low: 110, high: 170 },
+        scope: { comparison: { phrase: "Точное совпадение", geography: "Москва", placement: "Результаты поиска", strategy: "Максимум кликов", season: "2026-06-01 — 2026-08-18" }, keyword_id: "technical-keyword-id" },
+        missing_or_conflict_reasons: [],
+      },
+    },
+  });
+
+  assert.equal(projection.demand.status, "Частично");
+  assert.match(projection.demand.conclusion, /нижняя граница: 67/iu);
+  assert.equal(projection.cost.range, "110–170 RUB");
+  assert.equal(projection.cost.vat, "НДС включён");
+  assert.equal(projection.cost.sample, "42 clicks");
+  assert.doesNotMatch(JSON.stringify(projection), /technical|keyword_id|seed_id/iu);
+});
+
 async function marketEvidenceInput() {
   const top = JSON.parse(await readFile(new URL("./fixtures/wordstat/top-requests.json", import.meta.url), "utf8"));
   const dynamics = JSON.parse(await readFile(new URL("./fixtures/wordstat/dynamics.json", import.meta.url), "utf8"));
@@ -487,6 +526,21 @@ test("authoritative application collects market evidence only for a Model revisi
   assert.equal(result.state.recommendation_set.drafts[0].publish_eligibility, "BLOCKED_HARD");
   assert.equal(result.state.recommendation_set.candidate_audit.some((candidate) => candidate.reason_code === "HIDDEN:PLAYBOOK_NO_ACTIVE_APPROVED_RELEASE"), true);
   assert.equal(result.state.recommendation_set.drafts.every((draft) => draft.market_evidence.frequency.snapshot_batch_id === result.state.analytics_evidence_snapshot.market_evidence.snapshot_batch_id), true);
+
+  const agentContract = await application.agentContract("owner", "COORDINATE_OWNER_JOURNEY");
+  const agentRead = await application.executeAgentTool({
+    owner_key: "owner",
+    run_id: "agent-demand-cost-summary",
+    objective: agentContract.objective,
+    authority: agentContract.authority,
+    call: { id: "read-demand-cost", name: "p0_read_owner_journey", arguments: { expected_revision: result.revision } },
+    observation_sequence: 1,
+  });
+  assert.equal(agentRead.observation.facts.demand_cost_research.demand.source, "Яндекс Wordstat");
+  assert.equal(agentRead.observation.facts.demand_cost_research.demand.observed_lower_bound, 67);
+  assert.equal(agentRead.observation.facts.demand_cost_research.cost.status, "UNAVAILABLE");
+  assert.equal(agentRead.observation.facts.demand_cost_research.cost.range, null);
+  assert.doesNotMatch(JSON.stringify(agentRead.observation.facts.demand_cost_research), /keyword_id|campaign_id|ad_group_id/iu);
 });
 
 test("application persists focus cards and an owner focus edit revises focus lineage and invalidates downstream artifacts", async (t) => {

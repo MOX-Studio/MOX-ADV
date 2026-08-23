@@ -12,7 +12,7 @@ import {
   FOCUS_OPPORTUNITY_SCHEMA,
   OFFER_CATALOG_SCHEMA,
 } from "../lib/business-model.ts";
-import { collectOfficialWordstatBatch } from "../lib/market-evidence.ts";
+import { buildDemandCostResearchPlan, collectOfficialWordstatBatch } from "../lib/market-evidence.ts";
 
 function fixture({ sampled = false, sensitive = false, lag = 0, missing = [], competitors = [] } = {}) {
   return {
@@ -324,7 +324,22 @@ test("persists official scoped demand and qualified cost inside the content-addr
     return new Response(JSON.stringify(path.endsWith("topRequests") ? topRequests : path.endsWith("dynamics") ? dynamics : regions));
   }, () => `2026-08-21T10:04:${String(tick++).padStart(2, "0")}.000Z`);
   const input = fixture();
+  const researchPlan = await buildDemandCostResearchPlan({
+    generatedAt: "2026-08-21T10:04:00.000Z",
+    offerLanguage: "участие в промышленной выставке",
+    customerProblems: ["найти оптовых покупателей"],
+    highIntentActions: ["оставить заявку на участие"],
+    brandTerms: ["Owner Expo"],
+    exclusions: ["вакансии"],
+    regionIds: [213],
+    regionNames: ["Москва"],
+    device: "desktop",
+    seasonality: "Спрос до выставки",
+    dynamicsFromDate: "2024-01-01",
+    dynamicsToDate: "2026-07-31",
+  });
   input.context.market_evidence_input = {
+    research_plan: researchPlan,
     wordstat_batch: batch,
     demand_clusters: [{ cluster_id: "cluster-participation", semantic_key: { product: "выставка", need: "участие", intent: "commercial", offer: "стенд" } }],
     cost_observations: [{
@@ -338,11 +353,13 @@ test("persists official scoped demand and qualified cost inside the content-addr
       vat_treatment: "INCLUDED",
       sample_size: { unit: "clicks", value: 42 },
       range: { low: 110, high: 170, kind: "EMPIRICAL_IQR" },
-      qualification: { first_party: true, clicks: 42 },
+      qualification: { first_party: true, complete_direct_audit: true, clicks: 42 },
     }],
   };
 
   const snapshot = await buildAnalyticsEvidence(input);
+  assert.equal(snapshot.market_evidence.research_plan.plan_id, researchPlan.plan_id);
+  assert.ok(snapshot.market_evidence.research_plan.seeds.length >= 4);
   assert.equal(snapshot.market_evidence.frequency.status, "AVAILABLE");
   assert.deepEqual(snapshot.market_evidence.frequency.observed_unique_count, { value: 67, semantics: "LOWER_BOUND_OBSERVED_TOP_ROWS" });
   assert.equal(snapshot.market_evidence.cost.compact_source, "DIRECT_HISTORY_OWN_EMPIRICAL");

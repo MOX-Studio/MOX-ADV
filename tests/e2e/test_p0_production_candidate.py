@@ -217,6 +217,21 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                         "heading", name="От бизнес-цели до готовых кампаний", exact=True
                     ).count(),
                 )
+                demand_cost = page.locator(".owner-demand-cost")
+                self.assertTrue(
+                    demand_cost.get_by_role(
+                        "heading", name="Исследование нескольких формулировок", exact=True
+                    ).is_visible()
+                )
+                self.assertGreaterEqual(
+                    demand_cost.locator(".owner-demand-formulations article").count(), 5
+                )
+                self.assertIn("Яндекс Wordstat", demand_cost.inner_text())
+                self.assertIn("нижняя граница", demand_cost.inner_text().lower())
+                self.assertIn("110–170 RUB", demand_cost.inner_text())
+                self.assertIn("НДС включён", demand_cost.inner_text())
+                self.assertIn("42 clicks", demand_cost.inner_text())
+                self.assertNotIn("keyword_id", demand_cost.inner_text())
                 competitor_matrix = page.locator(".owner-competitor-matrix")
                 self.assertTrue(
                     competitor_matrix.get_by_role(

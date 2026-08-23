@@ -62,8 +62,11 @@ import { resolveHostnameWithDnsJson } from "./public-dns.ts";
 import { researchPublicFirstPartySite } from "./site-research.ts";
 import { cleanText } from "./text.ts";
 import {
+  buildDemandCostResearchPlan,
+  buildOwnHistoryCostObservation,
   collectCurrentAuctionCostObservation,
   collectOfficialWordstatBatch,
+  qualifyDirectComparableCandidates,
   unavailableWordstatBatch,
   type CostObservation,
   type MarketEvidenceInput,
@@ -451,16 +454,17 @@ async function readMetrika() {
 }
 
 async function readMarketEvidence({
+  ownerKey,
   model,
   context,
   generatedAt,
 }: {
+  ownerKey: string;
   model: Record<string, unknown>;
   context: P0Context;
   generatedAt: string;
 }): Promise<MarketEvidenceInput> {
   const runtime = runtimeEnv();
-  const phrase = cleanText(String(model.product ?? ""), 500);
   const regionIds = String(runtime.YANDEX_WORDSTAT_REGION_IDS ?? "")
     .split(",")
     .map((item) => Number(item.trim()))
@@ -469,109 +473,132 @@ async function readMarketEvidence({
     .split(",")
     .map((item) => cleanText(item, 100))
     .filter(Boolean);
-  const configuredDevice = String(runtime.YANDEX_WORDSTAT_DEVICE ?? "all") as WordstatSeed["device"];
-  const clusterId = "demand-cluster-primary";
-  const demandClusters = [{
-    cluster_id: clusterId,
+  const requestedDevice = String(runtime.YANDEX_WORDSTAT_DEVICE ?? "all");
+  const configuredDevice = (["all", "desktop", "phone", "tablet"].includes(requestedDevice) ? requestedDevice : "all") as WordstatSeed["device"];
+  const deviceConfigurationInvalid = requestedDevice !== configuredDevice;
+  const observedDate = new Date(generatedAt);
+  const dynamicsTo = new Date(Date.UTC(observedDate.getUTCFullYear(), observedDate.getUTCMonth(), 0));
+  const dynamicsFrom = new Date(Date.UTC(dynamicsTo.getUTCFullYear() - 3, dynamicsTo.getUTCMonth(), 1));
+  const researchPlan = await buildDemandCostResearchPlan({
+    generatedAt,
+    offerLanguage: cleanText(String(model.product ?? ""), 500),
+    customerProblems: [model.customer_context, model.value].map((item) => cleanText(String(item ?? ""), 500)).filter(Boolean),
+    highIntentActions: [model.qualified_outcome, model.qualified_result].map((item) => cleanText(String(item ?? ""), 500)).filter(Boolean),
+    brandTerms: String(runtime.P0_DEMAND_BRAND_TERMS ?? "").split(",").map((item) => cleanText(item, 100)).filter(Boolean),
+    exclusions: [model.exclusions, model.key_constraints]
+      .flatMap((item) => String(item ?? "").split(/[;,\n]/u))
+      .map((item) => cleanText(item, 200))
+      .filter(Boolean),
+    regionIds,
+    regionNames,
+    device: configuredDevice,
+    seasonality: cleanText(String(model.seasonality ?? ""), 500),
+    dynamicsFromDate: dynamicsFrom.toISOString().slice(0, 10),
+    dynamicsToDate: dynamicsTo.toISOString().slice(0, 10),
+    minimumClickSample: Number(runtime.P0_COMPARABLE_MIN_CLICKS ?? 3),
+  });
+  const demandClusters = researchPlan.seeds.map((seed) => ({
+    cluster_id: seed.cluster_id,
     semantic_key: {
-      product: phrase,
-      need: cleanText(String(model.audience ?? ""), 500),
-      intent: cleanText(String(model.qualified_result ?? ""), 500),
-      offer: cleanText(String(model.value ?? ""), 500),
+      product: seed.dimension === "OFFER_LANGUAGE" || seed.dimension === "NON_BRAND" ? seed.phrase : cleanText(String(model.product ?? ""), 500),
+      need: seed.dimension === "CUSTOMER_PROBLEM" ? seed.phrase : cleanText(String(model.customer_context ?? model.audience ?? ""), 500),
+      intent: seed.dimension === "HIGH_INTENT_ACTION" ? seed.phrase : cleanText(String(model.qualified_outcome ?? model.qualified_result ?? ""), 500),
+      offer: seed.dimension === "BRAND" ? seed.phrase : cleanText(String(model.value ?? ""), 500),
     },
-  }];
+    classification: {
+      version: "demand-relevance-rules-v1",
+      excluded_tokens: researchPlan.exclusions,
+    },
+  }));
   const configurationMissing = context.access_profile?.evidence_scope?.wordstat !== "AVAILABLE"
-    || !phrase
     || !runtime.YANDEX_WORDSTAT_OAUTH_TOKEN
     || !runtime.YANDEX_WORDSTAT_CLIENT_ID
     || regionIds.length === 0
     || regionNames.length !== regionIds.length
-    || !["all", "desktop", "phone", "tablet"].includes(configuredDevice);
-  let wordstatBatch;
-  if (configurationMissing) {
-    wordstatBatch = await unavailableWordstatBatch(
-      "Scoped Wordstat authority, phrase, explicit regions or device is unavailable for this Model revision.",
-      generatedAt,
-    );
-  } else {
-    const dynamicsPhrase = phrase
-      .replace(/[!"[\]()|+]/gu, " ")
-      .split(/\s+/u)
-      .map((item) => item.replace(/[^\p{L}\p{N}-]/gu, ""))
-      .filter(Boolean)
-      .map((item) => `+${item}`)
-      .join(" ");
-    const observedDate = new Date(generatedAt);
-    const dynamicsTo = new Date(Date.UTC(observedDate.getUTCFullYear(), observedDate.getUTCMonth(), 0));
-    const dynamicsFrom = new Date(Date.UTC(dynamicsTo.getUTCFullYear() - 3, dynamicsTo.getUTCMonth(), 1));
-    wordstatBatch = await collectOfficialWordstatBatch({
-      token: runtime.YANDEX_WORDSTAT_OAUTH_TOKEN ?? "",
-      clientId: runtime.YANDEX_WORDSTAT_CLIENT_ID ?? "",
-      seeds: [{
-        seed_id: "primary-product-demand",
-        cluster_id: clusterId,
-        phrase,
-        dynamics_phrase: dynamicsPhrase,
-        dynamics_period: "monthly",
-        dynamics_from_date: dynamicsFrom.toISOString().slice(0, 10),
-        dynamics_to_date: dynamicsTo.toISOString().slice(0, 10),
-        operator_profile: "BROAD_CONTAINING",
-        region_ids: regionIds,
-        region_names: regionNames,
-        device: configuredDevice,
-      }],
-    }, fetch, now);
-  }
-  const costObservations: CostObservation[] = [{
-    observation_id: `live4-preflight:${generatedAt}`,
-    source: "LEGACY_LIVE4_SCENARIO",
-    status: "UNAVAILABLE",
-    scenario: "account-specific documented Live 4 capability preflight",
-    scope: { account: cleanText(String(runtime.YANDEX_DIRECT_CLIENT_LOGIN ?? ""), 255) },
-    as_of: generatedAt,
-    currency: cleanText(String(runtime.YANDEX_DIRECT_CURRENCY ?? "RUB"), 10),
-    vat_treatment: "UNKNOWN",
-    sample_size: { unit: "forecast_phrases", value: 0 },
-    range: null,
-    qualification: { account_specific: true, capability_status: "UNAVAILABLE", exact_scope: false },
-    unavailable_reason: "LIVE4_CAPABILITY_PREFLIGHT_NOT_CONFIGURED",
-  }];
-  const comparableKeywordId = cleanText(String(runtime.P0_COMPARABLE_DIRECT_KEYWORD_ID ?? ""), 100);
-  if (comparableKeywordId) {
+    || deviceConfigurationInvalid;
+  const wordstatBatch = configurationMissing
+    ? await unavailableWordstatBatch(
+        "Scoped Wordstat authority is unavailable for this bounded research plan.",
+        generatedAt,
+      )
+    : await collectOfficialWordstatBatch({
+        token: runtime.YANDEX_WORDSTAT_OAUTH_TOKEN ?? "",
+        clientId: runtime.YANDEX_WORDSTAT_CLIENT_ID ?? "",
+        seeds: researchPlan.seeds,
+      }, fetch, now);
+
+  const direct = record(context.direct);
+  const audit = record(direct.audit);
+  const artifactStore = new D1DirectAuditStore(runtime.DB);
+  const checkpoint = await artifactStore.loadCurrent(ownerKey, String(direct.account ?? ""));
+  const checkpointReferences = checkpoint && checkpoint.audit_id === audit.audit_id
+    ? [
+        ...Object.values(checkpoint.collections).flatMap((collection) => collection.artifact_references),
+        ...checkpoint.reports.flatMap((report) => report.artifact_reference ? [report.artifact_reference] : []),
+      ]
+    : [];
+  const references = checkpointReferences.length
+    ? checkpointReferences
+    : Array.isArray(audit.artifact_references) ? audit.artifact_references.map(record) : [];
+  const artifacts = (await Promise.all(references.map((reference) => artifactStore.getArtifact(String(reference.artifact_id ?? "")))))
+    .filter((artifact): artifact is NonNullable<typeof artifact> => artifact !== null);
+  const comparable = await qualifyDirectComparableCandidates({
+    audit,
+    artifacts,
+    targetPhrases: researchPlan.seeds.map((seed) => seed.phrase),
+    targetRegionIds: regionIds,
+    targetRegionNames: regionNames,
+    targetPlacement: researchPlan.comparable_cost_scope.placement,
+    targetStrategy: researchPlan.comparable_cost_scope.strategy,
+    observedAt: generatedAt,
+    minimumClicks: researchPlan.comparable_cost_scope.minimum_click_sample,
+  });
+  const capability = record(direct.capability_snapshot);
+  const currency = cleanText(String(capability.currency ?? runtime.YANDEX_DIRECT_CURRENCY ?? "RUB"), 10);
+  const trafficVolumes = String(runtime.P0_COMPARABLE_TRAFFIC_VOLUMES ?? "")
+    .split(",")
+    .map(Number)
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const costObservations: CostObservation[] = [];
+  for (const candidate of comparable.qualified.slice(0, 3)) {
     costObservations.push(await collectCurrentAuctionCostObservation({
       token: runtime.YANDEX_DIRECT_OAUTH_TOKEN ?? "",
       account: runtime.YANDEX_DIRECT_CLIENT_LOGIN ?? "",
-      keyword_id: comparableKeywordId,
-      expected_phrase: phrase,
-      currency: cleanText(String(runtime.YANDEX_DIRECT_CURRENCY ?? "RUB"), 10),
-      vat_treatment: runtime.YANDEX_DIRECT_INCLUDE_VAT === "true" ? "INCLUDED" : "EXCLUDED",
-      traffic_volumes: String(runtime.P0_COMPARABLE_TRAFFIC_VOLUMES ?? "")
-        .split(",")
-        .map(Number)
-        .filter((value) => Number.isFinite(value) && value > 0),
-      comparability: {
-        geography: runtime.P0_COMPARABLE_GEOGRAPHY === "MAPPED" ? "MAPPED" : runtime.P0_COMPARABLE_GEOGRAPHY === "SAME" ? "SAME" : "UNKNOWN",
-        placement: runtime.P0_COMPARABLE_PLACEMENT === "SAME" ? "SAME" : "UNKNOWN",
-        strategy: runtime.P0_COMPARABLE_STRATEGY === "SAME" ? "SAME" : "UNKNOWN",
-        season: runtime.P0_COMPARABLE_SEASON === "SAME" ? "SAME" : "UNKNOWN",
-      },
+      keyword_id: candidate.keyword_id,
+      candidate_key: candidate.candidate_key,
+      expected_phrase: candidate.phrase,
+      currency,
+      vat_treatment: "UNKNOWN",
+      traffic_volumes: trafficVolumes,
+      comparability: { geography: "SAME", placement: "SAME", strategy: "SAME", season: "SAME" },
+      comparison_scope: candidate.owner_scope,
+      complete_direct_audit: true,
+      sample_clicks: candidate.sample.clicks,
     }, fetch, now));
+    costObservations.push(buildOwnHistoryCostObservation(candidate, {
+      observedAt: generatedAt,
+      currency,
+      vatTreatment: "INCLUDED",
+    }));
   }
-  costObservations.push({
-    observation_id: `direct-history:${generatedAt}`,
-    source: "DIRECT_HISTORY_OWN_EMPIRICAL",
-    status: "UNAVAILABLE",
-    scenario: "comparable first-party day-level CPC P25-P75",
-    scope: { account: cleanText(String(runtime.YANDEX_DIRECT_CLIENT_LOGIN ?? ""), 255), phrase: "UNKNOWN", geography: "UNKNOWN", placement: "UNKNOWN", strategy: "UNKNOWN", season: "UNKNOWN" },
-    as_of: generatedAt,
-    currency: cleanText(String(runtime.YANDEX_DIRECT_CURRENCY ?? "RUB"), 10),
-    vat_treatment: "UNKNOWN",
-    sample_size: { unit: "clicks", value: 0 },
-    range: null,
-    qualification: { first_party: true, clicks: 0 },
-    unavailable_reason: "DIRECT_HISTORY_COMPARABLE_REPORT_NOT_CONFIGURED",
-  });
+  if (!costObservations.length) {
+    costObservations.push({
+      observation_id: `direct-comparable-unavailable:${researchPlan.plan_id}`,
+      source: "DIRECT_HISTORY_OWN_EMPIRICAL",
+      status: "UNAVAILABLE",
+      scenario: "Квалификация сопоставимой собственной истории",
+      scope: { phrase: "UNKNOWN", geography: "UNKNOWN", placement: "UNKNOWN", strategy: "UNKNOWN", season: "UNKNOWN" },
+      as_of: generatedAt,
+      currency,
+      vat_treatment: "UNKNOWN",
+      sample_size: { unit: "clicks", value: 0 },
+      range: null,
+      qualification: { first_party: true, complete_direct_audit: audit.status === "COMPLETE", clicks: 0 },
+      unavailable_reason: comparable.reason ?? "NO_QUALIFIED_PRELAUNCH_COST_SOURCE",
+    });
+  }
   return {
+    research_plan: researchPlan,
     wordstat_batch: wordstatBatch,
     demand_clusters: demandClusters,
     cost_observations: costObservations,

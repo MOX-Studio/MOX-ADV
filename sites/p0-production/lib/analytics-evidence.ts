@@ -20,9 +20,9 @@ import {
   type CompetitorMatrixRowInput,
 } from "./competitor-research.ts";
 
-export const ANALYTICS_EVIDENCE_SCHEMA = "p0-analytics-evidence-v4";
-export const ANALYTICS_EVIDENCE_CONTRACT_VERSION = "4.0.0";
-const LEGACY_ANALYTICS_EVIDENCE_SCHEMAS = new Set(["p0-analytics-evidence-v1", "p0-analytics-evidence-v2", "p0-analytics-evidence-v3"]);
+export const ANALYTICS_EVIDENCE_SCHEMA = "p0-analytics-evidence-v5";
+export const ANALYTICS_EVIDENCE_CONTRACT_VERSION = "5.0.0";
+const LEGACY_ANALYTICS_EVIDENCE_SCHEMAS = new Set(["p0-analytics-evidence-v1", "p0-analytics-evidence-v2", "p0-analytics-evidence-v3", "p0-analytics-evidence-v4"]);
 const CANONICALIZATION_VERSION = "mox-canonical-json-v1";
 const NORMALIZER_VERSION = "mox-evidence-normalizer-v2";
 const REDACTION_VERSION = "mox-artifact-redaction-v1";

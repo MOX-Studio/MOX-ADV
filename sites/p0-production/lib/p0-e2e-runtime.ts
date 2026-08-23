@@ -2,7 +2,7 @@ import { AccessReadinessService } from "./access-readiness.ts";
 import { sealCuratedPlaybookRelease } from "./campaign-playbook.ts";
 import { P0_E2E_FIXTURE_SCENARIO } from "./p0-e2e-boundary.ts";
 import type { LandingAdvisoryAdapter } from "./landing-advisory.ts";
-import { collectOfficialWordstatBatch } from "./market-evidence.ts";
+import { buildDemandCostResearchPlan, collectOfficialWordstatBatch, type MarketEvidenceInput } from "./market-evidence.ts";
 import {
   correctSuspendedCampaignAndResubmitModeration,
   createSuspendedCampaign,
@@ -157,24 +157,26 @@ function fixtureContext(observedAt = "2026-08-21T10:00:00.000Z"): P0Context {
   };
 }
 
-async function fixtureMarketEvidence() {
+async function fixtureMarketEvidence(): Promise<MarketEvidenceInput> {
   let tick = 0;
+  const researchPlan = await buildDemandCostResearchPlan({
+    generatedAt: "2026-08-21T10:00:00.000Z",
+    offerLanguage: "участие в промышленной выставке",
+    customerProblems: ["найти новых оптовых покупателей"],
+    highIntentActions: ["оставить заявку на участие"],
+    brandTerms: ["MOX Expo"],
+    exclusions: ["вакансии", "бесплатно"],
+    regionIds: [213],
+    regionNames: ["Москва"],
+    device: "all",
+    seasonality: "Основной спрос перед датой выставки",
+    dynamicsFromDate: "2023-08-01",
+    dynamicsToDate: "2026-07-31",
+  });
   const wordstatBatch = await collectOfficialWordstatBatch({
     token: "e2e-fixture-token",
     clientId: "e2e-fixture-client",
-    seeds: [{
-      seed_id: "seed-participation",
-      cluster_id: "cluster-participation",
-      phrase: "участие в выставке",
-      dynamics_phrase: "+участие +выставке",
-      dynamics_period: "monthly",
-      dynamics_from_date: "2024-01-01",
-      dynamics_to_date: "2026-07-31",
-      operator_profile: "BROAD_CONTAINING",
-      region_ids: [213],
-      region_names: ["Москва"],
-      device: "desktop",
-    }],
+    seeds: researchPlan.seeds,
   }, async (input) => {
     const path = new URL(String(input)).pathname;
     const value = path.endsWith("topRequests")
@@ -202,17 +204,38 @@ async function fixtureMarketEvidence() {
     });
   }, () => `2026-08-21T10:00:${String(tick++).padStart(2, "0")}.000Z`);
   return {
+    research_plan: researchPlan,
     wordstat_batch: wordstatBatch,
-    demand_clusters: [{
-      cluster_id: "cluster-participation",
+    demand_clusters: researchPlan.seeds.map((seed) => ({
+      cluster_id: seed.cluster_id,
       semantic_key: {
         product: "выставка",
-        need: "участие",
-        intent: "commercial",
-        offer: "стенд",
+        need: seed.dimension === "CUSTOMER_PROBLEM" ? seed.phrase : "участие",
+        intent: seed.dimension === "HIGH_INTENT_ACTION" ? seed.phrase : "коммерческое действие",
+        offer: seed.phrase,
       },
+      classification: { version: "demand-relevance-rules-v1", excluded_tokens: researchPlan.exclusions },
+    })),
+    cost_observations: [{
+      observation_id: "fixture-comparable-history",
+      source: "DIRECT_HISTORY_OWN_EMPIRICAL",
+      status: "AVAILABLE",
+      scenario: "Собственный дневной CPC, межквартильный диапазон",
+      scope: {
+        phrase: "EXACT",
+        geography: "SAME",
+        placement: "SAME",
+        strategy: "SAME",
+        season: "SAME",
+        comparison: { phrase: "Точное совпадение", geography: "Москва", placement: "Результаты поиска", strategy: "Максимум кликов", season: "2026-06-01 — 2026-08-18" },
+      },
+      as_of: "2026-08-21T10:00:00.000Z",
+      currency: "RUB",
+      vat_treatment: "INCLUDED",
+      sample_size: { unit: "clicks", value: 42 },
+      range: { low: 110, high: 170, kind: "EMPIRICAL_IQR" },
+      qualification: { first_party: true, complete_direct_audit: true, clicks: 42 },
     }],
-    cost_observations: [],
   };
 }
 

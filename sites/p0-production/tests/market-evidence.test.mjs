@@ -4,13 +4,16 @@ import test from "node:test";
 
 import {
   WORDSTAT_ENDPOINTS,
+  buildDemandCostResearchPlan,
   buildMarketEvidence,
+  buildOwnHistoryCostObservation,
   buildScopedDemandEvidence,
   classifyDemandRelationship,
   collectCurrentAuctionCostObservation,
   collectOfficialWordstatBatch,
   normalizeDeliveryKey,
   packDemandClusters,
+  qualifyDirectComparableCandidates,
   selectCostEvidence,
   unavailableWordstatBatch,
 } from "../lib/market-evidence.ts";
@@ -41,6 +44,137 @@ const clusters = [
   { cluster_id: "cluster-participation", semantic_key: { product: "выставка", need: "участие", intent: "commercial", offer: "стенд" } },
   { cluster_id: "cluster-stand", semantic_key: { product: "выставка", need: "стенд", intent: "commercial", offer: "участие" } },
 ];
+
+test("builds a bounded typed multi-seed demand and comparable-cost research plan", async () => {
+  const plan = await buildDemandCostResearchPlan({
+    generatedAt: "2026-08-21T10:00:00.000Z",
+    offerLanguage: "MOX Expo участие со стендом в промышленной выставке",
+    customerProblems: ["Найти новых оптовых покупателей"],
+    highIntentActions: ["Оставить заявку на участие"],
+    brandTerms: ["MOX Expo"],
+    exclusions: ["вакансии", "бесплатно"],
+    regionIds: [213],
+    regionNames: ["Москва"],
+    device: "all",
+    seasonality: "Основной спрос за три месяца до выставки",
+    dynamicsFromDate: "2023-08-01",
+    dynamicsToDate: "2026-07-31",
+  });
+
+  assert.equal(plan.schema_version, "demand-cost-research-plan-v1");
+  assert.match(plan.plan_id, /^sha256:[a-f0-9]{64}$/u);
+  assert.ok(plan.seeds.length >= 4);
+  assert.ok(plan.seeds.some((item) => item.dimension === "OFFER_LANGUAGE"));
+  assert.ok(plan.seeds.some((item) => item.dimension === "CUSTOMER_PROBLEM"));
+  assert.ok(plan.seeds.some((item) => item.dimension === "HIGH_INTENT_ACTION"));
+  assert.ok(plan.seeds.some((item) => item.dimension === "BRAND"));
+  assert.ok(plan.seeds.some((item) => item.dimension === "NON_BRAND"));
+  assert.equal(plan.seeds.find((item) => item.dimension === "BRAND").phrase, "MOX Expo участие со стендом в промышленной выставке");
+  assert.equal(plan.seeds.find((item) => item.dimension === "NON_BRAND").phrase, "участие со стендом в промышленной выставке");
+  assert.deepEqual(plan.exclusions, ["бесплатно", "вакансии"]);
+  assert.deepEqual(plan.scope.regions, [{ id: 213, name: "Москва" }]);
+  assert.deepEqual(plan.scope.devices, ["all"]);
+  assert.equal(plan.scope.seasonality.business_context, "Основной спрос за три месяца до выставки");
+  assert.equal(plan.quota.planned_provider_calls, plan.seeds.length * 3);
+  assert.ok(plan.quota.planned_provider_calls <= plan.quota.maximum_provider_calls);
+  assert.ok(plan.seeds.every((item) => item.region_ids[0] === 213 && item.device === "all"));
+});
+
+test("qualifies comparable Direct candidates only from one complete audit before cost reads", async () => {
+  const completeAudit = {
+    status: "COMPLETE",
+    graph_complete: true,
+    methods_not_read: [],
+    observed_at: "2026-08-21T10:00:00.000Z",
+  };
+  const artifacts = [
+    { collection: "campaigns", objects: [{
+      Id: "campaign-technical-id",
+      UnifiedCampaign: { BiddingStrategy: {
+        Search: { BiddingStrategyType: "WB_MAXIMUM_CLICKS", PlacementTypes: { SearchResults: "YES", ProductGallery: "NO" } },
+        Network: { BiddingStrategyType: "SERVING_OFF" },
+      } },
+    }] },
+    { collection: "adgroups", objects: [{ Id: "group-technical-id", CampaignId: "campaign-technical-id", RegionIds: [213] }] },
+    { collection: "keywords", objects: [{ Id: "keyword-technical-id", CampaignId: "campaign-technical-id", AdGroupId: "group-technical-id", Keyword: "участие в выставке", State: "ON", Status: "ACCEPTED" }] },
+    {
+      report_type: "SEARCH_QUERY_PERFORMANCE_REPORT",
+      exact_request: { params: { IncludeVAT: "YES", SelectionCriteria: { DateFrom: "2026-06-01", DateTo: "2026-08-18" } } },
+      tsv: [
+        "Date\tCampaignId\tAdGroupId\tQuery\tMatchedKeyword\tCriteriaId\tClicks\tCost",
+        "2026-08-01\tcampaign-technical-id\tgroup-technical-id\tзапрос один\tучастие в выставке\tkeyword-technical-id\t2\t240",
+        "2026-08-02\tcampaign-technical-id\tgroup-technical-id\tзапрос два\tучастие в выставке\tkeyword-technical-id\t3\t450",
+      ].join("\n"),
+    },
+  ];
+  const candidates = await qualifyDirectComparableCandidates({
+    audit: completeAudit,
+    artifacts,
+    targetPhrases: ["участие в выставке"],
+    targetRegionIds: [213],
+    targetRegionNames: ["Москва"],
+    targetPlacement: "SEARCH_RESULTS",
+    targetStrategy: "WB_MAXIMUM_CLICKS",
+    observedAt: "2026-08-21T10:00:00.000Z",
+    minimumClicks: 3,
+  });
+
+  assert.equal(candidates.status, "AVAILABLE");
+  assert.equal(candidates.qualified.length, 1);
+  assert.equal(candidates.qualified[0].keyword_id, "keyword-technical-id");
+  assert.deepEqual(candidates.qualified[0].qualification, {
+    complete_direct_audit: true,
+    phrase: "SAME",
+    geography: "SAME",
+    placement: "SAME",
+    strategy: "SAME",
+    season: "SAME",
+    sample: "SUFFICIENT",
+  });
+  assert.equal(candidates.qualified[0].sample.clicks, 5);
+  assert.deepEqual(candidates.qualified[0].sample.daily_cpc, [120, 150]);
+  assert.doesNotMatch(JSON.stringify(candidates.owner_summary), /technical-id/iu);
+
+  const history = buildOwnHistoryCostObservation(candidates.qualified[0], {
+    observedAt: "2026-08-21T10:00:00.000Z",
+    currency: "RUB",
+    vatTreatment: "INCLUDED",
+  });
+  assert.equal(history.status, "AVAILABLE");
+  assert.deepEqual(history.range, { low: 120, high: 150, kind: "EMPIRICAL_IQR" });
+  assert.doesNotMatch(JSON.stringify(history), /technical-id|keyword_id|campaign_id|ad_group_id/iu);
+
+  const partial = await qualifyDirectComparableCandidates({
+    audit: { ...completeAudit, status: "PARTIAL" },
+    artifacts,
+    targetPhrases: ["участие в выставке"],
+    targetRegionIds: [213],
+    targetRegionNames: ["Москва"],
+    targetPlacement: "SEARCH_RESULTS",
+    targetStrategy: "WB_MAXIMUM_CLICKS",
+    observedAt: "2026-08-21T10:00:00.000Z",
+    minimumClicks: 3,
+  });
+  assert.equal(partial.status, "UNAVAILABLE");
+  assert.equal(partial.qualified.length, 0);
+  assert.equal(partial.reason, "COMPLETE_DIRECT_AUDIT_REQUIRED");
+
+  const unknownVat = structuredClone(artifacts);
+  unknownVat[3].exact_request.params.IncludeVAT = "NO";
+  const rejectedHistory = await qualifyDirectComparableCandidates({
+    audit: completeAudit,
+    artifacts: unknownVat,
+    targetPhrases: ["участие в выставке"],
+    targetRegionIds: [213],
+    targetRegionNames: ["Москва"],
+    targetPlacement: "SEARCH_RESULTS",
+    targetStrategy: "WB_MAXIMUM_CLICKS",
+    observedAt: "2026-08-21T10:00:00.000Z",
+    minimumClicks: 3,
+  });
+  assert.equal(rejectedHistory.status, "UNAVAILABLE");
+  assert.equal(rejectedHistory.reason, "COMPLETE_DIRECT_COMPARISON_ARTIFACTS_REQUIRED");
+});
 
 test("market evidence rejects credential-bearing input before snapshot persistence", async () => {
   const wordstatBatch = await unavailableWordstatBatch("fixture unavailable", "2026-08-21T10:00:00.000Z");
@@ -162,6 +296,10 @@ test("official Direct adapter qualifies a current comparable existing keyword au
     vat_treatment: "EXCLUDED",
     traffic_volumes: [65, 100],
     comparability: { geography: "SAME", placement: "SAME", strategy: "SAME", season: "SAME" },
+    complete_direct_audit: true,
+    sample_clicks: 5,
+    candidate_key: "candidate-safe-reference",
+    comparison_scope: { geography: "Москва", placement: "Результаты поиска", strategy: "Максимум кликов", season: "2026-06-01 — 2026-08-18" },
   }, async (input, init) => {
     requests.push({ url: String(input), init, body: JSON.parse(String(init.body)) });
     return new Response(String(input).endsWith("/keywords") ? keyword : bids, { headers: { "content-type": "application/json" } });
@@ -173,8 +311,9 @@ test("official Direct adapter qualifies a current comparable existing keyword au
   assert.deepEqual(requests.map((item) => item.body.method), ["get", "get"]);
   assert.equal(observation.status, "AVAILABLE");
   assert.deepEqual(observation.range, { low: 120, high: 180, kind: "SCENARIO" });
-  assert.equal(observation.scope.keyword_id, "9007199254740993");
-  assert.doesNotMatch(JSON.stringify(observation), /fixture-direct-secret/iu);
+  assert.equal(observation.qualification.complete_direct_audit, true);
+  assert.equal(observation.qualification.sample, "QUALIFIED");
+  assert.doesNotMatch(JSON.stringify(observation), /fixture-direct-secret|9007199254740993|keyword_id|campaign_id|ad_group_id/iu);
 });
 
 test("cost evidence stops at the first qualified source and never averages sources", () => {
@@ -190,7 +329,7 @@ test("cost evidence stops at the first qualified source and never averages sourc
       vat_treatment: "INCLUDED",
       sample_size: { unit: "clicks", value: 80 },
       range: { low: 90, high: 140, kind: "EMPIRICAL_IQR" },
-      qualification: { first_party: true, clicks: 80 },
+      qualification: { first_party: true, complete_direct_audit: true, clicks: 80 },
     },
     {
       observation_id: "keywordbid-1",
@@ -203,7 +342,7 @@ test("cost evidence stops at the first qualified source and never averages sourc
       vat_treatment: "EXCLUDED",
       sample_size: { unit: "auction_scenarios", value: 2 },
       range: { low: 120, high: 180, kind: "SCENARIO" },
-      qualification: { current: true, existing_comparable_keyword: true },
+      qualification: { current: true, existing_comparable_keyword: true, complete_direct_audit: true, sample: "QUALIFIED" },
     },
     {
       observation_id: "live4-1",
@@ -251,7 +390,7 @@ test("cost precedence falls through only when a source is unqualified and return
     vat_treatment: "EXCLUDED",
     sample_size: { unit: "auction_scenarios", value: 1 },
     range: { low: 120, high: 180, kind: "SCENARIO" },
-    qualification: { current: true, existing_comparable_keyword: true },
+    qualification: { current: true, existing_comparable_keyword: true, complete_direct_audit: true, sample: "QUALIFIED" },
   };
   const invalidPreflight = {
     observation_id: "live4-unavailable",
@@ -279,7 +418,7 @@ test("cost precedence falls through only when a source is unqualified and return
     vat_treatment: "INCLUDED",
     sample_size: { unit: "clicks", value: 32 },
     range: { low: 95, high: 155, kind: "EMPIRICAL_IQR" },
-    qualification: { first_party: true, clicks: 32 },
+    qualification: { first_party: true, complete_direct_audit: true, clicks: 32 },
   };
 
   const mismatchedAuction = structuredClone(auction);
