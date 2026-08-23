@@ -154,12 +154,42 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 )
                 self.assertTrue(
                     page.get_by_role(
-                        "heading", name="От бизнес-цели до готовых кампаний", exact=True
+                        "heading", name="Честный старт с доступными данными", exact=True
                     ).is_visible()
                 )
+                self.assertTrue(page.get_by_text("Яндекс Директ", exact=True).is_visible())
+                self.assertTrue(page.get_by_text("Яндекс Метрика", exact=True).is_visible())
+                self.assertTrue(page.get_by_text("Яндекс Wordstat", exact=True).is_visible())
                 roadmap = page.get_by_label("Дорожная карта")
                 self.assertEqual(["Управление", "Мониторинг", "SEO", "VK"], roadmap.locator("li span").all_inner_texts())
                 self.assertEqual(0, roadmap.get_by_role("button").count())
+                checkpoint()
+
+                page.get_by_label("Исходная ситуация").select_option("existing")
+                page.get_by_role("button", name="Продолжить", exact=True).click()
+                page.locator(".owner-outcome h2").get_by_text(
+                    "Нужно разрешение на чтение данных", exact=True
+                ).wait_for()
+                page.get_by_role(
+                    "button", name="Предоставить доступ на чтение", exact=True
+                ).click()
+                page.locator(".owner-outcome h2").get_by_text(
+                    "Выберите понятный бизнес-аккаунт и счётчик", exact=True
+                ).wait_for()
+                page.get_by_label("Рекламируемый бизнес").select_option(index=1)
+                page.get_by_label("Сайт и аналитика").select_option(index=1)
+                page.get_by_role(
+                    "button", name="Подтвердить выбранный бизнес", exact=True
+                ).click()
+                page.locator(".owner-outcome h2").get_by_text(
+                    "Доступ подтверждён", exact=True
+                ).wait_for()
+                page.get_by_role(
+                    "button", name="Подтвердить готовность доступа", exact=True
+                ).click()
+                page.get_by_role(
+                    "heading", name="От бизнес-цели до готовых кампаний", exact=True
+                ).wait_for()
                 checkpoint()
 
                 page.get_by_label("Сайт или адрес компании").fill("https://owner.example/")

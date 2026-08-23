@@ -1,5 +1,11 @@
 import { env } from "cloudflare:workers";
 import {
+  AccessReadinessService,
+  type AccessReadinessStore,
+  type AccessStoredRow,
+} from "./access-readiness.ts";
+import { YandexAccessReadinessAdapter } from "./yandex-access-readiness.ts";
+import {
   hasDuplicateCampaignName,
 } from "./campaign-draft.ts";
 import {
@@ -446,6 +452,7 @@ async function readMetrika() {
 
 async function readMarketEvidence({
   model,
+  context,
   generatedAt,
 }: {
   model: Record<string, unknown>;
@@ -473,7 +480,8 @@ async function readMarketEvidence({
       offer: cleanText(String(model.value ?? ""), 500),
     },
   }];
-  const configurationMissing = !phrase
+  const configurationMissing = context.access_profile?.evidence_scope?.wordstat !== "AVAILABLE"
+    || !phrase
     || !runtime.YANDEX_WORDSTAT_OAUTH_TOKEN
     || !runtime.YANDEX_WORDSTAT_CLIENT_ID
     || regionIds.length === 0
@@ -570,7 +578,82 @@ async function readMarketEvidence({
   };
 }
 
-async function readContext(ownerKey = "p0-context"): Promise<P0Context> {
+function coldStartContext(): P0Context {
+  const observedAt = now();
+  return {
+    environment: "PRODUCTION",
+    test_scenario: false,
+    access_profile: {
+      path: "NEW_ADVERTISER",
+      account_history: "UNAVAILABLE",
+      evidence_scope: { direct: "UNAVAILABLE", metrika: "UNAVAILABLE", wordstat: "UNAVAILABLE" },
+      limitation: "История рекламного аккаунта отсутствует для нового рекламодателя и не заменяется нулём или выдуманными данными.",
+    },
+    direct: {
+      ready: false,
+      inventory_ready: false,
+      authority: "UNAVAILABLE",
+      access: "YANDEX_DIRECT_API_V501",
+      account: "",
+      client_id: "",
+      binding: { expected_account: "", api_account: "", matched: false },
+      campaigns_total: null,
+      minimum_weekly_budget_rub: null,
+      observed_at: observedAt,
+      capability_snapshot: {
+        schema_version: "direct-account-capability-snapshot-v1",
+        snapshot_id: "cold-start-unavailable",
+        source: "YANDEX_DIRECT_API_V501",
+        account: "",
+        observed_at: observedAt,
+        api_version: "v501",
+        archived: "UNKNOWN",
+        currency: "",
+        edit_campaigns_grant: "UNKNOWN",
+        available_campaign_types: [],
+        restrictions: [],
+        conditional_capabilities: [],
+      },
+      read_limitations: {
+        inventory_complete: false,
+        limited_by: null,
+        methods_read: [],
+        methods_not_read: ["ACCOUNT_HISTORY_UNAVAILABLE"],
+        statistics_provisional_days: 3,
+      },
+      blockers: ["История аккаунта недоступна в cold-start профиле."],
+    },
+    metrika: {
+      ready: false,
+      authority: "UNAVAILABLE",
+      access: "YANDEX_METRIKA_MANAGEMENT_AND_REPORTS_API",
+      counter_id: "",
+      goal_id: "",
+      time_zone: "",
+      binding: { expected_counter_id: "", api_counter_id: "", matched: false },
+      goal_binding: { expected_goal_id: "", api_goal_id: "", matched: false },
+      observed_at: observedAt,
+      blockers: ["Частная история измерений недоступна в cold-start профиле."],
+    },
+    campaign_catalog: null,
+    performance: null,
+  };
+}
+
+async function readContext(input: { owner_key?: string } = {}): Promise<P0Context> {
+  const ownerKey = input.owner_key ?? "p0-context";
+  const accessState = await accessReadinessService.get(ownerKey, true);
+  if (accessState.path === "NEW_ADVERTISER" && accessState.status === "ACTIVE") return coldStartContext();
+  if (accessState.path !== "EXISTING_ADVERTISER"
+    || !["ACTIVE", "ACTIVE_LIMITED"].includes(accessState.status)
+    || !accessState.binding) {
+    throw new Error("Owner-confirmed Access Readiness is required before private provider reads.");
+  }
+  const runtime = runtimeEnv();
+  if (accessState.binding.account_identity !== (runtime.YANDEX_DIRECT_CLIENT_LOGIN ?? "")
+    || accessState.binding.counter_identity !== (runtime.YANDEX_METRICA_COUNTER_ID ?? "")) {
+    throw new Error("Selected business binding does not match the server-side provider configuration.");
+  }
   const directBindingPromise = readDirectBinding();
   const directAuditPromise = directBindingPromise.then((value) => readDirectAudit(ownerKey, directAuditBinding(value)));
   const [directBindingResult, directAuditResult, limitsResult, metrikaBindingResult, metrikaResult] = await Promise.allSettled([
@@ -655,6 +738,16 @@ async function readContext(ownerKey = "p0-context"): Promise<P0Context> {
   return {
     environment: "PRODUCTION",
     test_scenario: false,
+    access_profile: {
+      path: "EXISTING_ADVERTISER",
+      account_history: "AVAILABLE",
+      evidence_scope: {
+        direct: accessState.scope.direct,
+        metrika: accessState.scope.metrika,
+        wordstat: accessState.scope.wordstat,
+      },
+      limitation: accessState.limitations[0] ?? null,
+    },
     direct,
     metrika,
     campaign_catalog:
@@ -717,6 +810,60 @@ async function ensureTables() {
   await ensureP0AgentTables(db);
   await ensureP0DirectAuditTables(db);
 }
+
+export class D1AccessReadinessStore implements AccessReadinessStore {
+  private async ensureTable() {
+    await runtimeEnv().DB.prepare(
+      "CREATE TABLE IF NOT EXISTS p0_access_readiness (user_key TEXT PRIMARY KEY, revision INTEGER NOT NULL, updated_at TEXT NOT NULL, value_json TEXT NOT NULL)",
+    ).run();
+  }
+
+  async load(key: string): Promise<AccessStoredRow | null> {
+    await this.ensureTable();
+    return runtimeEnv().DB
+      .prepare("SELECT revision, updated_at, value_json FROM p0_access_readiness WHERE user_key = ?")
+      .bind(key)
+      .first<AccessStoredRow>();
+  }
+
+  async initialize(key: string, row: AccessStoredRow) {
+    await this.ensureTable();
+    const result = await runtimeEnv().DB
+      .prepare("INSERT OR IGNORE INTO p0_access_readiness(user_key, revision, updated_at, value_json) VALUES (?, ?, ?, ?)")
+      .bind(key, row.revision, row.updated_at, row.value_json)
+      .run();
+    return Number(result.meta.changes) === 1;
+  }
+
+  async compareAndSwap(key: string, expectedRevision: number, row: AccessStoredRow) {
+    await this.ensureTable();
+    const result = await runtimeEnv().DB
+      .prepare("UPDATE p0_access_readiness SET revision = ?, updated_at = ?, value_json = ? WHERE user_key = ? AND revision = ?")
+      .bind(row.revision, row.updated_at, row.value_json, key, expectedRevision)
+      .run();
+    return Number(result.meta.changes) === 1;
+  }
+}
+
+function accessConfiguration() {
+  const runtime = runtimeEnv();
+  return {
+    directToken: runtime.YANDEX_DIRECT_OAUTH_TOKEN ?? "",
+    directExpectedAccount: runtime.YANDEX_DIRECT_CLIENT_LOGIN ?? "",
+    directBusinessLabel: runtime.P0_DIRECT_BUSINESS_LABEL ?? "",
+    metrikaToken: runtime.YANDEX_METRICA_OAUTH_TOKEN ?? "",
+    metrikaExpectedCounterId: runtime.YANDEX_METRICA_COUNTER_ID ?? "",
+    metrikaGoalId: runtime.YANDEX_METRICA_GOAL_ID ?? "",
+    wordstatToken: runtime.YANDEX_WORDSTAT_OAUTH_TOKEN ?? "",
+    wordstatClientId: runtime.YANDEX_WORDSTAT_CLIENT_ID ?? "",
+  };
+}
+
+const accessReadinessService = new AccessReadinessService({
+  store: new D1AccessReadinessStore(),
+  adapter: new YandexAccessReadinessAdapter(accessConfiguration(), fetch, now),
+  now,
+});
 
 export class D1P0ApplicationStore implements P0ApplicationStore {
   async load(key: string): Promise<P0StoredRow | null> {
@@ -1209,7 +1356,10 @@ async function coordinateOwnerAgent(key: string): Promise<P0AgentOwnerProjection
   }
 }
 
-const ownerJourney = new P0OwnerJourney(application, { agentProjection: coordinateOwnerAgent });
+const ownerJourney = new P0OwnerJourney(application, {
+  agentProjection: coordinateOwnerAgent,
+  accessReadiness: accessReadinessService,
+});
 
 export async function ownerOverview(key: string) {
   return ownerJourney.query(key);
@@ -1251,5 +1401,9 @@ function productionAgentRuntime() {
 }
 
 export async function runAgent(key: string) {
+  const access = await accessReadinessService.get(key, true);
+  if (!["ACTIVE", "ACTIVE_LIMITED"].includes(access.status)) {
+    throw new Error("Owner-confirmed Access Readiness is required before agent coordination.");
+  }
   return coordinateOwnerAgent(key);
 }

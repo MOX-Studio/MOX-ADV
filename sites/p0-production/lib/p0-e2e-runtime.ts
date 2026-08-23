@@ -1,3 +1,4 @@
+import { AccessReadinessService } from "./access-readiness.ts";
 import { sealCuratedPlaybookRelease } from "./campaign-playbook.ts";
 import { P0_E2E_FIXTURE_SCENARIO } from "./p0-e2e-boundary.ts";
 import type { LandingAdvisoryAdapter } from "./landing-advisory.ts";
@@ -11,7 +12,7 @@ import {
 import type { P0ApplicationAdapters, P0Context } from "./p0-application.ts";
 import { P0Application } from "./p0-application.ts";
 import { P0OwnerJourney, type OwnerActionSubmission } from "./p0-owner-journey.ts";
-import { D1P0ApplicationStore } from "./p0.ts";
+import { D1AccessReadinessStore, D1P0ApplicationStore } from "./p0.ts";
 
 const applications = new Map<string, {
   application: P0Application;
@@ -24,6 +25,12 @@ function fixtureContext(observedAt = "2026-08-21T10:00:00.000Z"): P0Context {
   return {
     environment: "PRODUCTION",
     test_scenario: false,
+    access_profile: {
+      path: "EXISTING_ADVERTISER",
+      account_history: "AVAILABLE",
+      evidence_scope: { direct: "AVAILABLE", metrika: "AVAILABLE", wordstat: "AVAILABLE" },
+      limitation: null,
+    },
     direct: {
       ready: true,
       inventory_ready: true,
@@ -670,9 +677,41 @@ function fixtureApplication(scenario: string, key: string) {
       store: new D1P0ApplicationStore(),
       adapters: fixture.adapters,
     });
+    const accessReadiness = new AccessReadinessService({
+      store: new D1AccessReadinessStore(),
+      adapter: {
+        async discover() {
+          return {
+            scopes: {
+              direct: { granted: true },
+              metrika: { granted: true },
+              wordstat: { granted: true },
+            },
+            accounts: [{
+              provider_identity: "owner-account",
+              label: "Промышленная выставка",
+              detail: "Реклама выставки",
+            }],
+            counters: [{
+              provider_identity: "424242",
+              label: "Основной сайт выставки",
+              detail: "owner.example",
+            }],
+          };
+        },
+        async verifyBinding(input) {
+          return {
+            direct: { matched: input.accountIdentity === "owner-account", scope_granted: true },
+            metrika: { matched: input.counterIdentity === "424242", scope_granted: true },
+            wordstat: { scope_granted: true },
+          };
+        },
+      },
+      now: fixture.adapters.now,
+    });
     entry = {
       application,
-      ownerJourney: new P0OwnerJourney(application),
+      ownerJourney: new P0OwnerJourney(application, { accessReadiness }),
       evidence: fixture.evidence,
       advanceClock: fixture.advanceClock,
     };

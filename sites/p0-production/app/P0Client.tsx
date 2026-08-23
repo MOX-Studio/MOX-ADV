@@ -161,7 +161,11 @@ function Header() {
 function OwnerField({ field }: { field: OwnerActionField }) {
   const common = { name: field.key, required: field.required, defaultValue: field.value };
   return <label className={field.control === "textarea" ? "wide" : ""}><span>{field.label}</span>
-    {field.control === "textarea" ? <textarea {...common} /> : field.control === "select" ? <select {...common}><option value="" disabled>Выберите</option>{field.options?.map((option) => <option key={option}>{option}</option>)}</select> : <input {...common} type={field.control} />}
+    {field.control === "textarea" ? <textarea {...common} /> : field.control === "select" ? <select {...common}><option value="" disabled>Выберите</option>{field.options?.map((option) => {
+      const value = typeof option === "string" ? option : option.value;
+      const label = typeof option === "string" ? option : option.label;
+      return <option key={value} value={value}>{label}</option>;
+    })}</select> : <input {...common} type={field.control} />}
     {field.help && <small>{field.help}</small>}
   </label>;
 }

@@ -960,6 +960,60 @@ test("one query/command contract drives and persists the current five-step path"
   assert.equal(afterBlockedWrite.state.campaign, null);
 });
 
+test("cold-start research proceeds with unavailable account history and never persists a fabricated zero", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "mox-p0-cold-start-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new JsonDurableStore(join(directory, "state.json"));
+  const cold = context();
+  cold.access_profile = {
+    path: "NEW_ADVERTISER",
+    account_history: "UNAVAILABLE",
+    limitation: "История аккаунта отсутствует для нового рекламодателя.",
+  };
+  cold.direct.ready = false;
+  cold.direct.inventory_ready = false;
+  cold.direct.authority = "UNAVAILABLE";
+  cold.direct.account = "";
+  cold.direct.client_id = "";
+  cold.direct.binding = { expected_account: "", api_account: "", matched: false };
+  cold.direct.campaigns_total = null;
+  cold.direct.minimum_weekly_budget_rub = null;
+  cold.direct.capability_snapshot.account = "";
+  cold.direct.capability_snapshot.archived = "UNKNOWN";
+  cold.direct.capability_snapshot.edit_campaigns_grant = "UNKNOWN";
+  cold.direct.capability_snapshot.available_campaign_types = [];
+  cold.direct.read_limitations.inventory_complete = false;
+  cold.campaign_catalog = null;
+  cold.metrika.ready = false;
+  cold.metrika.authority = "UNAVAILABLE";
+  cold.metrika.counter_id = "";
+  cold.metrika.goal_id = "";
+  cold.metrika.binding = { expected_counter_id: "", api_counter_id: "", matched: false };
+  cold.metrika.goal_binding = { expected_goal_id: "", api_goal_id: "", matched: false };
+  cold.performance = null;
+  const application = new P0Application({ store, adapters: adapters({ readContext: async () => cold }) });
+
+  let result = await application.command("owner", { action: "analyze_site", expected_revision: 0, url: "https://owner.example/" });
+  assert.equal(result.state.context_state.access_profile.account_history, "UNAVAILABLE");
+  assert.equal(result.state.context_state.facts.direct.campaigns_total, null);
+  result = await application.command("owner", {
+    action: "confirm_context_goal",
+    expected_revision: result.revision,
+    confirmation: "CONFIRM_CONTEXT_GOAL",
+    goal: result.state.context_state.provisional_business_goal.value,
+  });
+  assert.equal(result.state.analytics_evidence_snapshot.sources.find((item) => item.source_id === "direct").status, "UNAVAILABLE");
+  assert.equal(result.state.analytics_evidence_snapshot.claims.some((item) => item.predicate === "campaigns_total" && item.value === 0), false);
+  assert.equal(result.state.analytics_evidence_snapshot.gaps.some((item) => item.code === "CURRENT_DIRECT_INVENTORY_UNAVAILABLE"), true);
+  assert.equal(result.write_readiness.ready, false);
+  const agentContract = await application.agentContract("owner", "COORDINATE_OWNER_JOURNEY");
+  assert.deepEqual(agentContract.tools.map((tool) => tool.name), [
+    "p0_read_owner_journey",
+    "p0_record_owner_journey_assessment",
+  ]);
+  assert.deepEqual(agentContract.policy.allowed_permissions, ["P0_APPLICATION_READ", "P0_OBSERVATION_RECORD"]);
+});
+
 test("Context preflight fails closed for stale, partial or mismatched exact API binding", async (t) => {
   const cases = [
     {

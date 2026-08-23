@@ -1,9 +1,13 @@
 import {
   P0Application,
   P0ApplicationError,
-  type P0Command,
 } from "./p0-application.ts";
 import type { P0AgentOwnerProjection } from "./p0-agent-runtime.ts";
+import {
+  type AccessReadinessProjection,
+  type AccessReadinessService,
+  type AccessReadinessState,
+} from "./access-readiness.ts";
 
 export const OWNER_JOURNEY_STAGES = [
   { id: "goal", label: "Цель" },
@@ -22,11 +26,12 @@ export type OwnerActionField = {
   control: "text" | "url" | "textarea" | "number" | "date" | "select";
   value: string | number;
   required: boolean;
-  options?: string[];
+  options?: Array<string | { value: string; label: string }>;
   help?: string;
 };
 
 export type OwnerJourneyProjection = {
+  accessReadiness: AccessReadinessProjection | null;
   journey: {
     stages: Array<{ id: OwnerJourneyStageId; label: string; status: "complete" | "current" | "upcoming" }>;
     currentStage: OwnerJourneyStageId;
@@ -95,6 +100,10 @@ type InternalView = Awaited<ReturnType<P0Application["query"]>>;
 type InternalState = InternalView["state"];
 
 type ActionKind =
+  | "choose-access-path"
+  | "grant-access-consent"
+  | "select-access-binding"
+  | "confirm-access-readiness"
   | "analyze-business"
   | "confirm-goal"
   | "confirm-business-model"
@@ -339,6 +348,15 @@ function actionDescriptor(view: InternalView): InternalActionDescriptor | null {
   return null;
 }
 
+async function opaqueHandle(material: unknown) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(material)));
+  const token = btoa(String.fromCharCode(...new Uint8Array(digest).slice(0, 18)))
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replaceAll("=", "");
+  return `act_${token}`;
+}
+
 async function actionHandle(ownerKey: string, view: InternalView, descriptor: InternalActionDescriptor) {
   const material = JSON.stringify({
     ownerKey,
@@ -346,12 +364,7 @@ async function actionHandle(ownerKey: string, view: InternalView, descriptor: In
     kind: descriptor.kind,
     target: descriptor.target ?? null,
   });
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(material));
-  const token = btoa(String.fromCharCode(...new Uint8Array(digest).slice(0, 18)))
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replaceAll("=", "");
-  return `act_${token}`;
+  return opaqueHandle(material);
 }
 
 function materialUnknowns(state: InternalState) {
@@ -520,13 +533,32 @@ async function project(
   ownerKey: string,
   view: InternalView,
   agent: P0AgentOwnerProjection | null,
+  access: AccessReadinessProjection | null = null,
 ): Promise<OwnerJourneyProjection> {
   const stage = currentStage(view.state);
   const stageIndex = OWNER_JOURNEY_STAGES.findIndex((item) => item.id === stage);
   const unknowns = materialUnknowns(view.state);
-  const descriptor = actionDescriptor(view);
+  const baseDescriptor = actionDescriptor(view);
+  const descriptor = baseDescriptor && access?.path === "existing" && access.canRevoke
+    ? {
+        ...baseDescriptor,
+        fields: [...baseDescriptor.fields, {
+          key: "accessDecision",
+          label: "Доступ к частным данным",
+          control: "select" as const,
+          value: "continue",
+          required: true,
+          options: [
+            { value: "continue", label: "Продолжить с подтверждённым доступом" },
+            { value: "revoke", label: "Отозвать доступ" },
+          ],
+          help: "Отзыв немедленно ограничит evidence и доступные агенту инструменты.",
+        }],
+      }
+    : baseDescriptor;
   const campaigns = campaignOptions(view);
   return {
+    accessReadiness: access,
     journey: {
       stages: OWNER_JOURNEY_STAGES.map((item, index) => ({
         ...item,
@@ -563,6 +595,133 @@ async function project(
   };
 }
 
+function accessActionDescriptor(state: AccessReadinessState, access: AccessReadinessProjection): InternalActionDescriptor | null {
+  if (state.status === "PATH_REQUIRED") {
+    return {
+      kind: "choose-access-path",
+      label: "Продолжить",
+      description: "Выберите путь, который соответствует реальной истории рекламодателя.",
+      fields: [{
+        key: "advertiserPath",
+        label: "Исходная ситуация",
+        control: "select",
+        value: "",
+        required: true,
+        options: [
+          { value: "existing", label: "Уже запускали рекламу" },
+          { value: "new", label: "Новый рекламодатель без истории" },
+        ],
+      }],
+    };
+  }
+  if (state.status === "CONSENT_REQUIRED" || state.status === "BLOCKED" || state.status === "REVOKED") {
+    return {
+      kind: "grant-access-consent",
+      label: state.status === "CONSENT_REQUIRED" ? "Предоставить доступ на чтение" : "Подключить доступ заново",
+      description: "Это решение владельца разрешает только показанный объём чтения и не разрешает изменения в рекламных системах.",
+      fields: [],
+    };
+  }
+  if (state.status === "SELECTION_REQUIRED") {
+    return {
+      kind: "select-access-binding",
+      label: "Подтвердить выбранный бизнес",
+      description: "Агент проверит точное соответствие официальными API до использования частных данных.",
+      fields: [
+        {
+          key: "accountChoice",
+          label: "Рекламируемый бизнес",
+          control: "select",
+          value: "",
+          required: true,
+          options: access.accountChoices.map((choice) => ({ value: choice.handle, label: `${choice.label} — ${choice.detail}` })),
+        },
+        {
+          key: "counterChoice",
+          label: "Сайт и аналитика",
+          control: "select",
+          value: "",
+          required: true,
+          options: access.counterChoices.map((choice) => ({ value: choice.handle, label: `${choice.label} — ${choice.detail}` })),
+        },
+      ],
+    };
+  }
+  if (state.status === "READY" || state.status === "LIMITED") {
+    return {
+      kind: "confirm-access-readiness",
+      label: "Подтвердить готовность доступа",
+      description: "Можно продолжить только с доступным evidence scope или сразу отозвать разрешение.",
+      fields: [{
+        key: "accessDecision",
+        label: "Решение",
+        control: "select",
+        value: "continue",
+        required: true,
+        options: [
+          { value: "continue", label: "Продолжить с доступным объёмом данных" },
+          { value: "revoke", label: "Отозвать доступ" },
+        ],
+      }],
+    };
+  }
+  return null;
+}
+
+async function projectAccessOnly(
+  ownerKey: string,
+  state: AccessReadinessState,
+  access: AccessReadinessProjection,
+): Promise<OwnerJourneyProjection> {
+  const descriptor = accessActionDescriptor(state, access);
+  const blocked = ["blocked", "revoked"].includes(access.status);
+  const working = ["choose-path", "needs-consent", "needs-selection"].includes(access.status);
+  return {
+    accessReadiness: access,
+    journey: {
+      currentStage: "goal",
+      stages: OWNER_JOURNEY_STAGES.map((stage, index) => ({ ...stage, status: index === 0 ? "current" : "upcoming" })),
+    },
+    introduction: {
+      title: "Честный старт с доступными данными",
+      body: "Существующий рекламодатель подключает минимальный доступ, а новый начинает без выдуманной истории аккаунта.",
+    },
+    businessOutcome: {
+      status: blocked ? "blocked" : working ? "working" : "ready",
+      headline: access.headline,
+      summary: access.summary,
+    },
+    currentRecommendation: {
+      headline: state.path === "NEW_ADVERTISER" ? "Продолжить с cold-start профилем" : "Использовать только подтверждённый доступ",
+      rationale: access.history.explanation,
+    },
+    materialUnknowns: [...access.limitations],
+    agentActivity: null,
+    cards: [{
+      kind: state.status === "CONSENT_REQUIRED" ? "human-decision-gate" : blocked ? "problem" : "finding",
+      title: access.headline,
+      body: access.summary,
+      facts: [
+        ...access.scopes.map((scope) => ({ label: scope.label, value: `${scope.availability}. ${scope.purpose}` })),
+        { label: "История аккаунта", value: `${access.history.availability}. ${access.history.explanation}` },
+      ],
+    }],
+    campaignOptions: [],
+    packageSummary: null,
+    primaryAction: descriptor ? {
+      handle: await opaqueHandle({ ownerKey, accessRevision: state.revision, kind: descriptor.kind }),
+      label: descriptor.label,
+      description: descriptor.description,
+      fields: descriptor.fields,
+    } : null,
+    roadmap: structuredClone(ROADMAP),
+  };
+}
+
+function accessIsActive(state: AccessReadinessState) {
+  return state.status === "ACTIVE" || state.status === "ACTIVE_LIMITED";
+}
+
 function required(values: Record<string, unknown>, key: string) {
   const value = String(values[key] ?? "").normalize("NFKC").replace(/\s+/gu, " ").trim();
   if (!value) throw new P0ApplicationError("P0_OWNER_INPUT_REQUIRED", "Заполните обязательное бизнес-поле.");
@@ -572,30 +731,78 @@ function required(values: Record<string, unknown>, key: string) {
 export class P0OwnerJourney {
   private readonly application: P0Application;
   private readonly agentProjection: ((ownerKey: string) => Promise<P0AgentOwnerProjection | null>) | null;
+  private readonly accessReadiness: AccessReadinessService | null;
 
   constructor(
     application: P0Application,
-    options: { agentProjection?: (ownerKey: string) => Promise<P0AgentOwnerProjection | null> } = {},
+    options: {
+      agentProjection?: (ownerKey: string) => Promise<P0AgentOwnerProjection | null>;
+      accessReadiness?: AccessReadinessService;
+    } = {},
   ) {
     this.application = application;
     this.agentProjection = options.agentProjection ?? null;
+    this.accessReadiness = options.accessReadiness ?? null;
   }
 
   async query(ownerKey: string): Promise<OwnerJourneyProjection> {
+    const accessState = this.accessReadiness ? await this.accessReadiness.get(ownerKey, true) : null;
+    const access = accessState && this.accessReadiness ? this.accessReadiness.project(accessState) : null;
+    if (accessState && !accessIsActive(accessState)) return projectAccessOnly(ownerKey, accessState, access!);
     const initial = await this.application.query(ownerKey);
     const view = this.agentProjection ? initial : await this.continueSafeWork(ownerKey, initial);
     const agent = this.agentProjection ? await this.agentProjection(ownerKey) : null;
-    return project(ownerKey, view, agent);
+    return project(ownerKey, view, agent, access);
   }
 
   async submit(ownerKey: string, submission: OwnerActionSubmission): Promise<OwnerJourneyProjection> {
+    let accessState = this.accessReadiness ? await this.accessReadiness.get(ownerKey) : null;
+    if (accessState && !accessIsActive(accessState)) {
+      const access = this.accessReadiness!.project(accessState);
+      const descriptor = accessActionDescriptor(accessState, access);
+      const expectedHandle = descriptor
+        ? await opaqueHandle({ ownerKey, accessRevision: accessState.revision, kind: descriptor.kind })
+        : null;
+      if (!descriptor || submission.handle !== expectedHandle) {
+        throw new P0ApplicationError("P0_OWNER_ACTION_STALE", "Действие больше не соответствует текущему состоянию. Обновите страницу.");
+      }
+      const values = record(submission.values);
+      if (descriptor.kind === "choose-access-path") {
+        const path = required(values, "advertiserPath");
+        accessState = await this.accessReadiness!.choosePath(ownerKey, path === "new" ? "NEW_ADVERTISER" : "EXISTING_ADVERTISER");
+      } else if (descriptor.kind === "grant-access-consent") {
+        accessState = await this.accessReadiness!.grantConsent(ownerKey, accessState.revision);
+      } else if (descriptor.kind === "select-access-binding") {
+        accessState = await this.accessReadiness!.selectBinding(
+          ownerKey,
+          accessState.revision,
+          required(values, "accountChoice"),
+          required(values, "counterChoice"),
+        );
+      } else if (descriptor.kind === "confirm-access-readiness") {
+        accessState = required(values, "accessDecision") === "revoke"
+          ? await this.accessReadiness!.revoke(ownerKey, accessState.revision)
+          : await this.accessReadiness!.activate(ownerKey, accessState.revision);
+      }
+      const nextAccess = this.accessReadiness!.project(accessState);
+      if (!accessIsActive(accessState)) return projectAccessOnly(ownerKey, accessState, nextAccess);
+      const initial = await this.application.query(ownerKey);
+      const view = this.agentProjection ? initial : await this.continueSafeWork(ownerKey, initial);
+      const agent = this.agentProjection ? await this.agentProjection(ownerKey) : null;
+      return project(ownerKey, view, agent, nextAccess);
+    }
+
     let view = await this.application.query(ownerKey);
     const descriptor = actionDescriptor(view);
     if (!descriptor || submission.handle !== await actionHandle(ownerKey, view, descriptor)) {
       throw new P0ApplicationError("P0_OWNER_ACTION_STALE", "Действие больше не соответствует текущему состоянию. Обновите страницу.");
     }
     const values = record(submission.values);
-    const command = async (payload: Omit<P0Command, "expected_revision">) => {
+    if (accessState?.path === "EXISTING_ADVERTISER" && values.accessDecision === "revoke") {
+      accessState = await this.accessReadiness!.revoke(ownerKey, accessState.revision);
+      return projectAccessOnly(ownerKey, accessState, this.accessReadiness!.project(accessState));
+    }
+    const command = async (payload: Record<string, unknown> & { action: string }) => {
       view = await this.application.command(ownerKey, { ...payload, expected_revision: view.revision });
     };
 
@@ -692,7 +899,8 @@ export class P0OwnerJourney {
 
     if (!this.agentProjection) view = await this.continueSafeWork(ownerKey, view);
     const agent = this.agentProjection ? await this.agentProjection(ownerKey) : null;
-    return project(ownerKey, view, agent);
+    const access = accessState && this.accessReadiness ? this.accessReadiness.project(accessState) : null;
+    return project(ownerKey, view, agent, access);
   }
 
   async diagnostics(ownerKey: string) {
