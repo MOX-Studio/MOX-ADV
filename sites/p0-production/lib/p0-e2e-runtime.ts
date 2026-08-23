@@ -8,12 +8,14 @@ import {
   pollSuspendedCampaignModeration,
   type DirectProjection,
 } from "./direct-write.ts";
-import type { P0ApplicationAdapters, P0Command, P0Context } from "./p0-application.ts";
+import type { P0ApplicationAdapters, P0Context } from "./p0-application.ts";
 import { P0Application } from "./p0-application.ts";
+import { P0OwnerJourney, type OwnerActionSubmission } from "./p0-owner-journey.ts";
 import { D1P0ApplicationStore } from "./p0.ts";
 
 const applications = new Map<string, {
   application: P0Application;
+  ownerJourney: P0OwnerJourney;
   evidence: FixtureAcceptanceEvidence;
   advanceClock(milliseconds: number): void;
 }>();
@@ -664,11 +666,13 @@ function fixtureApplication(scenario: string, key: string) {
   let entry = applications.get(applicationKey);
   if (!entry) {
     const fixture = fixtureAdapters();
+    const application = new P0Application({
+      store: new D1P0ApplicationStore(),
+      adapters: fixture.adapters,
+    });
     entry = {
-      application: new P0Application({
-        store: new D1P0ApplicationStore(),
-        adapters: fixture.adapters,
-      }),
+      application,
+      ownerJourney: new P0OwnerJourney(application),
       evidence: fixture.evidence,
       advanceClock: fixture.advanceClock,
     };
@@ -741,24 +745,27 @@ function withFixtureEvidence(
   };
 }
 
-export async function fixtureOverview(scenario: string, key: string) {
+export async function fixtureOwnerOverview(scenario: string, key: string) {
   const fixture = fixtureApplication(scenario, key);
-  const value = await fixture.application.query(`e2e:${scenario}:${key}`);
-  return withFixtureEvidence(value, fixture.evidence);
+  return fixture.ownerJourney.query(`e2e:${scenario}:${key}`);
 }
 
-export async function fixtureApplyAction(
+export async function fixtureSubmitOwnerAction(
   scenario: string,
   key: string,
   payload: Record<string, unknown>,
 ) {
   const fixture = fixtureApplication(scenario, key);
-  const value = await fixture.application.command(
+  const value = await fixture.ownerJourney.submit(
     `e2e:${scenario}:${key}`,
-    payload as P0Command,
+    payload as OwnerActionSubmission,
   );
-  if (payload.action === "resubmit_package_correction") {
-    fixture.advanceClock(61_000);
-  }
+  fixture.advanceClock(61_000);
+  return value;
+}
+
+export async function fixtureOperatorDiagnostics(scenario: string, key: string) {
+  const fixture = fixtureApplication(scenario, key);
+  const value = await fixture.application.query(`e2e:${scenario}:${key}`);
   return withFixtureEvidence(value, fixture.evidence);
 }

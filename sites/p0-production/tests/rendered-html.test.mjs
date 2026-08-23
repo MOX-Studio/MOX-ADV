@@ -3,8 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const clientSource = await readFile(new URL("../app/P0Client.tsx", import.meta.url), "utf8");
-const focusSource = await readFile(new URL("../app/ProductFocusDisclosure.tsx", import.meta.url), "utf8");
-const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+const ownerSource = await readFile(new URL("../lib/p0-owner-journey.ts", import.meta.url), "utf8");
 
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
@@ -17,32 +16,33 @@ async function render() {
   );
 }
 
-test("server-renders the MOX-ADV production P0 shell", async () => {
+test("server-renders the MOX-ADV owner journey shell", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
-  assert.match(html, /<title>Стратегия — MOX-ADV<\/title>/i);
-  assert.match(html, /Стратегия и создание кампании/);
-  assert.doesNotMatch(html, /Агент выполняет всю безопасную работу|Рабочий модуль · P0|ТОЛЬКО РЕАЛЬНЫЕ ДАННЫЕ/);
-  assert.doesNotMatch(html, /Production Module|AI-first|production-кандидат/i);
-  assert.doesNotMatch(html, /codex-preview|Your site is taking shape|Test Scenario/i);
+  assert.match(html, /<title>Путь владельца — MOX-ADV<\/title>/i);
+  assert.match(html, /Готовлю путь владельца/u);
+  assert.doesNotMatch(html, /Production Module|Test Scenario|schema_version|provider_ids/i);
 });
 
-test("marked supporting copy and panels stay out of the P0 interface", () => {
-  assert.doesNotMatch(clientSource, /className="real-badge"|className="agent-message"/u);
-  assert.doesNotMatch(clientSource, /GPT Sites · только рабочие данные|До полной аналитики модуль проверяет/u);
-  assert.doesNotMatch(clientSource, /Отчёты формируются асинхронно/u);
-  assert.doesNotMatch(clientSource, /Что агент сделает сам до полной аналитики|HTTPS добавляется технически/u);
-  assert.doesNotMatch(clientSource, /Ревизия \{revision\} · только рабочие данные/u);
-  assert.doesNotMatch(clientSource, /direct\.account\} · привязка подтверждена|Счётчик \$\{metrika\.counter_id\} · цель/u);
-  assert.doesNotMatch(clientSource, /className="write-boundary"|className="recomputation-pending"/u);
-  assert.doesNotMatch(clientSource, /Пересчёт зависимых данных обязателен|Идёт пересчёт зависимых данных|Это проверяемая сводка из разрешённых источников|ИЗВЛЕЧЁННЫЕ ДАННЫЕ/u);
-  assert.doesNotMatch(clientSource, /До существенного изменения контекста|Одна предварительная бизнес-цель|Подтвердите или исправьте до полной аналитики|ПОДТВЕРЖДЕНО ВЛАДЕЛЬЦЕМ|ПРЕДВАРИТЕЛЬНО/u);
-  assert.doesNotMatch(clientSource, /<label><span>Бизнес-цель<\/span>|provisional_business_goal\.rationale/u);
-  assert.match(clientSource, /<textarea aria-label="Бизнес-цель"/u);
-  assert.doesNotMatch(clientSource, /className="evidence-source-body"|source\.facts|source\.limitations|source\.observed_at|source\.source_kind/u);
-  assert.doesNotMatch(clientSource, /Неопределённость раскрыта, а не заполнена догадкой|Указатель доказательств|Где нужна проверка|className="evidence-index"|className="evidence-uncertainty"|className="assumption"|evidence\.generated_at/u);
-  assert.doesNotMatch(focusSource, /Материально различимые продукты, услуги и предложения|Карточки не смешивают рыночную возможность|НУЖНО ОДНО РЕШЕНИЕ|Почему этот вариант не выбран автоматически|<strong>\{statusLabel\(card\.disposition\)\}<\/strong>/u);
-  assert.doesNotMatch(styles, /\.real-badge|\.agent-message|\.agent-work|\.actions > span|\.goal-decision (?:>|h3|header|label|blockquote)|\.write-boundary|\.recomputation-pending|\.focus-reasons|\.product-focus > header > strong|\.focus-card > header > strong|\.assumption|\.evidence-index|\.evidence-uncertainty|\.evidence-claim|\.evidence-record|\.evidence-source-body/u);
+test("production page consumes only the typed owner projection", () => {
+  assert.match(clientSource, /OwnerJourneyProjection/u);
+  assert.match(clientSource, /projection\.journey\.stages/u);
+  assert.match(clientSource, /projection\.businessOutcome/u);
+  assert.match(clientSource, /projection\.currentRecommendation/u);
+  assert.match(clientSource, /projection\.primaryAction/u);
+  assert.doesNotMatch(clientSource, /payload\.state|workflow\.allowed_commands|context_preflight|write_readiness/u);
+  assert.doesNotMatch(clientSource, /schema_version|revision_history|provider_ids|publish_fingerprint/u);
+});
+
+test("owner interface fixes the accepted five stages and keeps roadmap non-interactive", () => {
+  for (const label of ["Цель", "Что узнал агент", "Стратегия", "Кампании", "Проверка и создание"]) {
+    assert.match(ownerSource, new RegExp(label, "u"));
+  }
+  for (const label of ["Управление", "Мониторинг", "SEO", "VK"]) {
+    assert.match(ownerSource, new RegExp(label, "u"));
+  }
+  assert.match(ownerSource, /interactive: false/u);
+  assert.doesNotMatch(clientSource, /owner-roadmap[\s\S]*<button/u);
 });

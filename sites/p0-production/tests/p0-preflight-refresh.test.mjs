@@ -34,11 +34,11 @@ test("does not poll terminal Direct audit outcomes", () => {
   );
 });
 
-test("pending Direct refresh is not cancelled by its own loading state", () => {
+test("owner page refreshes agent-owned continuation without a polling control", () => {
   const effect = clientSource.match(
-    /useEffect\(\(\) => \{\n {4}const refresh = directPreflightRefreshState\([\s\S]*?\n {2}\}, \[directAuditNextRetryAt, directAuditStatus\]\);/u,
+    /useEffect\(\(\) => \{\n {4}if \(!projection[\s\S]*?\n {2}\}, \[projection\]\);/u,
   )?.[0];
-  assert.ok(effect, "pending Direct auto-refresh effect must stay wired to audit state");
+  assert.ok(effect, "owner continuation refresh must stay wired to business projection state");
   assert.match(effect, /request\("\/api\/p0"\)/u);
-  assert.doesNotMatch(effect, /setBusy|\bbusy\b/u);
+  assert.doesNotMatch(clientSource, /Проверить запланированный элемент|Повторить polling/u);
 });

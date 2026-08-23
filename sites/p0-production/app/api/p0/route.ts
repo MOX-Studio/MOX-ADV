@@ -1,16 +1,14 @@
 import { env } from "cloudflare:workers";
 import { localP0E2EFixtureScenario } from "../../../lib/p0-e2e-boundary";
-import { P0ApplicationError } from "../../../lib/p0-application";
 import {
-  applyAction as productionApplyAction,
-  overview as productionOverview,
+  ownerOverview as productionOwnerOverview,
+  submitOwnerAction as productionSubmitOwnerAction,
   userKey,
 } from "../../../lib/p0";
 
-function failure(error: unknown) {
+function failure() {
   return {
-    error: error instanceof Error ? error.message : "Production-модуль завершил действие fail closed.",
-    ...(error instanceof P0ApplicationError ? { code: error.code } : {}),
+    message: "Действие не выполнено. Обновите страницу и повторите текущее бизнес-решение.",
   };
 }
 
@@ -28,8 +26,8 @@ async function fixtureBackend(request: Request) {
   const fixture = await import("../../../lib/p0-e2e-runtime");
   const key = userKey(request);
   return {
-    overview: () => fixture.fixtureOverview(scenario, key),
-    applyAction: (payload: Record<string, unknown>) => fixture.fixtureApplyAction(scenario, key, payload),
+    overview: () => fixture.fixtureOwnerOverview(scenario, key),
+    applyAction: (payload: Record<string, unknown>) => fixture.fixtureSubmitOwnerAction(scenario, key, payload),
   };
 }
 
@@ -38,10 +36,10 @@ export async function GET(request: Request) {
     const fixture = await fixtureBackend(request);
     const value = fixture
       ? await fixture.overview()
-      : await productionOverview(userKey(request));
+      : await productionOwnerOverview(userKey(request));
     return Response.json(value);
-  } catch (error) {
-    return Response.json(failure(error), { status: 503 });
+  } catch {
+    return Response.json(failure(), { status: 503 });
   }
 }
 
@@ -51,9 +49,9 @@ export async function POST(request: Request) {
     const fixture = await fixtureBackend(request);
     const value = fixture
       ? await fixture.applyAction(payload)
-      : await productionApplyAction(userKey(request), payload);
+      : await productionSubmitOwnerAction(userKey(request), payload);
     return Response.json(value, { status: 201 });
-  } catch (error) {
-    return Response.json(failure(error), { status: 409 });
+  } catch {
+    return Response.json(failure(), { status: 409 });
   }
 }

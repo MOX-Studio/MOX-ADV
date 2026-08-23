@@ -16,6 +16,7 @@ import {
 } from "../lib/campaign-package-execution.ts";
 import { sealCuratedPlaybookRelease } from "../lib/campaign-playbook.ts";
 import { collectOfficialWordstatBatch } from "../lib/market-evidence.ts";
+import { P0OwnerJourney } from "../lib/p0-owner-journey.ts";
 
 class JsonDurableStore {
   constructor(path) {
@@ -3464,4 +3465,113 @@ test("authoritative application owns the agent objective, typed tool schema, per
   });
   assert.equal(completed.status, "STOP");
   assert.equal(completed.stop_reason.code, "COMPLETED");
+});
+
+test("typed owner journey is the narrow five-stage query/action seam and keeps diagnostics outside the owner response", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "mox-p0-owner-journey-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new JsonDurableStore(join(directory, "state.json"));
+  const release = await governedPlaybookRelease({
+    releaseId: "fixture-owner-journey",
+    releaseVersion: "1.0.0",
+    family: "QUALIFIED_ACTION",
+    decisionId: "decision-owner-journey",
+  });
+  const application = new P0Application({
+    store,
+    adapters: adapters({
+      async readMarketEvidence() { return marketEvidenceInput(); },
+      async readPlaybookReleases() { return [release]; },
+    }),
+  });
+  const journey = new P0OwnerJourney(application);
+  const ownerKey = "owner";
+  const values = (projection, overrides = {}) => ({
+    ...Object.fromEntries(projection.primaryAction.fields.map((field) => [field.key, field.value])),
+    ...overrides,
+  });
+
+  const ownerResponses = [];
+  let projection = await journey.query(ownerKey);
+  ownerResponses.push(projection);
+  assert.deepEqual(projection.journey.stages.map((stage) => stage.label), [
+    "Цель",
+    "Что узнал агент",
+    "Стратегия",
+    "Кампании",
+    "Проверка и создание",
+  ]);
+  assert.equal(projection.journey.currentStage, "goal");
+  assert.ok(projection.introduction);
+  assert.match(projection.primaryAction.handle, /^act_[A-Za-z0-9_-]+$/u);
+  const staleHandle = projection.primaryAction.handle;
+
+  projection = await journey.submit(ownerKey, {
+    handle: projection.primaryAction.handle,
+    values: values(projection, { website: "https://owner.example/" }),
+  });
+  ownerResponses.push(projection);
+  assert.equal(projection.journey.currentStage, "goal");
+  projection = await journey.submit(ownerKey, {
+    handle: projection.primaryAction.handle,
+    values: values(projection),
+  });
+  ownerResponses.push(projection);
+  assert.equal(projection.journey.currentStage, "findings");
+  assert.equal(projection.introduction, undefined);
+  await assert.rejects(
+    journey.submit(ownerKey, { handle: staleHandle, values: {} }),
+    (error) => error instanceof P0ApplicationError && error.code === "P0_OWNER_ACTION_STALE",
+  );
+
+  projection = await journey.submit(ownerKey, {
+    handle: projection.primaryAction.handle,
+    values: values(projection),
+  });
+  ownerResponses.push(projection);
+  assert.equal(projection.journey.currentStage, "strategy");
+  projection = await journey.submit(ownerKey, {
+    handle: projection.primaryAction.handle,
+    values: values(projection, {
+      geography: "Москва",
+      periodStart: "2026-09-01",
+      periodEnd: "2026-10-01",
+      weeklyBudget: "50000",
+      targetResultCost: "10000",
+    }),
+  });
+  ownerResponses.push(projection);
+  assert.equal(projection.journey.currentStage, "campaigns");
+  assert.ok(projection.campaignOptions.length >= 1);
+  projection = await journey.submit(ownerKey, {
+    handle: projection.primaryAction.handle,
+    values: {},
+  });
+  ownerResponses.push(projection);
+  assert.equal(projection.journey.currentStage, "review");
+  assert.equal(projection.packageSummary.preflight, "9/9 бизнес-проверок пройдено");
+  assert.equal(projection.primaryAction.label, "Подтвердить и создать без запуска");
+
+  for (const forbidden of [
+    /schema[_ -]?version/iu,
+    /contract[_ -]?(?:name|version)/iu,
+    /revision/iu,
+    /snapshot[_ -]?id/iu,
+    /provider[_ -]?ids?/iu,
+    /\b(?:campaigns|adgroups|keywords|ads|clients)\.(?:get|add|update|suspend|moderate|resume)\b/iu,
+    /sha-?256:[a-f0-9]+/iu,
+    /publish_fingerprint/iu,
+    /raw[_ -]?payload/iu,
+    /journal/iu,
+    /tool[_ -]?trace/iu,
+    /error[_ -]?code/iu,
+  ]) {
+    for (const response of ownerResponses) assert.doesNotMatch(JSON.stringify(response), forbidden);
+  }
+
+  const diagnostics = await journey.diagnostics(ownerKey);
+  assert.equal(diagnostics.state.schema_version, P0_DOCUMENT_SCHEMA);
+  assert.ok(diagnostics.state.package_review.package_id);
+  assert.ok(diagnostics.state.analytics_evidence_snapshot.snapshot_id);
+  assert.equal(diagnostics.state.package_execution, null);
 });

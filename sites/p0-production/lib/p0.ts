@@ -24,11 +24,14 @@ import {
 import {
   P0Application,
   type P0ApplicationStore,
-  type P0Command,
   type P0Context,
   type P0Document,
   type P0StoredRow,
 } from "./p0-application.ts";
+import {
+  P0OwnerJourney,
+  type OwnerActionSubmission,
+} from "./p0-owner-journey.ts";
 import {
   P0AgentRuntime,
   type P0AgentObjectiveKind,
@@ -1184,12 +1187,18 @@ const application = new P0Application({
   },
 });
 
-export async function overview(key: string) {
-  return application.query(key);
+const ownerJourney = new P0OwnerJourney(application);
+
+export async function ownerOverview(key: string) {
+  return ownerJourney.query(key);
 }
 
-export async function applyAction(key: string, payload: Record<string, unknown>) {
-  return application.command(key, payload as P0Command);
+export async function submitOwnerAction(key: string, payload: Record<string, unknown>) {
+  return ownerJourney.submit(key, payload as OwnerActionSubmission);
+}
+
+export async function operatorDiagnostics(key: string) {
+  return ownerJourney.diagnostics(key);
 }
 
 const P0_AGENT_BUDGETS = {

@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import P0Client from "./P0Client";
 
 export const metadata: Metadata = {
-  title: "Стратегия — MOX-ADV",
+  title: "Путь владельца — MOX-ADV",
   description:
-    "Рабочий кандидат стратегии и безопасного создания кампании на реальных данных Директа, Метрики и сайта.",
+    "Пять бизнес-этапов от цели до проверки и безопасного создания рекламных кампаний.",
 };
 
 export default function Home() {
