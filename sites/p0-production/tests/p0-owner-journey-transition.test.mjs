@@ -7,6 +7,12 @@ import {
   P0OwnerJourney,
   strategyLandingRequiresContextReanalysis,
 } from "../lib/p0-owner-journey.ts";
+import {
+  beginOwnerGoalInterview,
+  OwnerGoalInterviewTransitionError,
+  projectOwnerGoalInterview,
+  transitionOwnerGoalInterview,
+} from "../lib/p0-owner-journey-transition.ts";
 
 test("does not expose strategy approval when Product Focus has no viable exact destination", () => {
   const descriptor = ownerActionDescriptor({
@@ -118,6 +124,127 @@ test("a strategy landing on another business requires fresh Context research", (
   assert.equal(strategyLandingRequiresContextReanalysis(state, "https://mox-studio.ru/branding"), true);
   assert.equal(strategyLandingRequiresContextReanalysis(state, "https://apple.com/business/"), false);
   assert.equal(strategyLandingRequiresContextReanalysis(state, "https://store.apple.com/shop"), false);
+});
+
+test("goal interview follows question, recommendation, correction, confirmation and resumable continuation", async () => {
+  const questions = [
+    {
+      key: "campaign-goal",
+      prompt: "Какой бизнес-результат должна поддержать реклама?",
+      recommendation: {
+        answer: "Получать квалифицированные заявки на брендинг",
+        rationale: "На сайте подтверждены услуга и форма заявки.",
+        evidence: "Публичные страницы услуги и формы обращения.",
+        confidence: "Достаточная",
+      },
+    },
+    {
+      key: "qualified-result",
+      prompt: "Какой результат считать качественным?",
+      recommendation: {
+        answer: "Заявка от компании с подтверждённой задачей",
+        rationale: "Такой результат соответствует модели продаж.",
+        evidence: "Подтверждённая модель бизнеса.",
+        confidence: "Достаточная",
+      },
+    },
+  ];
+  let state = beginOwnerGoalInterview({ interviewKey: "internal-interview", questions });
+
+  let projection = await projectOwnerGoalInterview("owner", state);
+  assert.equal(projection.phase, "question");
+  assert.match(projection.primaryAction.handle, /^act_[A-Za-z0-9_-]+$/u);
+  assert.equal(Object.hasOwn(projection.primaryAction, "kind"), false);
+  const questionHandle = projection.primaryAction.handle;
+
+  state = await transitionOwnerGoalInterview("owner", state, { handle: questionHandle });
+  projection = await projectOwnerGoalInterview("owner", state);
+  assert.equal(projection.phase, "recommendation");
+  assert.equal(projection.recommendedAnswer.answer, questions[0].recommendation.answer);
+
+  state = await transitionOwnerGoalInterview("owner", state, {
+    handle: projection.primaryAction.handle,
+    values: { answer: "Получать заявки на комплексный ребрендинг" },
+  });
+  projection = await projectOwnerGoalInterview("owner", state);
+  assert.equal(projection.phase, "owner-correction");
+  assert.equal(projection.ownerCorrection, "Получать заявки на комплексный ребрендинг");
+
+  state = await transitionOwnerGoalInterview("owner", state, {
+    handle: projection.primaryAction.handle,
+    values: { answer: projection.ownerCorrection },
+  });
+  projection = await projectOwnerGoalInterview("owner", state);
+  assert.equal(projection.phase, "confirmation");
+  assert.equal(projection.confirmation.answer, "Получать заявки на комплексный ребрендинг");
+  assert.equal(projection.confirmedAnswers.length, 0);
+
+  state = await transitionOwnerGoalInterview("owner", state, { handle: projection.primaryAction.handle });
+  projection = await projectOwnerGoalInterview("owner", state);
+  assert.equal(projection.phase, "resumable-continuation");
+  assert.equal(projection.confirmedAnswers.length, 1);
+  assert.equal(projection.confirmedAnswers[0].answer, "Получать заявки на комплексный ребрендинг");
+
+  state = await transitionOwnerGoalInterview("owner", state, { handle: projection.primaryAction.handle });
+  projection = await projectOwnerGoalInterview("owner", state);
+  assert.equal(projection.phase, "question");
+  assert.equal(projection.question, questions[1].prompt);
+  assert.equal(projection.confirmedAnswers.length, 1);
+});
+
+test("goal interview rejects stale or invalid actions without losing confirmed answers", async () => {
+  const questions = [
+    {
+      key: "campaign-goal",
+      prompt: "Какой результат нужен? run_id internal-run",
+      recommendation: {
+        answer: "Квалифицированная заявка",
+        rationale: "Это ближайший результат; tool names p0_read_owner_journey остаются внутри.",
+        evidence: "Форма заявки на сайте; schema_version v99.",
+        confidence: "Достаточная",
+      },
+    },
+    {
+      key: "audience",
+      prompt: "Кого считать целевым клиентом?",
+      recommendation: {
+        answer: "Владельца бизнеса",
+        rationale: "Он принимает решение.",
+        evidence: "Подтверждённая модель бизнеса.",
+        confidence: "Достаточная",
+      },
+    },
+  ];
+  let state = beginOwnerGoalInterview({ interviewKey: "internal-stale", questions });
+  let projection = await projectOwnerGoalInterview("owner", state);
+  state = await transitionOwnerGoalInterview("owner", state, { handle: projection.primaryAction.handle });
+  projection = await projectOwnerGoalInterview("owner", state);
+  state = await transitionOwnerGoalInterview("owner", state, {
+    handle: projection.primaryAction.handle,
+    values: { answer: questions[0].recommendation.answer },
+  });
+  projection = await projectOwnerGoalInterview("owner", state);
+  state = await transitionOwnerGoalInterview("owner", state, { handle: projection.primaryAction.handle });
+  projection = await projectOwnerGoalInterview("owner", state);
+  assert.equal(projection.confirmedAnswers.length, 1);
+
+  const before = structuredClone(state);
+  await assert.rejects(
+    transitionOwnerGoalInterview("owner", state, { handle: "act_invalid" }),
+    (error) => error instanceof OwnerGoalInterviewTransitionError && error.code === "P0_OWNER_ACTION_STALE",
+  );
+  await assert.rejects(
+    transitionOwnerGoalInterview("owner", state, {
+      handle: projection.primaryAction.handle,
+      values: { answer: "Попытка перезаписать подтверждённый ответ" },
+    }),
+    (error) => error instanceof OwnerGoalInterviewTransitionError && error.code === "P0_OWNER_ACTION_INVALID",
+  );
+  assert.deepEqual(state, before);
+  assert.equal((await projectOwnerGoalInterview("owner", state)).confirmedAnswers.length, 1);
+
+  const serialized = JSON.stringify(projection);
+  assert.doesNotMatch(serialized, /internal-stale|campaign-goal|run[_ -]?id|tool names?|schema[_ -]?version|revision/iu);
 });
 
 test("owner action handles bind to the application revision after agent-owned safe progress", async () => {
