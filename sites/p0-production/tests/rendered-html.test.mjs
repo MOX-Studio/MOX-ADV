@@ -37,6 +37,19 @@ test("production page consumes only the typed owner projection", () => {
   assert.doesNotMatch(clientSource, /schema_version|revision_history|provider_ids|publish_fingerprint/u);
 });
 
+test("owner measurement report renders all readiness states, explicit window and quality evidence", () => {
+  assert.match(clientSource, /data-measurement-state/u);
+  for (const label of ["Окно отчёта", "Достижения", "Свежесть", "Качество отчёта", "Все проверки измеримости"]) {
+    assert.match(clientSource, new RegExp(label, "u"));
+  }
+  for (const state of ["Готово", "Редкие данные", "Устарело", "Ошибка", "Недоступно"]) {
+    assert.match(ownerSource, new RegExp(state, "u"));
+  }
+  for (const quality of ["Выборка", "Приватность", "Задержка", "Размер"]) {
+    assert.match(ownerSource, new RegExp(quality, "u"));
+  }
+});
+
 test("owner Direct report omits the guidance cards below its verified details", () => {
   assert.match(clientSource, /owner-direct-details/u);
   assert.doesNotMatch(clientSource, /owner-direct-guidance/u);

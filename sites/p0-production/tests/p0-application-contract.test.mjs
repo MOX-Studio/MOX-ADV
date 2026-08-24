@@ -4417,6 +4417,10 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
   assert.match(projection.appliedPractice.limitation, /не обещание результата/iu);
   assert.doesNotMatch(JSON.stringify(projection.appliedPractice), /release|digest|rule[_ -]?id|evaluator/iu);
   assert.equal(projection.businessReadiness.status, "Готово");
+  assert.equal(projection.businessReadiness.measurement.report.state, "Готово");
+  assert.match(projection.businessReadiness.measurement.report.window, /2026-08-01.+2026-08-20.+включены/iu);
+  assert.equal(projection.businessReadiness.measurement.report.reaches, "4 достижения");
+  assert.deepEqual(projection.businessReadiness.measurement.report.quality.map((item) => item.label), ["Выборка", "Приватность", "Задержка", "Размер"]);
   assert.equal(projection.businessReadiness.measurement.checks.length, 9);
   assert.ok(projection.businessReadiness.measurement.checks.some((check) => check.label === "Отсутствие дублирующей цели" && check.result === "Пройдено"));
   assert.deepEqual(projection.businessReadiness.destination.scopes.map((scope) => [scope.device, scope.classification]), [

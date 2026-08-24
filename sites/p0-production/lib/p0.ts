@@ -428,6 +428,7 @@ async function readMetrika() {
     throw new Error("Metrika production bindings не настроены в Sites.");
   }
   const dimension = "ym:s:lastDirectClickOrder";
+  // The report uses an explicit inclusive window and excludes the current provisional day.
   const start = isoDateDaysAgo(8);
   const end = isoDateDaysAgo(1);
   const query = new URLSearchParams({
@@ -456,6 +457,8 @@ async function readMetrika() {
   if (!Array.isArray(payload.data)) throw new Error("Ответ Метрики некорректен.");
   const visits = payload.data.reduce((sum, row) => sum + Number(row.metrics?.[0] ?? 0), 0);
   const goals = payload.data.reduce((sum, row) => sum + Number(row.metrics?.[1] ?? 0), 0);
+  const qualityKeys = ["sampled", "contains_sensitive_data", "sample_share", "sample_size", "sample_space", "data_lag"] as const;
+  const qualityMetadataComplete = qualityKeys.every((key) => Object.hasOwn(payload, key));
   return {
     counter,
     goal,
@@ -464,13 +467,17 @@ async function readMetrika() {
     visits,
     goals,
     observed_at: now(),
+    report_status: "AVAILABLE" as const,
+    window_inclusive: true as const,
+    accuracy: "full" as const,
     sampling: {
-      sampled: payload.sampled === true,
-      contains_sensitive_data: payload.contains_sensitive_data === true,
-      sample_share: Number(payload.sample_share ?? 1),
-      sample_size: Number(payload.sample_size ?? payload.data.length),
-      sample_space: Number(payload.sample_space ?? payload.data.length),
-      data_lag: Number(payload.data_lag ?? 0),
+      metadata_complete: qualityMetadataComplete,
+      sampled: qualityMetadataComplete ? payload.sampled === true : null,
+      contains_sensitive_data: qualityMetadataComplete ? payload.contains_sensitive_data === true : null,
+      sample_share: qualityMetadataComplete ? Number(payload.sample_share) : null,
+      sample_size: qualityMetadataComplete ? Number(payload.sample_size) : null,
+      sample_space: qualityMetadataComplete ? Number(payload.sample_space) : null,
+      data_lag: qualityMetadataComplete ? Number(payload.data_lag) : null,
     },
   };
 }
@@ -817,7 +824,10 @@ async function readContext(input: { owner_key?: string } = {}): Promise<P0Contex
             },
             provenance: {
               source_kind: "METRIKA_REPORTS_API",
+              report_status: metrikaResult.value.report_status,
               observed_at: metrikaResult.value.observed_at,
+              window_inclusive: metrikaResult.value.window_inclusive,
+              accuracy: metrikaResult.value.accuracy,
               attribution: "last_direct_click_order_dimension",
               timezone: metrikaBindingResult.status === "fulfilled" ? metrikaBindingResult.value.time_zone : "",
               dimensions: ["ym:s:date", "ym:s:lastDirectClickOrder"],

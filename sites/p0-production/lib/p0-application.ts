@@ -1011,14 +1011,14 @@ function sanitizeContext(input: P0Context): P0Context {
   const metrics = record(performance.display_metrics);
   const provenance = record(performance.provenance);
   const sampling = record(provenance.sampling);
-  const samplingMetadataComplete = [
+  const samplingMetadataComplete = sampling.metadata_complete === true || (sampling.metadata_complete === undefined && [
     "sampled",
     "contains_sensitive_data",
     "sample_share",
     "sample_size",
     "sample_space",
     "data_lag",
-  ].every((key) => Object.hasOwn(sampling, key));
+  ].every((key) => Object.hasOwn(sampling, key)));
   return {
     environment: "PRODUCTION",
     test_scenario: false,
@@ -1149,19 +1149,22 @@ function sanitizeContext(input: P0Context): P0Context {
           },
           provenance: {
             source_kind: cleanText(String(provenance.source_kind ?? ""), 100),
+            report_status: cleanText(String(provenance.report_status ?? (provenance.source_kind === "METRIKA_REPORTS_API" ? "AVAILABLE" : "")), 100),
             observed_at: cleanText(String(provenance.observed_at ?? ""), 100),
+            window_inclusive: provenance.window_inclusive !== false,
+            accuracy: cleanText(String(provenance.accuracy ?? "unknown"), 100),
             attribution: cleanText(String(provenance.attribution ?? ""), 100),
             timezone: cleanText(String(provenance.timezone ?? ""), 100),
             dimensions: stringList(provenance.dimensions),
             filters: cleanText(String(provenance.filters ?? ""), 1_000),
             sampling: {
               metadata_complete: samplingMetadataComplete,
-              sampled: sampling.sampled === true,
-              contains_sensitive_data: sampling.contains_sensitive_data === true,
-              sample_share: Number(sampling.sample_share ?? 1),
-              sample_size: Number(sampling.sample_size ?? 0),
-              sample_space: Number(sampling.sample_space ?? 0),
-              data_lag: Number(sampling.data_lag ?? 0),
+              sampled: samplingMetadataComplete ? sampling.sampled === true : null,
+              contains_sensitive_data: samplingMetadataComplete ? sampling.contains_sensitive_data === true : null,
+              sample_share: samplingMetadataComplete ? Number(sampling.sample_share) : null,
+              sample_size: samplingMetadataComplete ? Number(sampling.sample_size) : null,
+              sample_space: samplingMetadataComplete ? Number(sampling.sample_space) : null,
+              data_lag: samplingMetadataComplete ? Number(sampling.data_lag) : null,
             },
           },
         }

@@ -6,6 +6,7 @@ import {
   verifyMeasurementDestinationReadiness,
 } from "../lib/measurement-destination-readiness.ts";
 import { PINNED_LANDING_TOOL_VERSIONS } from "../lib/landing-advisory.ts";
+import { projectMeasurementReadinessForOwner } from "../lib/p0-owner-journey.ts";
 
 const ADDRESS = ["93.184.216.34"];
 
@@ -127,7 +128,35 @@ test("exact measurement and relevant existing landing are ready for every served
   const result = await build();
   assert.equal(result.status, "READY");
   assert.equal(result.measurement.status, "READY");
+  assert.deepEqual(result.measurement.report, {
+    state: "READY",
+    reaches: 4,
+    minimum_reaches: 3,
+    window: {
+      start: "2026-08-01",
+      end: "2026-08-20",
+      inclusive: true,
+      timezone: "Europe/Moscow",
+    },
+    freshness: { status: "CURRENT", age_days: 1, maximum_age_days: 3 },
+    quality: {
+      status: "CLEAR",
+      sampling: "UNSAMPLED",
+      privacy: "CLEAR",
+      sample_share: 1,
+      sample_size: 30,
+      sample_space: 30,
+      data_lag_seconds: 0,
+    },
+    conclusion: "За 01.08.2026–20.08.2026 включительно наблюдалось 4 достижения; данных достаточно для проверки измеримости.",
+    error: null,
+  });
   assert.equal(result.measurement.checks.every((check) => check.status === "PASS" || check.status === "NOT_APPLICABLE"), true);
+  const owner = projectMeasurementReadinessForOwner(result.measurement);
+  assert.equal(owner.report.state, "Готово");
+  assert.equal(owner.report.window, "2026-08-01 — 2026-08-20, обе даты включены");
+  assert.equal(owner.report.reaches, "4 достижения");
+  assert.deepEqual(owner.report.quality.map((item) => item.label), ["Выборка", "Приватность", "Задержка", "Размер"]);
   assert.deepEqual(result.destination.device_scopes.map((scope) => [scope.device, scope.classification, scope.status]), [
     ["desktop", "EXISTING_LANDING", "READY"],
     ["mobile", "EXISTING_LANDING", "READY"],
@@ -136,6 +165,86 @@ test("exact measurement and relevant existing landing are ready for every served
   assert.equal(result.destination.deterministic_observations.every((item) => item.kind === "DETERMINISTIC_OBSERVATION"), true);
   assert.equal(result.destination.neural_hypotheses.every((item) => item.kind === "NEURAL_HYPOTHESIS"), true);
   assert.equal(await verifyMeasurementDestinationReadiness(result), true);
+  const corrupted = structuredClone(result);
+  corrupted.measurement.report.state = "RARE";
+  assert.equal(await verifyMeasurementDestinationReadiness(corrupted), false);
+});
+
+test("measurement report states distinguish rare, stale, erroneous and unavailable observations", async (t) => {
+  await t.test("rare", async () => {
+    const rare = context();
+    rare.performance.display_metrics.goal_visits = "2";
+    const result = await build({ metrika: rare });
+    assert.equal(result.measurement.report.state, "RARE");
+    assert.equal(result.measurement.report.reaches, 2);
+    assert.match(result.measurement.report.conclusion, /редкие|2 достижени/iu);
+    assert.ok(result.repair_plan.some((item) => item.priority === 1 && /контролируем|дождаться/iu.test(item.action)));
+    assert.equal(projectMeasurementReadinessForOwner(result.measurement).report.state, "Редкие данные");
+  });
+
+  await t.test("stale", async () => {
+    const stale = context();
+    stale.performance.period_start = "2026-07-01";
+    stale.performance.period_end = "2026-07-31";
+    const result = await build({ metrika: stale });
+    assert.equal(result.measurement.report.state, "STALE");
+    assert.equal(result.measurement.report.freshness.status, "STALE");
+    assert.match(result.measurement.report.conclusion, /устарел|31\.07\.2026/iu);
+    assert.ok(result.repair_plan.some((item) => item.priority === 1 && /новый отчёт|свеж/iu.test(item.action)));
+    assert.equal(projectMeasurementReadinessForOwner(result.measurement).report.state, "Устарело");
+  });
+
+  await t.test("error", async () => {
+    const erroneous = context();
+    erroneous.performance.provenance.sampling.sampled = true;
+    erroneous.performance.provenance.sampling.sample_share = 0.5;
+    erroneous.performance.provenance.sampling.sample_size = 15;
+    erroneous.performance.provenance.sampling.contains_sensitive_data = true;
+    erroneous.performance.provenance.sampling.data_lag = 7200;
+    const result = await build({ metrika: erroneous });
+    assert.equal(result.measurement.report.state, "ERROR");
+    assert.equal(result.measurement.report.quality.sampling, "SAMPLED");
+    assert.equal(result.measurement.report.quality.privacy, "LIMITED");
+    assert.equal(result.measurement.report.quality.data_lag_seconds, 7200);
+    assert.match(result.measurement.report.conclusion, /качество|выборк/iu);
+    assert.ok(result.repair_plan.some((item) => item.priority === 1 && /без выборки|privacy|задержк/iu.test(item.action)));
+    assert.equal(projectMeasurementReadinessForOwner(result.measurement).report.state, "Ошибка");
+  });
+
+  await t.test("missing quality metadata is an error, not an unsampled report", async () => {
+    const erroneous = context();
+    erroneous.performance.provenance.sampling = {
+      metadata_complete: false,
+      sampled: null,
+      contains_sensitive_data: null,
+      sample_share: null,
+      sample_size: null,
+      sample_space: null,
+      data_lag: null,
+    };
+    const result = await build({ metrika: erroneous });
+    assert.equal(result.measurement.report.state, "ERROR");
+    assert.equal(result.measurement.report.quality.status, "UNKNOWN");
+    assert.equal(result.measurement.report.quality.sampling, "UNKNOWN");
+    assert.ok(result.measurement.checks.some((item) => item.code === "SAMPLING_PRIVACY_LAG" && item.status === "UNKNOWN"));
+  });
+
+  await t.test("unavailable", async () => {
+    const unavailable = context();
+    unavailable.performance = null;
+    unavailable.metrika.ready = false;
+    unavailable.metrika.authority = "UNAVAILABLE";
+    unavailable.metrika.blockers = ["Частная история измерений недоступна."];
+    const result = await build({ metrika: unavailable });
+    assert.equal(result.measurement.report.state, "UNAVAILABLE");
+    assert.equal(result.measurement.report.reaches, null);
+    assert.match(result.measurement.report.conclusion, /недоступ/iu);
+    assert.doesNotMatch(result.measurement.report.conclusion, /0 достиж/iu);
+    assert.ok(result.repair_plan.some((item) => item.priority === 1 && /доступ|отчёт/iu.test(item.action)));
+    const owner = projectMeasurementReadinessForOwner(result.measurement);
+    assert.equal(owner.report.state, "Недоступно");
+    assert.equal(owner.report.reaches, "Недоступно — не ноль");
+  });
 });
 
 test("sparse weak goal is a blocker with a concrete measurement repair plan and no write action", async () => {

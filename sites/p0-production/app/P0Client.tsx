@@ -181,7 +181,12 @@ export default function P0Client() {
           {activeStage === "findings" && activeStageStatus !== "upcoming" && projection.businessReadiness && <section className="owner-business-readiness" aria-labelledby="owner-business-readiness-title">
             <header><div><p className="owner-eyebrow">ИЗМЕРИМОСТЬ И ПОСАДОЧНАЯ</p><h2 id="owner-business-readiness-title">Готовность бизнес-результата</h2></div><strong>{projection.businessReadiness.status}</strong></header>
             <div className="owner-demand-cost-grid">
-              <article><span>Измеримость</span><h3>{projection.businessReadiness.measurement.status}</h3><p>{projection.businessReadiness.measurement.summary}</p><dl>{projection.businessReadiness.measurement.checks.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.result}. {item.limitation}</dd></div>)}</dl></article>
+              <article className="owner-measurement-report" data-measurement-state={projection.businessReadiness.measurement.report.state}>
+                <span>Измеримость</span><h3>{projection.businessReadiness.measurement.report.state}</h3><p>{projection.businessReadiness.measurement.report.conclusion}</p>
+                <dl className="owner-measurement-summary"><div><dt>Окно отчёта</dt><dd>{projection.businessReadiness.measurement.report.window}</dd></div><div><dt>Достижения</dt><dd>{projection.businessReadiness.measurement.report.reaches}</dd></div><div><dt>Свежесть</dt><dd>{projection.businessReadiness.measurement.report.freshness}</dd></div></dl>
+                <h4>Качество отчёта</h4><dl>{projection.businessReadiness.measurement.report.quality.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl>
+                <details><summary>Все проверки измеримости</summary><p>{projection.businessReadiness.measurement.summary}</p><dl>{projection.businessReadiness.measurement.checks.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.result}. {item.limitation}</dd></div>)}</dl></details>
+              </article>
               <article><span>Посадочная по устройствам</span><h3>{projection.businessReadiness.destination.status}</h3><dl>{projection.businessReadiness.destination.scopes.map((scope) => <div key={scope.device}><dt>{scope.device}</dt><dd>{scope.classification}. {scope.conclusion}</dd></div>)}</dl></article>
             </div>
             {projection.businessReadiness.destination.priorityCorrections.length > 0 && <div><h3>До трёх приоритетных исправлений</h3><ol>{projection.businessReadiness.destination.priorityCorrections.map((item) => <li key={`${item.priority}-${item.action}`}><strong>{item.priority}. {item.action}</strong><span>{item.basis}</span></li>)}</ol></div>}

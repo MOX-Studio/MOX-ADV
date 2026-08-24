@@ -153,6 +153,14 @@ export type OwnerJourneyProjection = {
     measurement: {
       status: "Готово" | "Заблокировано";
       summary: string;
+      report: {
+        state: "Готово" | "Редкие данные" | "Устарело" | "Ошибка" | "Недоступно";
+        conclusion: string;
+        window: string;
+        reaches: string;
+        freshness: string;
+        quality: Array<{ label: string; value: string }>;
+      };
       checks: Array<{ label: string; result: string; limitation: string }>;
     };
     destination: {
@@ -1095,24 +1103,58 @@ const DESTINATION_CLASSIFICATION_LABELS: Record<string, string> = {
   INVALID_UNRELATED: "Страница не относится к предложению",
 };
 
+const MEASUREMENT_REPORT_STATE_LABELS: Record<string, NonNullable<OwnerJourneyProjection["businessReadiness"]>["measurement"]["report"]["state"]> = {
+  READY: "Готово",
+  RARE: "Редкие данные",
+  STALE: "Устарело",
+  ERROR: "Ошибка",
+  UNAVAILABLE: "Недоступно",
+};
+
+export function projectMeasurementReadinessForOwner(value: unknown): NonNullable<OwnerJourneyProjection["businessReadiness"]>["measurement"] {
+  const measurement = record(value);
+  const report = record(measurement.report);
+  const window = record(report.window);
+  const freshness = record(report.freshness);
+  const quality = record(report.quality);
+  const start = ownerText(window.start, "начало недоступно", 20);
+  const end = ownerText(window.end, "конец недоступен", 20);
+  const reaches = report.reaches === null || report.reaches === undefined ? null : ownerCount(report.reaches);
+  const state = MEASUREMENT_REPORT_STATE_LABELS[String(report.state)] ?? "Недоступно";
+  const measurementChecks = list(measurement.checks).map(record);
+  return {
+    status: measurement.status === "READY" ? "Готово" : "Заблокировано",
+    summary: measurement.status === "READY" ? "Выбранный бизнес-результат можно наблюдать в нужной области." : "Измеримость выбранного результата пока не доказана.",
+    report: {
+      state,
+      conclusion: ownerText(report.conclusion, "Официальное наблюдение достижений недоступно; это не означает ноль.", 1_000),
+      window: window.start && window.end ? `${start} — ${end}, обе даты включены` : "Окно отчёта недоступно",
+      reaches: reaches === null ? "Недоступно — не ноль" : ownerCountPhrase(reaches, "достижение", "достижения", "достижений"),
+      freshness: freshness.status === "CURRENT" ? `Конец окна не старше ${ownerCount(freshness.maximum_age_days) ?? 3} дней` : freshness.status === "STALE" ? `Конец окна устарел на ${ownerCount(freshness.age_days) ?? "неизвестное число"} дней` : "Свежесть не подтверждена",
+      quality: [
+        { label: "Выборка", value: quality.sampling === "UNSAMPLED" ? "Без выборки" : quality.sampling === "SAMPLED" ? `Ограничена выборкой${quality.sample_share === null || quality.sample_share === undefined ? "" : ` · доля ${Number(quality.sample_share) * 100}%`}` : "Недоступно" },
+        { label: "Приватность", value: quality.privacy === "CLEAR" ? "Не ограничивает агрегат" : quality.privacy === "LIMITED" ? "Ограничивает доступное раскрытие" : "Недоступно" },
+        { label: "Задержка", value: quality.data_lag_seconds === null || quality.data_lag_seconds === undefined ? "Недоступно" : `${ownerCountLabel(ownerCount(quality.data_lag_seconds))} сек.` },
+        { label: "Размер", value: quality.sample_size === null || quality.sample_size === undefined ? "Недоступно" : `${ownerCountLabel(ownerCount(quality.sample_size))} из ${quality.sample_space === null || quality.sample_space === undefined ? "неизвестно" : ownerCountLabel(ownerCount(quality.sample_space))}` },
+      ],
+    },
+    checks: measurementChecks.map((item) => ({
+      label: ownerText(READINESS_CHECK_LABELS[String(item.code)], "Проверка измеримости"),
+      result: item.status === "PASS" ? "Пройдено" : item.status === "NOT_APPLICABLE" ? "Не требуется" : item.status === "FAIL" ? "Не пройдено" : "Недоступно",
+      limitation: item.limitation ? ownerText(item.limitation) : "Нет существенных ограничений для этой проверки",
+    })),
+  };
+}
+
 function businessReadinessProjection(state: InternalState): OwnerJourneyProjection["businessReadiness"] {
   const readiness = record(state.measurement_destination_readiness);
   if (!Object.keys(readiness).length) return null;
   const measurement = record(readiness.measurement);
   const destination = record(readiness.destination);
   const gate = record(readiness.human_decision_gate);
-  const measurementChecks = list(measurement.checks).map(record);
   return {
     status: readiness.status === "READY" ? "Готово" : "Заблокировано",
-    measurement: {
-      status: measurement.status === "READY" ? "Готово" : "Заблокировано",
-      summary: measurement.status === "READY" ? "Выбранный бизнес-результат можно наблюдать в нужной области." : "Измеримость выбранного результата пока не доказана.",
-      checks: measurementChecks.map((item) => ({
-        label: ownerText(READINESS_CHECK_LABELS[String(item.code)], "Проверка измеримости"),
-        result: item.status === "PASS" ? "Пройдено" : item.status === "NOT_APPLICABLE" ? "Не требуется" : item.status === "FAIL" ? "Не пройдено" : "Недоступно",
-        limitation: item.limitation ? ownerText(item.limitation) : "Нет существенных ограничений для этой проверки",
-      })),
-    },
+    measurement: projectMeasurementReadinessForOwner(measurement),
     destination: {
       status: destination.status === "READY" ? "Готово" : destination.status === "UNAVAILABLE" ? "Недоступно" : "Заблокировано",
       scopes: list(destination.device_scopes).map((value) => {

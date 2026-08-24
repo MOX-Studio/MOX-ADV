@@ -8,7 +8,9 @@ import { strategyAnswerValue } from "./campaign-strategy.ts";
 import { redactSensitiveEvidenceText } from "./analytics-evidence.ts";
 
 export const MEASUREMENT_DESTINATION_READINESS_SCHEMA = "p0-measurement-destination-readiness-v1";
-export const MEASUREMENT_DESTINATION_READINESS_VERSION = "1.0.0";
+export const MEASUREMENT_DESTINATION_READINESS_VERSION = "1.1.0";
+const MINIMUM_MEASUREMENT_REACHES = 3;
+const METRIKA_REPORT_MAX_AGE_DAYS = 3;
 
 export type ServedDeviceScope = "desktop" | "mobile";
 export type DestinationClassification = "EXISTING_BUSINESS_PAGE" | "EXISTING_LANDING" | "FUTURE_LANDING_REQUIRED" | "INVALID_UNRELATED";
@@ -41,6 +43,33 @@ export type MeasurementDestinationReadiness = {
       alternatives: Array<{ goal_id: string; name: string; type: string; funnel_stage: string; semantic_similarity: number }>;
       attribution_assumption: string;
       value_assumption: string;
+    };
+    report: {
+      state: "READY" | "RARE" | "STALE" | "ERROR" | "UNAVAILABLE";
+      reaches: number | null;
+      minimum_reaches: typeof MINIMUM_MEASUREMENT_REACHES;
+      window: {
+        start: string | null;
+        end: string | null;
+        inclusive: true;
+        timezone: string | null;
+      };
+      freshness: {
+        status: "CURRENT" | "STALE" | "UNKNOWN";
+        age_days: number | null;
+        maximum_age_days: typeof METRIKA_REPORT_MAX_AGE_DAYS;
+      };
+      quality: {
+        status: "CLEAR" | "LIMITED" | "UNKNOWN";
+        sampling: "UNSAMPLED" | "SAMPLED" | "UNKNOWN";
+        privacy: "CLEAR" | "LIMITED" | "UNKNOWN";
+        sample_share: number | null;
+        sample_size: number | null;
+        sample_space: number | null;
+        data_lag_seconds: number | null;
+      };
+      conclusion: string;
+      error: string | null;
     };
     evidence: {
       source: "YANDEX_METRIKA_OFFICIAL_API";
@@ -148,11 +177,25 @@ function metric(value: unknown) {
   return /^\d+(?:\.\d+)?$/u.test(normalized) && Number.isFinite(Number(normalized)) ? Number(normalized) : null;
 }
 
-function currentFreshness(observedAt: unknown, nowValue: string, maximumDays: number) {
-  const observed = Date.parse(String(observedAt ?? ""));
-  const now = Date.parse(nowValue);
-  if (!Number.isFinite(observed) || !Number.isFinite(now)) return "UNKNOWN" as const;
-  return now - observed <= maximumDays * 86_400_000 && now >= observed - 60_000 ? "CURRENT" as const : "STALE" as const;
+function isoCalendarDate(value: unknown) {
+  const normalized = text(value, 20);
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(normalized)) return null;
+  const parsed = new Date(`${normalized}T00:00:00.000Z`);
+  return Number.isFinite(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === normalized ? normalized : null;
+}
+
+function reportAgeDays(periodEnd: string | null, nowValue: string) {
+  if (!periodEnd) return null;
+  const nowDate = isoCalendarDate(nowValue.slice(0, 10));
+  if (!nowDate) return null;
+  const age = (Date.parse(`${nowDate}T00:00:00.000Z`) - Date.parse(`${periodEnd}T00:00:00.000Z`)) / 86_400_000;
+  return Number.isSafeInteger(age) && age >= 0 ? age : null;
+}
+
+function displayDate(value: string | null) {
+  if (!value) return "дата недоступна";
+  const [year, month, day] = value.split("-");
+  return `${day}.${month}.${year}`;
 }
 
 type FunnelStage = "QUALIFIED_LEAD" | "SALE" | "AWARENESS" | "UNKNOWN";
@@ -258,11 +301,47 @@ function measurementChecks(context: Record<string, unknown>, qualifiedResult: st
     .slice(0, 5);
   const reaches = metric(display.goal_visits);
   const reportOfficial = provenance.source_kind === "METRIKA_REPORTS_API";
-  const reportWindowKnown = Boolean(text(performance.period_start, 20) && text(performance.period_end, 20));
-  const reportFresh = currentFreshness(provenance.observed_at ?? performance.period_end, nowValue, 30);
-  const reachesPass = reportOfficial && reportWindowKnown && reaches !== null && reaches >= 3 && reportFresh === "CURRENT";
-  const metadataComplete = sampling.metadata_complete === true || ["sampled", "contains_sensitive_data", "sample_share", "sample_size", "sample_space", "data_lag"].every((key) => Object.hasOwn(sampling, key));
-  const qualityPass = reportOfficial && metadataComplete && sampling.sampled === false && sampling.contains_sensitive_data === false && Number(sampling.data_lag) === 0;
+  const periodStart = isoCalendarDate(performance.period_start);
+  const periodEnd = isoCalendarDate(performance.period_end);
+  const reportWindowValid = Boolean(periodStart && periodEnd && periodStart <= periodEnd);
+  const ageDays = reportAgeDays(periodEnd, nowValue);
+  const reportFresh = ageDays === null ? "UNKNOWN" as const : ageDays <= METRIKA_REPORT_MAX_AGE_DAYS ? "CURRENT" as const : "STALE" as const;
+  const metadataComplete = sampling.metadata_complete === true || (sampling.metadata_complete === undefined
+    && ["sampled", "contains_sensitive_data", "sample_share", "sample_size", "sample_space", "data_lag"].every((key) => Object.hasOwn(sampling, key)));
+  const sampleShare = metadataComplete && metric(sampling.sample_share) !== null ? metric(sampling.sample_share) : null;
+  const sampleSize = metadataComplete && metric(sampling.sample_size) !== null ? metric(sampling.sample_size) : null;
+  const sampleSpace = metadataComplete && metric(sampling.sample_space) !== null ? metric(sampling.sample_space) : null;
+  const dataLag = metadataComplete && metric(sampling.data_lag) !== null ? metric(sampling.data_lag) : null;
+  const samplingKnown = metadataComplete && typeof sampling.sampled === "boolean";
+  const privacyKnown = metadataComplete && typeof sampling.contains_sensitive_data === "boolean";
+  const qualityMetadataValid = metadataComplete && samplingKnown && privacyKnown
+    && sampleShare !== null && sampleShare >= 0 && sampleShare <= 1
+    && sampleSize !== null && sampleSize >= 0 && sampleSpace !== null && sampleSpace >= sampleSize
+    && dataLag !== null && dataLag >= 0;
+  const qualityPass = reportOfficial && qualityMetadataValid && sampling.sampled === false && sampling.contains_sensitive_data === false && dataLag === 0;
+  const reportUnavailable = !Object.keys(performance).length && metrika.authority !== "VERIFIED";
+  const reportMalformed = !reportOfficial || !reportWindowValid || ageDays === null || reaches === null || !qualityMetadataValid;
+  const reportState: MeasurementDestinationReadiness["measurement"]["report"]["state"] = reportUnavailable
+    ? "UNAVAILABLE"
+    : reportMalformed ? "ERROR"
+      : reportFresh === "STALE" ? "STALE"
+        : !qualityPass ? "ERROR"
+          : reaches < MINIMUM_MEASUREMENT_REACHES ? "RARE" : "READY";
+  const reportError = reportState === "ERROR"
+    ? !Object.keys(performance).length ? "Официальный отчёт Метрики не получен из-за ошибки чтения."
+      : reportMalformed ? "Официальный отчёт Метрики имеет неполное или некорректное окно, значение достижений либо метаданные качества."
+        : "Выборка, приватность или задержка ограничивают качество и достаточность официального отчёта."
+    : null;
+  const reportConclusion = reportState === "UNAVAILABLE"
+    ? "Достижения цели недоступны; это не означает ноль достижений."
+    : reportState === "ERROR"
+      ? `${reportError} Недоступное или ограниченное наблюдение не считается нулём.`
+      : reportState === "STALE"
+        ? `Отчёт за ${displayDate(periodStart)}–${displayDate(periodEnd)} включительно устарел; наблюдалось ${reaches} достижений, но они не подтверждают текущую готовность.`
+        : reportState === "RARE"
+          ? `За ${displayDate(periodStart)}–${displayDate(periodEnd)} включительно наблюдались редкие данные: ${reaches} достижения при минимуме ${MINIMUM_MEASUREMENT_REACHES}.`
+          : `За ${displayDate(periodStart)}–${displayDate(periodEnd)} включительно наблюдалось ${reaches} достижения; данных достаточно для проверки измеримости.`;
+  const reachesPass = reportState === "READY";
   const attribution = text(provenance.attribution, 200);
   const dimensions = list(provenance.dimensions).map((item) => text(item, 200));
   const trafficFilter = text(provenance.filters, 1_000);
@@ -282,8 +361,8 @@ function measurementChecks(context: Record<string, unknown>, qualifiedResult: st
     check("GOAL_SEMANTICS", semanticsPass ? "PASS" : semanticsKnown ? "FAIL" : "UNKNOWN", semanticsPass ? `Цель «${goalName}» соответствует выбранному результату «${qualifiedResult}».` : semanticsKnown ? `Цель «${goalName}» не связана достаточно точно с результатом «${qualifiedResult}».` : "Смысл точно привязанной цели нельзя уверенно связать с выбранным результатом.", semanticsKnown ? semanticsPass ? null : `Лексическое соответствие ${(similarity * 100).toFixed(0)}%; произвольная замена цели запрещена.` : "Официальные метаданные или однозначный смысл бизнес-результата недостаточны."),
     check("GOAL_FUNNEL", funnelPass ? "PASS" : funnelKnown ? "FAIL" : "UNKNOWN", funnelPass ? `Цель и бизнес-результат относятся к этапу «${funnelStageLabel(goalStage)}».` : funnelKnown ? `Цель относится к этапу «${funnelStageLabel(goalStage)}», а выбранный результат — к этапу «${funnelStageLabel(resultStage)}».` : "Этап воронки нельзя установить с достаточной уверенностью.", funnelKnown ? null : "Неоднозначный этап является существенной неопределённостью."),
     check("GOAL_DUPLICATION", !duplicationKnown ? "UNKNOWN" : duplicates.length ? "FAIL" : "PASS", duplicates.length ? `Официальный API обнаружил ${duplicates.length + 1} дублирующие цели для одного события.` : duplicationKnown ? "Дублирующая цель для выбранного события не обнаружена." : "Полный каталог целей для проверки дублей недоступен.", duplicates.length ? `Дубли: ${[selectedGoalId, ...duplicates.map((item) => text(item.id, 100))].join(", ")}.` : duplicationKnown ? null : "Недоступность каталога не считается отсутствием дублей."),
-    check("RECENT_REACHES", reachesPass ? "PASS" : reaches === null || !reportWindowKnown ? "UNKNOWN" : "FAIL", reachesPass ? `За свежий период наблюдалось ${reaches} достижений.` : "Свежих достижений недостаточно для проверки измеримости.", reaches === null || !reportWindowKnown ? "Недоступность не является нулём." : !reportOfficial ? "Источник отчёта не подтверждён." : reportFresh === "STALE" ? "Отчёт устарел." : reaches < 3 ? "Наблюдение разрежено: менее трёх достижений." : null),
-    check("SAMPLING_PRIVACY_LAG", qualityPass ? "PASS" : metadataComplete ? "FAIL" : "UNKNOWN", qualityPass ? "Sampling, privacy и lag не ограничивают текущий отчёт." : "Качество отчёта ограничено sampling, privacy, lag или неизвестными метаданными."),
+    check("RECENT_REACHES", reachesPass ? "PASS" : ["RARE", "STALE"].includes(reportState) ? "FAIL" : "UNKNOWN", reportConclusion, reportState === "UNAVAILABLE" ? "Недоступность не является нулём." : reportState === "ERROR" ? reportError : reportState === "STALE" ? `Конец окна старше ${METRIKA_REPORT_MAX_AGE_DAYS} дней.` : reportState === "RARE" ? `Наблюдение разрежено: менее ${MINIMUM_MEASUREMENT_REACHES} достижений.` : null),
+    check("SAMPLING_PRIVACY_LAG", qualityPass ? "PASS" : qualityMetadataValid ? "FAIL" : "UNKNOWN", qualityPass ? "Выборка, приватность и задержка не ограничивают текущий отчёт." : "Качество отчёта ограничено выборкой, приватностью, задержкой или неизвестными метаданными.", qualityPass ? null : !qualityMetadataValid ? "Полные корректные метаданные качества недоступны." : sampling.sampled === true ? "Отчёт построен по выборке." : sampling.contains_sensitive_data === true ? "Провайдер отметил ограничение приватности." : dataLag !== 0 ? `Задержка данных: ${dataLag} секунд.` : null),
     check("ATTRIBUTION", attributionPass ? "PASS" : "UNKNOWN", attributionPass ? "Результат связан с точной областью трафика Яндекс Директа через lastDirectClickOrder." : "Атрибуция или точная область трафика отчёта недоступны.", attributionPass ? null : "Без точного измерения и фильтра нельзя приписать результат выбранной рекламе."),
     check("VALUE_REVENUE", valueStatus, valueAssumption, valueStatus === "UNKNOWN" ? "Предположение о ценности может изменить экономический вывод и требует решения." : null),
     check("OFFLINE_READINESS", valueKnown ? "NOT_APPLICABLE" : "UNKNOWN", valueKnown ? "Результат оценивается на выбранном этапе; последующая продажа не приписывается ему без отдельного доказательства по результатам после продажи." : "Неясно, требуется ли сопоставление результата после продажи.", valueKnown ? null : "Неизвестный этап не позволяет определить область результатов после продажи."),
@@ -304,11 +383,38 @@ function measurementChecks(context: Record<string, unknown>, qualifiedResult: st
       attribution_assumption: attributionPass ? `lastDirectClickOrder; ${trafficFilter}` : "Точная атрибуция не подтверждена.",
       value_assumption: valueAssumption,
     },
+    report: {
+      state: reportState,
+      reaches: reaches === null ? null : reaches,
+      minimum_reaches: MINIMUM_MEASUREMENT_REACHES,
+      window: {
+        start: periodStart,
+        end: periodEnd,
+        inclusive: true,
+        timezone: text(provenance.timezone || metrika.time_zone, 100) || null,
+      },
+      freshness: {
+        status: reportFresh,
+        age_days: ageDays,
+        maximum_age_days: METRIKA_REPORT_MAX_AGE_DAYS,
+      },
+      quality: {
+        status: !qualityMetadataValid ? "UNKNOWN" as const : qualityPass ? "CLEAR" as const : "LIMITED" as const,
+        sampling: !samplingKnown ? "UNKNOWN" as const : sampling.sampled === true ? "SAMPLED" as const : "UNSAMPLED" as const,
+        privacy: !privacyKnown ? "UNKNOWN" as const : sampling.contains_sensitive_data === true ? "LIMITED" as const : "CLEAR" as const,
+        sample_share: sampleShare,
+        sample_size: sampleSize,
+        sample_space: sampleSpace,
+        data_lag_seconds: dataLag,
+      },
+      conclusion: text(reportConclusion, 1_000),
+      error: reportError ? text(reportError, 600) : null,
+    },
     evidence: {
       source: "YANDEX_METRIKA_OFFICIAL_API" as const,
       observed_at: text(provenance.observed_at || metrika.observed_at, 100) || null,
       scope: "Выбранный business result, traffic attribution и exact destination scope",
-      freshness: currentFreshness(provenance.observed_at || metrika.observed_at, nowValue, 30),
+      freshness: reportFresh,
       confidence: !exact || !providerMetadata ? "UNKNOWN" as const : blocking ? "LIMITED" as const : "HIGH" as const,
       limitations,
     },
@@ -425,9 +531,13 @@ async function destinationReadiness(input: {
 function repairPlan(measurement: MeasurementDestinationReadiness["measurement"], destination: MeasurementDestinationReadiness["destination"]) {
   const actions: MeasurementDestinationReadiness["repair_plan"] = [];
   const failed = new Map(measurement.checks.filter((item) => item.status === "FAIL" || item.status === "UNKNOWN").map((item) => [item.code, item]));
+  if (measurement.report.state === "UNAVAILABLE") actions.push({ priority: actions.length + 1, area: "MEASUREMENT", action: "Восстановить разрешённый доступ только для чтения к точному счётчику и получить официальный отчёт по выбранной цели за явно указанное недавнее окно.", expected_result: "Официальный отчёт с датами окна и наблюдаемым числом достижений; недоступность не подменена нулём.", owner_or_site_team: true });
+  if (measurement.report.state === "ERROR" && measurement.report.quality.status === "LIMITED") actions.push({ priority: actions.length + 1, area: "MEASUREMENT", action: "Повторить разрешённый отчёт с полной точностью без выборки; дождаться устранения задержки и использовать только допустимый агрегированный результат без раскрытия ограниченных приватностью данных.", expected_result: "Свежий несэмплированный отчёт с нулевой задержкой и допустимым уровнем раскрытия.", owner_or_site_team: true });
+  if (measurement.report.state === "ERROR" && measurement.report.quality.status !== "LIMITED") actions.push({ priority: actions.length + 1, area: "MEASUREMENT", action: "Исправить ошибку чтения официального отчёта или его некорректные метаданные и повторить разрешённую проверку только для чтения.", expected_result: "Корректное окно, число достижений и полные метаданные качества официального отчёта.", owner_or_site_team: true });
+  if (measurement.report.state === "STALE") actions.push({ priority: actions.length + 1, area: "MEASUREMENT", action: "Получить новый официальный отчёт по той же точно привязанной цели за явно указанное свежее окно без изменения цели или сайта агентом.", expected_result: `Конец окна не старше ${METRIKA_REPORT_MAX_AGE_DAYS} дней и число достижений показано отдельно от недоступности.`, owner_or_site_team: true });
+  if (measurement.report.state === "RARE") actions.push({ priority: actions.length + 1, area: "MEASUREMENT", action: "Выполнить контролируемую проверку достижения силами владельца сайта и дождаться отчёта без изменения цели или сайта агентом.", expected_result: `Не менее ${MINIMUM_MEASUREMENT_REACHES} свежих достижений точно привязанной цели или честно задокументированная неисправность.`, owner_or_site_team: true });
   if (failed.has("GOAL_SEMANTICS") || failed.has("GOAL_FUNNEL") || failed.has("GOAL_DUPLICATION")) actions.push({ priority: actions.length + 1, area: "MEASUREMENT", action: "По подготовленному пакету решения подтвердить одну существующую основную цель, которая точно означает выбранный квалифицированный результат и не дублирует то же событие; если её нет — передать ответственному за сайт готовое задание на настройку измерения.", expected_result: "Одна существующая основная цель с подтверждёнными смыслом, этапом воронки и уникальностью.", owner_or_site_team: true });
-  if (failed.has("RECENT_REACHES")) actions.push({ priority: actions.length + 1, area: "MEASUREMENT", action: "Выполнить контролируемую проверку достижения на сайте силами владельца сайта и дождаться свежего отчёта без изменения цели агентом.", expected_result: "Не менее трёх свежих достижений exact-bound цели или честно задокументированная неисправность.", owner_or_site_team: true });
-  if ([...failed.keys()].some((code) => !["GOAL_SEMANTICS", "GOAL_FUNNEL", "RECENT_REACHES"].includes(code))) actions.push({ priority: actions.length + 1, area: "MEASUREMENT", action: "Исправить указанные ограничения качества, задержки, привязки результата, ценности или передачи результатов после продажи; затем повторить проверку.", expected_result: "Полный свежий отчёт в нужной области без неизвестных ограничений качества.", owner_or_site_team: true });
+  if ([...failed.keys()].some((code) => !["GOAL_SEMANTICS", "GOAL_FUNNEL", "GOAL_DUPLICATION", "RECENT_REACHES", "SAMPLING_PRIVACY_LAG"].includes(code))) actions.push({ priority: actions.length + 1, area: "MEASUREMENT", action: "Исправить указанные ограничения привязки результата, атрибуции, ценности или передачи результатов после продажи; затем повторить проверку.", expected_result: "Полный свежий отчёт в нужной области без неизвестных ограничений.", owner_or_site_team: true });
   for (const item of destination.priority_corrections) actions.push({ priority: actions.length + 1, area: "DESTINATION", action: item.action, expected_result: `Релевантная существующая landing для ${item.device}.`, owner_or_site_team: true });
   if (["UNAVAILABLE", "SAFETY_BLOCKED"].includes(destination.status)) actions.push({ priority: actions.length + 1, area: "DESTINATION", action: "Восстановить безопасную проверку публичной страницы или заменить небезопасный адрес на публичную страницу бизнеса и повторить проверку.", expected_result: "Наблюдаемые факты о странице для каждого обслуживаемого устройства.", owner_or_site_team: true });
   return actions.slice(0, 6).map((item, index) => ({ ...item, priority: index + 1 }));
@@ -506,8 +616,24 @@ export async function buildMeasurementDestinationReadiness(input: {
 export async function verifyMeasurementDestinationReadiness(value: unknown): Promise<boolean> {
   try {
     const item = record(value);
-    if (item.schema_version !== MEASUREMENT_DESTINATION_READINESS_SCHEMA || item.contract_version !== MEASUREMENT_DESTINATION_READINESS_VERSION || item.external_changes_performed !== false) return false;
+    const contractVersion = String(item.contract_version ?? "");
+    if (item.schema_version !== MEASUREMENT_DESTINATION_READINESS_SCHEMA
+      || contractVersion !== MEASUREMENT_DESTINATION_READINESS_VERSION
+      || item.external_changes_performed !== false) return false;
     if (!text(item.strategy_revision_id, 255) || !Number.isFinite(Date.parse(String(item.observed_at ?? "")))) return false;
+    if (contractVersion === MEASUREMENT_DESTINATION_READINESS_VERSION) {
+      const report = record(record(item.measurement).report);
+      const window = record(report.window);
+      const freshness = record(report.freshness);
+      const quality = record(report.quality);
+      if (!["READY", "RARE", "STALE", "ERROR", "UNAVAILABLE"].includes(String(report.state))) return false;
+      if (report.reaches !== null && (!Number.isFinite(Number(report.reaches)) || Number(report.reaches) < 0)) return false;
+      if (Number(report.minimum_reaches) !== MINIMUM_MEASUREMENT_REACHES || window.inclusive !== true) return false;
+      if (!["CURRENT", "STALE", "UNKNOWN"].includes(String(freshness.status)) || Number(freshness.maximum_age_days) !== METRIKA_REPORT_MAX_AGE_DAYS) return false;
+      if (!["CLEAR", "LIMITED", "UNKNOWN"].includes(String(quality.status))
+        || !["UNSAMPLED", "SAMPLED", "UNKNOWN"].includes(String(quality.sampling))
+        || !["CLEAR", "LIMITED", "UNKNOWN"].includes(String(quality.privacy))) return false;
+    }
     const destination = record(item.destination);
     const scopes = list(destination.device_scopes).map(record);
     if (!scopes.length || scopes.some((scope) => !["desktop", "mobile"].includes(String(scope.device)) || !["READY", "BLOCKED", "UNAVAILABLE"].includes(String(scope.status)) || (scope.classification !== null && !["EXISTING_BUSINESS_PAGE", "EXISTING_LANDING", "FUTURE_LANDING_REQUIRED", "INVALID_UNRELATED"].includes(String(scope.classification))))) return false;
