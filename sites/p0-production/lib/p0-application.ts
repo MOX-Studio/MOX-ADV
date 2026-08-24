@@ -154,14 +154,14 @@ import {
 } from "./measurement-destination-readiness.ts";
 
 export const P0_APPLICATION_CONTRACT = "mox-adv.p0.application";
-export const P0_APPLICATION_CONTRACT_VERSION = "1.22.0";
+export const P0_APPLICATION_CONTRACT_VERSION = "1.27.0";
 export const P0_DOCUMENT_SCHEMA = "p0-application-document-v15";
 const P0_LEGACY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4", "p0-application-document-v5", "p0-application-document-v6", "p0-application-document-v7", "p0-application-document-v8", "p0-application-document-v9", "p0-application-document-v10", "p0-application-document-v11", "p0-application-document-v12", "p0-application-document-v13", "p0-application-document-v14"]);
 const P0_PRE_PACKAGE_AUTHORITY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4"]);
 export const P0_CONTEXT_SCHEMA = "p0-context-v2";
 const P0_LEGACY_CONTEXT_SCHEMA = "p0-context-v1";
 export const P0_CONTEXT_PREFLIGHT_MAX_AGE_MS = 5 * 60_000;
-export const P0_AGENT_POLICY_VERSION = "p0-agent-policy-v5";
+export const P0_AGENT_POLICY_VERSION = "p0-agent-policy-v10";
 export const P0_AGENT_OBJECTIVE: P0AgentApplicationContract["objective"] = {
   kind: "COORDINATE_OWNER_JOURNEY",
   statement: "Coordinate bounded safe research, queued reads, approved dispatch, and local correction preparation for the current P0 owner journey, preserving application truth and stopping only at a Critical Decision or Material Uncertainty.",
@@ -184,6 +184,32 @@ export const P0_AGENT_TOOL_DEFINITIONS: P0AgentApplicationContract["tools"] = [
     name: "p0_read_bounded_competitor_research",
     description: "Read only the persisted bounded candidate set, rationales, exact allowlisted public landing observations, and denominator-aware matrix; no generic HTTP or arbitrary browser is exposed.",
     permission: "P0_APPLICATION_READ",
+    input_schema: {
+      type: "object",
+      properties: {
+        expected_revision: { type: "integer", minimum: 0 },
+      },
+      required: ["expected_revision"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "p0_collect_bounded_competitor_research",
+    description: "Collect the configured bounded candidate set through exact allowlisted public landing reads, persist denominator-aware evidence, and invalidate stale strategy lineage without any provider write.",
+    permission: "P0_LOCAL_DRAFT_WRITE",
+    input_schema: {
+      type: "object",
+      properties: {
+        expected_revision: { type: "integer", minimum: 0 },
+      },
+      required: ["expected_revision"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "p0_refresh_competitor_campaign_hypotheses",
+    description: "Regenerate the local Recommendation Set from the current approved Strategy and bounded public competitor evidence, producing a market control and improved test hypothesis without any provider write.",
+    permission: "P0_LOCAL_DRAFT_WRITE",
     input_schema: {
       type: "object",
       properties: {
@@ -432,6 +458,14 @@ export interface P0ApplicationAdapters {
     context: P0Context;
     generatedAt: string;
   }): Promise<MarketEvidenceInput>;
+  readCompetitorResearch?(input: {
+    model: BusinessModel;
+    site: SiteAnalysis;
+    generatedAt: string;
+  }): Promise<{
+    competitor_candidate_set: Record<string, unknown>;
+    competitor_observations: Array<Record<string, unknown>>;
+  }>;
   landingAdvisory?: LandingAdvisoryAdapter;
   readPlaybookReleases?(): Promise<CuratedPlaybookRelease[]>;
   externalWriteConfiguration(): P0ExternalWriteConfiguration;
@@ -573,6 +607,9 @@ export const P0_COMMAND_TRUTH_TABLE = {
   ),
   select_focus: (state: P0Document) => Boolean(
     state.site_analysis && state.business_model && state.product_focus && packageNotDispatched(state),
+  ),
+  refresh_competitor_research: (state: P0Document) => Boolean(
+    state.site_analysis && state.business_model && state.analytics_evidence_snapshot && state.product_focus && packageNotDispatched(state),
   ),
   approve_strategy: (state: P0Document) => (
     state.business_model?.source === "REAL_SITE_RESEARCH_PLUS_OWNER_CONFIRMATION"
@@ -1166,6 +1203,7 @@ function sanitizeContext(input: P0Context): P0Context {
           const price = record(matrixRow.published_price);
           const source = record(matrixRow.source);
           const sample = record(matrixRow.ad_visibility_sample);
+          const analysis = record(matrixRow.campaign_analysis);
           return {
             competitor: artifactText(matrixRow.competitor, 200),
             products_services: stringList(matrixRow.products_services).slice(0, 12).map((item) => artifactText(item, 500)),
@@ -1182,11 +1220,24 @@ function sanitizeContext(input: P0Context): P0Context {
             ad_visibility_sample: {
               status: cleanText(String(sample.status ?? ""), 100),
               query: sample.query === null ? null : artifactText(sample.query, 500),
-              source: artifactText(sample.source, 300),
+              source: artifactText(sample.source, 1_000),
               geography: artifactText(sample.geography, 200),
               device: artifactText(sample.device, 100),
               observation_date: cleanText(String(sample.observation_date ?? ""), 100),
             },
+            campaign_analysis: Object.keys(analysis).length ? {
+              evidence_status: cleanText(String(analysis.evidence_status ?? ""), 100),
+              pattern_id: artifactText(analysis.pattern_id, 200),
+              pattern_label: artifactText(analysis.pattern_label, 500),
+              campaign_type: artifactText(analysis.campaign_type, 500),
+              audience_signal: artifactText(analysis.audience_signal, 1_000),
+              ad_message: artifactText(analysis.ad_message, 1_000),
+              call_to_action: artifactText(analysis.call_to_action, 500),
+              strategy_fit: artifactText(analysis.strategy_fit, 1_000),
+              weakness: artifactText(analysis.weakness, 1_000),
+              improvement_hypothesis: artifactText(analysis.improvement_hypothesis, 1_000),
+              changed_family: cleanText(String(analysis.changed_family ?? ""), 100),
+            } : null,
           };
         })() : undefined,
         limitations: stringList(observation.limitations).map((item) => artifactText(item, 500)),
@@ -2254,7 +2305,7 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
   const model = state.business_model;
   const site = state.site_analysis;
   const productEvidence = model?.field_evidence?.product;
-  if (model && site && productEvidence) {
+  if (model && site && productEvidence && productEvidence.owner_confirmed !== true) {
     const supportingEvidence = bestOfferEvidence(evidenceRows(site));
     const brand = brandFromSite(site);
     const inferred = inferOffer(brand, supportingEvidence?.text ?? site.text_excerpt, model.qualified_result);
@@ -2277,7 +2328,7 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
   }
 
   const audienceEvidence = model?.field_evidence?.audience;
-  if (model && audienceEvidence) {
+  if (model && audienceEvidence && audienceEvidence.owner_confirmed !== true) {
     const inferred = inferDecisionMakers(audienceEvidence.quote);
     const needsCorrection = isUnprocessedAudience(model.audience, audienceEvidence.quote)
       || (["GPT_SITES_EVIDENCE_RESEARCH_V2", "DETERMINISTIC_EVIDENCE_EXTRACTOR_V2"].includes(model.research.agent) && inferred !== model.audience);
@@ -2811,9 +2862,25 @@ function agentCorrectionPreparation(state: P0Document) {
   return item && draft ? { item, draft, correction: null } : null;
 }
 
+function competitorCampaignRecommendationRefreshRequired(state: P0Document) {
+  const matrix = state.analytics_evidence_snapshot?.competitor_matrix;
+  if (!state.strategy || !state.recommendation_set || !matrix || matrix.rows.length < 2) return false;
+  const control = state.recommendation_set.drafts.find((draft) => record(draft.variant).kind === "CONTROL");
+  const controlKind = String(record(record(control).variant).control_basis
+    ? record(record(record(control).variant).control_basis).kind ?? ""
+    : "");
+  const hasCompetitorTreatment = state.recommendation_set.drafts.some((draft) => {
+    const hypothesis = record(record(draft.variant).hypothesis);
+    return record(draft.variant).kind === "IMPROVEMENT"
+      && hypothesis.source === "COMPETITOR_PUBLIC_WEB"
+      && String(hypothesis.hypothesis_id ?? "").endsWith("@1.1.0");
+  });
+  return !controlKind.startsWith("COMPETITIVE_") || !hasCompetitorTreatment;
+}
+
 function agentNextBoundary(state: P0Document) {
   if (agentHumanDecisionBoundary(state)) return "HUMAN_DECISION_GATE" as const;
-  if (approvedAgentDispatch(state) || pendingAgentSafeWork(state) || agentCorrectionPreparation(state)) return "SAFE_WORK" as const;
+  if (approvedAgentDispatch(state) || pendingAgentSafeWork(state) || agentCorrectionPreparation(state) || competitorCampaignRecommendationRefreshRequired(state)) return "SAFE_WORK" as const;
   const packageComplete = Boolean(state.package_execution?.items.length)
     && state.package_execution!.items.every((item) => !["QUEUED", "DISPATCHING", "MODERATION_PENDING", "OUTCOME_UNKNOWN"].includes(item.status));
   if (packageComplete) return "JOURNEY_COMPLETE" as const;
@@ -2918,6 +2985,7 @@ export class P0Application {
     const tools = P0_AGENT_TOOL_DEFINITIONS.filter((tool) => {
       if (["p0_audit_direct_account", "p0_prepare_rejected_correction", "p0_dispatch_approved_package"].includes(tool.name)) return directAvailable;
       if (tool.name === "p0_continue_due_safe_work") return providerReadAvailable;
+      if (tool.name === "p0_collect_bounded_competitor_research") return Boolean(this.adapters.readCompetitorResearch);
       return true;
     });
     const allowedPermissions = [...new Set(tools.map((tool) => tool.permission))];
@@ -3039,10 +3107,33 @@ export class P0Application {
       const planDevices = Array.isArray(planScope.devices) ? planScope.devices : [];
       const planSeeds = Array.isArray(plan.seeds) ? plan.seeds : [];
       const correctionPreparation = agentCorrectionPreparation(state);
+      const competitorMatrix = state.analytics_evidence_snapshot?.competitor_matrix ?? null;
+      const visibilityAggregate = competitorMatrix?.aggregate_claims.find((claim) => claim.claim === "Рекламная видимость наблюдалась");
+      const unavailableVisibilityEncodedAsZero = Boolean(
+        competitorMatrix?.rows.length
+        && competitorMatrix.rows.every((row) => row.ad_visibility_sample.status === "UNAVAILABLE")
+        && visibilityAggregate?.observed_count === 0,
+      );
+      const campaignAnalysisMissing = Boolean(
+        competitorMatrix?.rows.length
+        && competitorMatrix.rows.some((row) => !record(row).campaign_analysis),
+      );
       facts = {
         revision: stored.revision,
         owner_stage: journeyStage,
         analytics_evidence_status: state.analytics_evidence_snapshot ? "AVAILABLE" : "MISSING",
+        competitor_research: {
+          status: competitorMatrix?.status ?? "UNAVAILABLE",
+          collection_ready: Boolean(this.adapters.readCompetitorResearch),
+          refresh_required: unavailableVisibilityEncodedAsZero || campaignAnalysisMissing,
+          observed_landing_count: competitorMatrix?.rows.length ?? 0,
+        },
+        competitor_campaign_recommendation: {
+          refresh_required: competitorCampaignRecommendationRefreshRequired(state),
+          current_draft_count: state.recommendation_set?.drafts.length ?? 0,
+          desired_output: "MARKET_CONTROL_PLUS_IMPROVED_HYPOTHESIS",
+          authority_effect: "LOCAL_DRAFTS_ONLY",
+        },
         demand_cost_research: {
           demand: {
             status: String(frequency.status ?? "UNAVAILABLE"),
@@ -3094,6 +3185,105 @@ export class P0Application {
         package_outcome: state.package_execution?.verdict ?? null,
       } as unknown as Record<string, JsonValue>;
       summary = `Authoritative owner journey at ${journeyStage} preserves scoped demand and one compatible source-labelled cost range or explicit unavailable; next boundary is ${facts.next_boundary}.`;
+    } else if (input.call.name === "p0_collect_bounded_competitor_research") {
+      if (JSON.stringify(Object.keys(argumentsValue)) !== JSON.stringify(["expected_revision"])) {
+        fail("P0_AGENT_TOOL_INPUT_INVALID", "Competitor research collection input не соответствует closed schema.");
+      }
+      if (!this.adapters.readCompetitorResearch) {
+        fail("P0_COMPETITOR_RESEARCH_UNAVAILABLE", "Bounded production competitor research не настроено.");
+      }
+      const next = await this.command(input.owner_key, {
+        action: "refresh_competitor_research",
+        expected_revision: stored.revision,
+      });
+      const matrix = next.state.analytics_evidence_snapshot?.competitor_matrix;
+      if (!matrix) fail("P0_COMPETITOR_RESEARCH_UNAVAILABLE", "Competitor matrix не была сохранена.");
+      const nextContract = await this.agentContract(input.owner_key, input.objective.kind);
+      return {
+        observation: {
+          schema_version: "p0-agent-observation-v1",
+          sequence: input.observation_sequence,
+          tool_call_id: cleanText(input.call.id, 255),
+          tool_name: definition.name,
+          trust: "UNTRUSTED_EVIDENCE",
+          summary: `Trusted application collected ${matrix.rows.length} exact public competitor landing observations for denominator ${matrix.candidate_set.candidates.length} and invalidated stale downstream lineage.`,
+          facts: {
+            revision: next.revision,
+            competitor_research_status: matrix.status,
+            observed_landing_count: matrix.rows.length,
+            candidate_denominator: matrix.candidate_set.candidates.length,
+            next_boundary: agentNextBoundary(next.state),
+          },
+          source_references: [
+            {
+              source_kind: "P0_APPLICATION_STATE",
+              locator: `p0-application:revision:${next.revision}`,
+              observed_at: next.updated_at,
+            },
+            ...matrix.rows.map((row) => ({
+              source_kind: "COMPETITOR_PUBLIC_LANDING",
+              locator: row.exact_landing,
+              observed_at: row.observation_date,
+            })),
+          ],
+          application_revision: nextContract.authority.application_revision,
+          authority_digest: nextContract.authority.authority_digest,
+          prior_outcomes_digest: nextContract.authority.prior_outcomes_digest,
+          observed_at: timestamp,
+        },
+        contract: nextContract,
+      };
+    } else if (input.call.name === "p0_refresh_competitor_campaign_hypotheses") {
+      if (JSON.stringify(Object.keys(argumentsValue)) !== JSON.stringify(["expected_revision"])) {
+        fail("P0_AGENT_TOOL_INPUT_INVALID", "Competitor campaign refresh input не соответствует closed schema.");
+      }
+      if (!competitorCampaignRecommendationRefreshRequired(state)) {
+        facts = {
+          revision: stored.revision,
+          competitor_campaign_recommendation_status: "CURRENT",
+          draft_count: state.recommendation_set?.drafts.length ?? 0,
+        };
+        summary = "Competitor-informed market control and improved hypothesis are already current.";
+      } else {
+        const next = await this.command(input.owner_key, {
+          action: "recalculate_recommendations",
+          expected_revision: stored.revision,
+        });
+        const control = next.state.recommendation_set?.drafts.find((draft) => record(draft.variant).kind === "CONTROL");
+        const treatment = next.state.recommendation_set?.drafts.find((draft) =>
+          record(draft.variant).kind === "IMPROVEMENT"
+          && record(record(draft.variant).hypothesis).source === "COMPETITOR_PUBLIC_WEB"
+        );
+        const nextContract = await this.agentContract(input.owner_key, input.objective.kind);
+        return {
+          observation: {
+            schema_version: "p0-agent-observation-v1",
+            sequence: input.observation_sequence,
+            tool_call_id: cleanText(input.call.id, 255),
+            tool_name: definition.name,
+            trust: "TRUSTED_APPLICATION",
+            summary: "Trusted application generated a local competitor-informed market control and one improved test hypothesis without a provider write.",
+            facts: {
+              revision: next.revision,
+              competitor_campaign_recommendation_status: control && treatment ? "READY_FOR_REVIEW" : "UNAVAILABLE",
+              control_draft_id: control?.draft_id ?? null,
+              treatment_draft_id: treatment?.draft_id ?? null,
+              draft_count: next.state.recommendation_set?.drafts.length ?? 0,
+              next_boundary: agentNextBoundary(next.state),
+            },
+            source_references: [{
+              source_kind: "P0_APPLICATION_STATE",
+              locator: `p0-application:revision:${next.revision}`,
+              observed_at: next.updated_at,
+            }],
+            application_revision: nextContract.authority.application_revision,
+            authority_digest: nextContract.authority.authority_digest,
+            prior_outcomes_digest: nextContract.authority.prior_outcomes_digest,
+            observed_at: timestamp,
+          },
+          contract: nextContract,
+        };
+      }
     } else if (input.call.name === "p0_read_bounded_competitor_research") {
       if (JSON.stringify(Object.keys(argumentsValue)) !== JSON.stringify(["expected_revision"])) {
         fail("P0_AGENT_TOOL_INPUT_INVALID", "Competitor research read input не соответствует closed schema.");
@@ -3514,18 +3704,17 @@ export class P0Application {
   }
 
   private async buildModelEvidence(ownerKey: string, site: SiteAnalysis, model: BusinessModel, context: P0Context, generatedAt: string) {
-    const marketEvidenceInput: MarketEvidenceInput | undefined = await this.adapters.readMarketEvidence?.({
-      ownerKey,
-      model,
-      context,
-      generatedAt,
-    });
+    const [marketEvidenceInput, competitorResearch] = await Promise.all([
+      this.adapters.readMarketEvidence?.({ ownerKey, model, context, generatedAt }),
+      this.adapters.readCompetitorResearch?.({ model, site, generatedAt }),
+    ]);
     return buildAnalyticsEvidence({
       site: site as unknown as Record<string, unknown>,
       model: model as unknown as Record<string, unknown>,
       context: {
         ...context as unknown as Record<string, unknown>,
         ...(marketEvidenceInput ? { market_evidence_input: marketEvidenceInput } : {}),
+        ...(competitorResearch ?? {}),
       },
       generatedAt,
     });
@@ -3828,7 +4017,11 @@ export class P0Application {
         || revisedOwnerContract.material_fingerprint !== state.business_model.owner_contract.material_fingerprint;
       const focusCandidateChanged = (["product", "audience", "value", "qualified_result"] as const)
         .some((field) => cleanText(String(state.business_model?.[field] ?? ""), 1_000) !== confirmedValues[field]);
-      const selectedCatalogOffer = state.product_focus?.catalog.offers.find((offer) => offer.offer_id === state.product_focus?.selected_offer_id) ?? null;
+      const focusCandidateId = state.product_focus?.selected_offer_id
+        ?? state.product_focus?.recommended_offer_id
+        ?? state.product_focus?.focus_opportunities.prepared_human_decision_gate?.options[0]?.offer_id
+        ?? null;
+      const selectedCatalogOffer = state.product_focus?.catalog.offers.find((offer) => offer.offer_id === focusCandidateId) ?? null;
       const context = sanitizeContext(await this.adapters.readContext({ owner_key: key }));
       this.assertResearchContextPreflight(context, modelApprovedAt);
       this.assertPersistedBindings(state, context);
@@ -3837,23 +4030,43 @@ export class P0Application {
         await invalidateDecisionAuthority(state, "MODEL_MATERIAL_CHANGE", "Material Model evidence or owner-confirmed facts changed.", modelApprovedAt);
         invalidateStrategyDownstream(state);
       }
-      const modelRecomputationRequired = !state.analytics_evidence_snapshot;
+      const modelRecomputationRequired = !state.analytics_evidence_snapshot
+        || !state.product_focus
+        || state.product_focus.catalog.offers.length === 0;
       if (firstOwnerApproval || materialModelChange || modelRecomputationRequired) {
-        if (focusCandidateChanged && selectedCatalogOffer) {
-          const selectedAxes = selectedCatalogOffer.material_axes;
-          state.business_model.offer_candidates = state.business_model.offer_candidates.map((candidate) => {
-            const belongsToSelectedCluster = cleanText(String(candidate.offer ?? ""), 1_000) === selectedAxes.offer
-              && cleanText(String(candidate.audience ?? ""), 1_000) === selectedAxes.audience
-              && cleanText(String(candidate.qualified_outcome ?? ""), 1_000) === selectedAxes.qualified_outcome
-              && cleanText(String(candidate.destination ?? ""), 1_000) === selectedAxes.destination;
-            return belongsToSelectedCluster ? {
-              ...candidate,
-              offer: confirmedValues.product,
-              audience: confirmedValues.audience,
-              value: confirmedValues.value,
-              qualified_outcome: confirmedValues.qualified_result,
-            } : candidate;
-          });
+        if (focusCandidateChanged) {
+          const ownerConfirmedCandidate = {
+            label: confirmedValues.product,
+            offer: confirmedValues.product,
+            audience: confirmedValues.audience,
+            value: confirmedValues.value,
+            qualified_outcome: confirmedValues.qualified_result,
+            economics: revisedOwnerContract.economics.status === "CONFIRMED"
+              ? `Предельная стоимость квалифицированного результата: ${revisedOwnerContract.economics.target_result_cost_rub} ₽.`
+              : "",
+            destination: state.site_analysis.url,
+            destination_status: "AVAILABLE" as const,
+            current_promotion: "UNKNOWN" as const,
+            unresolved_facts: [],
+            evidence_refs: [{
+              source_url: state.site_analysis.url,
+              quote: confirmedValues.product,
+              field: "owner_confirmed_offer",
+            }],
+            demand_cluster_ids: [],
+          };
+          if (selectedCatalogOffer) {
+            const selectedAxes = selectedCatalogOffer.material_axes;
+            state.business_model.offer_candidates = state.business_model.offer_candidates.map((candidate) => {
+              const belongsToSelectedCluster = cleanText(String(candidate.offer ?? ""), 1_000) === selectedAxes.offer
+                && cleanText(String(candidate.audience ?? ""), 1_000) === selectedAxes.audience
+                && cleanText(String(candidate.qualified_outcome ?? ""), 1_000) === selectedAxes.qualified_outcome
+                && cleanText(String(candidate.destination ?? ""), 1_000) === selectedAxes.destination;
+              return belongsToSelectedCluster ? { ...candidate, ...ownerConfirmedCandidate } : candidate;
+            });
+          } else {
+            state.business_model.offer_candidates = [ownerConfirmedCandidate, ...state.business_model.offer_candidates];
+          }
         }
         for (const field of fields) {
           const fieldChanged = cleanText(String(state.business_model[field] ?? ""), 1_000) !== confirmedValues[field];
@@ -3899,12 +4112,12 @@ export class P0Application {
           modelApprovedAt,
         );
         const focusArtifacts = productFocusArtifacts(state.analytics_evidence_snapshot);
+        const editedCatalogOffer = focusArtifacts.catalog.offers.find((offer) =>
+          offer.material_axes.offer === confirmedValues.product
+          && offer.material_axes.audience === confirmedValues.audience
+          && offer.material_axes.qualified_outcome === confirmedValues.qualified_result,
+        );
         if (state.product_focus) {
-          const editedCatalogOffer = focusArtifacts.catalog.offers.find((offer) =>
-            offer.material_axes.offer === confirmedValues.product
-            && offer.material_axes.audience === confirmedValues.audience
-            && offer.material_axes.qualified_outcome === confirmedValues.qualified_result,
-          );
           const selectedOfferId = focusArtifacts.catalog.offers.some((offer) => offer.offer_id === state.product_focus?.selected_offer_id)
             ? state.product_focus.selected_offer_id
             : editedCatalogOffer?.offer_id ?? focusArtifacts.focus_opportunities.recommended_offer_id;
@@ -3924,12 +4137,21 @@ export class P0Application {
                 ownerConfirmed: true,
               });
         } else {
-          state.product_focus = await createProductFocusState({
+          const initialFocus = await createProductFocusState({
             artifacts: focusArtifacts,
             analyticsEvidenceSnapshotId: state.analytics_evidence_snapshot.snapshot_id,
             selectedAt: modelApprovedAt,
-            ownerConfirmed: true,
           });
+          state.product_focus = editedCatalogOffer
+            ? await reviseProductFocusState({
+                previous: initialFocus,
+                artifacts: focusArtifacts,
+                analyticsEvidenceSnapshotId: state.analytics_evidence_snapshot.snapshot_id,
+                selectedOfferId: editedCatalogOffer.offer_id,
+                selectedAt: modelApprovedAt,
+                ownerEdited: true,
+              })
+            : initialFocus;
         }
         state.strategy_questionnaire = await buildStrategyQuestionnaire({
           contextState: state.context_state as unknown as Record<string, unknown>,
@@ -4030,6 +4252,65 @@ export class P0Application {
           playbookReleases: await this.playbookReleases(),
           generatedAt: selectedAt,
         });
+      }
+    } else if (action === "refresh_competitor_research") {
+      if (!state.site_analysis || !state.business_model || !state.analytics_evidence_snapshot || !state.product_focus) {
+        fail("P0_PREREQUISITE_MISSING", "Competitor research refresh требует current Context, Model, Evidence и Product Focus.");
+      }
+      if (!this.adapters.readCompetitorResearch) {
+        fail("P0_COMPETITOR_RESEARCH_UNAVAILABLE", "Bounded production competitor research не настроено.");
+      }
+      const refreshedAt = this.adapters.now();
+      const context = sanitizeContext(await this.adapters.readContext({ owner_key: key }));
+      this.assertResearchContextPreflight(context, refreshedAt);
+      this.assertPersistedBindings(state, context);
+      const refreshedEvidence = await this.buildModelEvidence(
+        key,
+        state.site_analysis,
+        state.business_model,
+        context,
+        refreshedAt,
+      );
+      if (!refreshedEvidence.competitor_matrix) {
+        fail("P0_COMPETITOR_RESEARCH_UNAVAILABLE", "Bounded competitor candidate set не дал допустимой denominator-aware matrix.");
+      }
+      const competitorChanged = JSON.stringify(state.analytics_evidence_snapshot.competitor_matrix)
+        !== JSON.stringify(refreshedEvidence.competitor_matrix);
+      if (competitorChanged) {
+        state.last_cascade = cascadeRecord(
+          state,
+          "MODEL",
+          refreshedAt,
+          ["analytics_evidence", "campaign_strategy", "recommendation_set", "campaign_drafts", "shortlist", "confirmation"],
+        );
+        await invalidateDecisionAuthority(
+          state,
+          "EVIDENCE_LINEAGE_CHANGED",
+          "Bounded public competitor evidence changed Analytics Evidence lineage.",
+          refreshedAt,
+        );
+        state.analytics_evidence_snapshot = refreshedEvidence;
+        const focusArtifacts = productFocusArtifacts(refreshedEvidence);
+        const selectedOfferId = state.product_focus.selected_offer_id;
+        if (!selectedOfferId || !focusArtifacts.catalog.offers.some((offer) => offer.offer_id === selectedOfferId)) {
+          fail("P0_FOCUS_LINEAGE_STALE", "Competitor evidence refresh changed the selected Product Focus axes.");
+        }
+        state.product_focus = await reviseProductFocusState({
+          previous: state.product_focus,
+          artifacts: focusArtifacts,
+          analyticsEvidenceSnapshotId: refreshedEvidence.snapshot_id,
+          selectedOfferId,
+          selectedAt: refreshedAt,
+        });
+        state.strategy_questionnaire = await buildStrategyQuestionnaire({
+          contextState: state.context_state as unknown as Record<string, unknown>,
+          model: state.business_model as unknown as Record<string, unknown>,
+          analyticsEvidence: refreshedEvidence as unknown as Record<string, unknown>,
+          productFocus: state.product_focus as unknown as Record<string, unknown>,
+          playbookReleases: await this.playbookReleases(),
+          generatedAt: refreshedAt,
+        });
+        invalidateStrategyDownstream(state);
       }
     } else if (action === "approve_strategy") {
       if (payload.confirmation !== "APPROVE_CAMPAIGN_STRATEGY") {
@@ -4155,6 +4436,7 @@ export class P0Application {
       }
       const recalculatedAt = this.adapters.now();
       const previousSet = state.recommendation_set;
+      const competitorGuidanceChanged = competitorCampaignRecommendationRefreshRequired(state);
       const playbookReleases = await this.playbookReleases();
       const currentSet = await buildCampaignRecommendationSet({
         model: state.business_model as unknown as Record<string, unknown>,
@@ -4168,11 +4450,19 @@ export class P0Application {
       });
       const releaseChanged = JSON.stringify(activePlaybookReleaseIdentity(previousSet))
         !== JSON.stringify(activePlaybookReleaseIdentity(currentSet));
+      const recommendationChanged = releaseChanged || competitorGuidanceChanged;
       let changes: Array<Record<string, unknown>> = [];
-      if (releaseChanged) {
+      if (recommendationChanged) {
         changes = recommendationRecalculationChanges(previousSet, currentSet);
         const replacement = correspondingDraft(state.draft, currentSet);
-        await invalidateDecisionAuthority(state, "PLAYBOOK_REGENERATION", "Active governed playbook regeneration changed exact Recommendation Set lineage.", recalculatedAt);
+        await invalidateDecisionAuthority(
+          state,
+          releaseChanged ? "PLAYBOOK_REGENERATION" : "COMPETITOR_GUIDANCE_REGENERATION",
+          releaseChanged
+            ? "Active governed playbook regeneration changed exact Recommendation Set lineage."
+            : "Bounded public competitor evidence generated a market control and improved hypothesis without provider authority.",
+          recalculatedAt,
+        );
         state.recommendation_set = currentSet;
         state.draft = replacement;
         state.shortlist = await emptyShortlist({
@@ -4185,11 +4475,15 @@ export class P0Application {
       }
       state.recommendation_recalculation = {
         schema_version: "p0-recommendation-recalculation-v1",
-        material_change: releaseChanged,
+        material_change: recommendationChanged,
         message: releaseChanged
           ? "Активный curated playbook изменился или был откачен; Recommendation Set регенерирован по exact release lineage."
-          : "Active playbook check завершён без material изменения active release lineage.",
-        reason_code: releaseChanged ? "ACTIVE_PLAYBOOK_RELEASE_CHANGED_OR_ROLLED_BACK" : "NO_ACTIVE_PLAYBOOK_MATERIAL_CHANGE",
+          : competitorGuidanceChanged
+            ? "Bounded public competitor evidence generated a market control and one improved campaign hypothesis."
+            : "Active playbook check завершён без material изменения active release lineage.",
+        reason_code: releaseChanged
+          ? "ACTIVE_PLAYBOOK_RELEASE_CHANGED_OR_ROLLED_BACK"
+          : competitorGuidanceChanged ? "COMPETITOR_GUIDANCE_GENERATED" : "NO_ACTIVE_PLAYBOOK_MATERIAL_CHANGE",
         recalculated_at: recalculatedAt,
         previous_recommendation_set_id: previousSet.recommendation_set_id,
         current_recommendation_set_id: state.recommendation_set.recommendation_set_id,

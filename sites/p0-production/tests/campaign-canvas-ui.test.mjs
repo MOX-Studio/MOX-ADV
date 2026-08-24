@@ -39,7 +39,8 @@ test("owner package review shows business outcomes while exact authority stays b
 });
 
 test("safe continuation and approved dispatch remain agent-owned without technical owner controls", () => {
-  assert.match(ownerSource, /this\.agentProjection \? initial : await this\.continueSafeWork/u);
+  assert.match(ownerSource, /if \(!this\.agentProjection\) return project\(ownerKey, await this\.continueSafeWork/u);
+  assert.match(ownerSource, /const current = await this\.application\.query\(ownerKey\);\s+return project\(ownerKey, current, agent/u);
   assert.match(applicationSource, /p0_continue_due_safe_work/u);
   assert.match(applicationSource, /p0_dispatch_approved_package/u);
   assert.match(applicationSource, /p0_prepare_rejected_correction/u);

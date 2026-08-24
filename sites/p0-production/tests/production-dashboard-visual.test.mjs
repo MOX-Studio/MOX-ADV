@@ -38,3 +38,11 @@ test("production keeps the accepted Goal-only hero and never renders prototype l
   assert.match(productionSource, /projection\.journey\.currentStage === "goal"[^\n]*<Hero/u);
   assert.doesNotMatch(productionSource, /prototypeFlag|ПРОТОТИП · ЦЕЛЕВОЕ СОСТОЯНИЕ/u);
 });
+
+test("automation map distinguishes forbidden launch from available Direct reads", () => {
+  for (const source of [productionSource, prototypeSource]) {
+    assert.match(source, /Запуск показов и расходов/u);
+    assert.match(source, /ЗАПРЕЩЁН В P0/u);
+    assert.doesNotMatch(source, />Показы и расходы<[^\n]*>НЕДОСТУПНО</u);
+  }
+});

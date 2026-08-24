@@ -369,6 +369,11 @@ export async function researchPublicFirstPartySite(
         ...candidates,
       ];
     } catch (error) {
+      if (error instanceof SiteResearchError && error.code === "SITE_RESPONSE_TOO_LARGE") {
+        // The entry page remains authoritative evidence. Stop before the total byte budget is exceeded;
+        // never turn an oversized secondary page into a failure or partial page observation.
+        break;
+      }
       if (error instanceof SiteResearchError && SAFETY_ERROR_CODES.has(error.code)) throw error;
       // A non-safety failure on a secondary page does not erase authoritative entry-page evidence.
     }

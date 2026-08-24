@@ -16,6 +16,12 @@ Use the `gh` CLI for all operations.
 Infer the repository from `git remote -v`.
 The `gh` CLI does this automatically when run inside the clone.
 
+## Issue language
+
+Write every issue title, section heading, description, checklist item, acceptance criterion, and human-checkpoint instruction in Russian. Keep only required structural prefixes and labels (`[MODULE]`, `[FEATURE]`, `[TASK]`, `[CHECKPOINT]`, `type:*`), proper product/API names, and exact code identifiers in their original form. Put exact code identifiers and enum values in backticks. Translate explanatory prose and technical concepts whenever a clear Russian term exists; mixed Russian-English prose is not ready for publication.
+
+Before publishing or rebuilding a backlog, scan every generated issue—not only the parent Feature—for untranslated English headings or prose. A language violation blocks publication just like a missing child or dependency.
+
 ## Delivery type labels
 
 Assign the structural type from the issue's product scope:
@@ -28,6 +34,22 @@ Assign the structural type from the issue's product scope:
 | Integrated acceptance of a feature | `[CHECKPOINT]` | `type:checkpoint` |
 
 An application module always receives `[MODULE]` and `type:module`, regardless of whether it is currently the parent of tasks or checkpoints. Use `[FEATURE]` and `type:feature` only for a user-testable slice within that module.
+
+## Requirement-level Feature decomposition
+
+When a checklist, audit, or accepted spec is converted into a GitHub backlog, first atomize it into owner-verifiable requirements. Every requirement whose status is incomplete or partial becomes its own `[FEATURE]`; do not group several checklist requirements under one Feature unless the owner explicitly approves that grouping.
+
+For every Feature:
+
+1. Derive the number of `[TASK]` children from the actual independently executable implementation seams. Each Task must fit one fresh context window. Never apply a fixed Tasks-per-Feature template, and do not invent cosmetic splits. If every Feature in a backlog has the same Task count, stop and either justify each count from distinct seams or reslice the backlog.
+2. Create exactly one final `[CHECKPOINT]` child with `type:checkpoint` and `ready-for-human`. The owner personally verifies the completed Feature there.
+3. Make the Checkpoint natively blocked by every implementation Task in that Feature.
+4. Put the exact source requirement, current gap, target outcome, and a Markdown checklist linking every Task and the Checkpoint in the Feature body.
+5. Link the hierarchy with native sub-issues: Module → Features; Feature → Tasks and Checkpoint.
+6. Express cross-Feature ordering with native dependencies on the prerequisite Feature's Checkpoint. Downstream Tasks must carry the same blocker when needed so `/ready` cannot expose work before its prerequisite human verdict.
+7. Close the Feature only after its Checkpoint receives an explicit human acceptance verdict.
+
+Before publishing, verify exhaustive one-to-one traceability from every incomplete/partial source requirement to exactly one Feature. Record why each Task is an independent slice and verify that the resulting per-Feature Task counts come from those seams rather than a uniform template. A missing requirement, a cosmetic Task split, a Feature without all child links, or a Feature without its personal Checkpoint means the backlog is not ready.
 
 ## Pull requests as a triage surface
 

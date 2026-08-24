@@ -245,6 +245,7 @@ type ActionKind =
   | "analyze-business"
   | "confirm-goal"
   | "confirm-business-model"
+  | "select-focus"
   | "approve-strategy"
   | "revalidate-draft"
   | "revalidate-auction-protocol"
@@ -293,6 +294,13 @@ function ownerText(value: unknown, fallback = "Не указано", maximum = 6
   for (const pattern of FORBIDDEN_TECHNICAL_TEXT) text = text.replace(pattern, "техническая деталь");
   text = text.replace(/\b[A-Z][A-Z0-9_]{3,}\b/gu, "").replace(/\s+·\s*$/u, "").replace(/\s+/gu, " ");
   text = text.slice(0, maximum).trim();
+  return text || fallback;
+}
+
+export function ownerPublicBrandName(value: unknown, fallback = "Не указано", maximum = 200) {
+  let text = String(value ?? "").normalize("NFKC").replace(/\s+/gu, " ").trim();
+  for (const pattern of FORBIDDEN_TECHNICAL_TEXT) text = text.replace(pattern, "техническая деталь");
+  text = text.replace(/\s+·\s*$/u, "").replace(/\s+/gu, " ").slice(0, maximum).trim();
   return text || fallback;
 }
 
@@ -454,7 +462,7 @@ function orderedShortlistCandidates(view: InternalView) {
   });
 }
 
-function actionDescriptor(view: InternalView): InternalActionDescriptor | null {
+export function ownerActionDescriptor(view: InternalView): InternalActionDescriptor | null {
   const state = view.state;
   if (!state.context_state) {
     return {
@@ -472,12 +480,72 @@ function actionDescriptor(view: InternalView): InternalActionDescriptor | null {
       fields: goalFields(state),
     };
   }
-  if (record(state.business_model).source !== "REAL_SITE_RESEARCH_PLUS_OWNER_CONFIRMATION") {
+  const businessModelConfirmed = record(state.business_model).source === "REAL_SITE_RESEARCH_PLUS_OWNER_CONFIRMATION";
+  const focusSelected = record(state.product_focus).decision_status === "OWNER_SELECTED"
+    && Boolean(record(state.product_focus).selected_offer_id);
+  if (!businessModelConfirmed) {
     return {
       kind: "confirm-business-model",
       label: "Подтвердить понимание бизнеса",
       description: "Подтвердите заполненное понимание; рутинное исследование остаётся работой агента.",
       fields: businessModelFields(state),
+    };
+  }
+  if (!focusSelected) {
+    const focusState = record(state.product_focus);
+    const focus = record(focusState.focus_opportunities);
+    const viableCards = list(focus.cards).map(record).filter((card) =>
+      String(record(card.launch_readiness).status ?? "BLOCKED") !== "BLOCKED"
+    );
+    const focusOptions = viableCards.map((card) => ({
+      value: String(card.offer_id ?? ""),
+      label: ownerText(card.label, "Рекламный фокус", 300),
+    })).filter((option) => option.value);
+    if (focusOptions.length > 0) {
+      const recommendedOfferId = String(focus.recommended_offer_id ?? "");
+      return {
+        kind: "select-focus",
+        label: "Выбрать рекламный фокус",
+        description: "Выберите один подготовленный фокус; стратегия и кампании будут привязаны только к нему.",
+        fields: [{
+          key: "focusOffer",
+          label: "Рекламный фокус",
+          control: "select",
+          value: focusOptions.some((option) => option.value === recommendedOfferId)
+            ? recommendedOfferId
+            : focusOptions[0].value,
+          required: true,
+          options: focusOptions,
+          help: "Заблокированные и недостаточно подтверждённые варианты недоступны.",
+        }],
+      };
+    }
+    const focusCards = list(focus.cards).map(record);
+    if (focusCards.length === 0) {
+      return {
+        kind: "confirm-business-model",
+        label: "Уточнить рекламируемое предложение",
+        description: "Подтвердите одно конкретное предложение, чтобы агент восстановил проверяемый рекламный фокус для точной страницы услуги.",
+        fields: businessModelFields(state),
+      };
+    }
+    const focusBlockers = [...new Set(focusCards.flatMap((card) =>
+      list(record(card.launch_readiness).blockers).map((blocker) => ownerText(blocker, "", 300)).filter(Boolean)
+    ))].slice(0, 3);
+    return {
+      kind: "analyze-business",
+      label: "Проверить посадочную страницу",
+      description: focusBlockers.length
+        ? `Подготовленный фокус заблокирован: ${focusBlockers.join(" ")} Укажите релевантную официальную страницу услуги для повторной безопасной проверки.`
+        : "Подтверждённый оффер пока не связан с доступной точной посадочной страницей. Укажите релевантную страницу услуги для повторной безопасной проверки.",
+      fields: [{
+        key: "website",
+        label: "Страница услуги",
+        control: "url",
+        value: ownerText(record(state.site_analysis).url, "", 1_500),
+        required: true,
+        help: "Используйте официальную HTTPS-страницу того же бизнеса с описанием выбранной услуги.",
+      }],
     };
   }
   if (!state.strategy) {
@@ -622,7 +690,7 @@ function competitorMatrixProjection(state: InternalState): OwnerJourneyProjectio
   const candidates = list(candidateSet.candidates).map((candidateValue) => {
     const candidate = record(candidateValue);
     return {
-      competitor: ownerText(candidate.competitor),
+      competitor: ownerPublicBrandName(candidate.competitor),
       rationale: ownerText(candidate.rationale),
       exactDestinations: list(candidate.exact_destinations).map((destination) => ownerText(destination, "Недоступно", 1_500)),
     };
@@ -632,11 +700,28 @@ function competitorMatrixProjection(state: InternalState): OwnerJourneyProjectio
     const price = record(row.published_price);
     const source = record(row.source);
     const sample = record(row.ad_visibility_sample);
+    const analysis = record(row.campaign_analysis);
     const sampleStatus = sample.status === "OBSERVED"
       ? "Объявление наблюдалось"
       : sample.status === "NOT_OBSERVED" ? "В этом срезе объявление не наблюдалось" : "Срез недоступен";
+    const analysisStatus = analysis.evidence_status === "OBSERVED_AD"
+      ? "Анализ наблюдаемой рекламы"
+      : analysis.evidence_status === "HYPOTHESIS_FROM_PUBLIC_POSITIONING"
+        ? "Гипотеза по публичному позиционированию; запуск рекламы не доказан"
+        : "Анализ кампании недоступен";
+    const analysisSummary = Object.keys(analysis).length ? [
+      `${analysisStatus}.`,
+      `Паттерн: ${ownerText(analysis.pattern_label)}.`,
+      `Тип: ${ownerText(analysis.campaign_type)}.`,
+      `Сигнал аудитории: ${ownerText(analysis.audience_signal)}.`,
+      `Сообщение: ${ownerText(analysis.ad_message)}.`,
+      `Призыв: ${ownerText(analysis.call_to_action)}.`,
+      `Связь со стратегией: ${ownerText(analysis.strategy_fit)}.`,
+      `Что можно улучшить: ${ownerText(analysis.weakness).replace(/[.!?]+$/u, "")}.`,
+      `Гипотеза: ${ownerText(analysis.improvement_hypothesis).replace(/[.!?]+$/u, "")}.`,
+    ].join(" ") : analysisStatus;
     return {
-      competitor: ownerText(row.competitor),
+      competitor: ownerPublicBrandName(row.competitor),
       productsServices: list(row.products_services).map((item) => ownerText(item)).join(", ") || "Недоступно",
       observedOfferMessage: ownerText(row.observed_offer_message),
       publishedPrice: price.status === "PUBLISHED" ? ownerText(price.value) : "Не опубликована",
@@ -645,7 +730,7 @@ function competitorMatrixProjection(state: InternalState): OwnerJourneyProjectio
       geography: row.geography === "UNAVAILABLE" ? "Недоступна" : ownerText(row.geography),
       device: row.device === "UNAVAILABLE" ? "Недоступно" : ownerText(row.device),
       observationDate: ownerText(row.observation_date, "Дата недоступна", 100),
-      adVisibilitySample: `${sampleStatus}. Запрос: ${sample.query === null ? "недоступен" : ownerText(sample.query)}. География: ${sample.geography === "UNAVAILABLE" ? "недоступна" : ownerText(sample.geography)}. Устройство: ${sample.device === "UNAVAILABLE" ? "недоступно" : ownerText(sample.device)}. Дата: ${ownerText(sample.observation_date, "недоступна", 100)}. Источник: ${ownerText(sample.source)}.`,
+      adVisibilitySample: `${analysisSummary} ${sampleStatus}. Запрос: ${sample.query === null ? "недоступен" : ownerText(sample.query)}. География: ${sample.geography === "UNAVAILABLE" ? "недоступна" : ownerText(sample.geography)}. Устройство: ${sample.device === "UNAVAILABLE" ? "недоступно" : ownerText(sample.device)}. Дата: ${ownerText(sample.observation_date, "недоступна", 100)}. Источник: ${ownerText(sample.source)}.`,
     };
   });
   return {
@@ -655,10 +740,16 @@ function competitorMatrixProjection(state: InternalState): OwnerJourneyProjectio
     rows,
     aggregateClaims: list(matrix.aggregate_claims).map((claimValue) => {
       const claim = record(claimValue);
-      const observed = claim.observed_count === null || claim.observed_count === undefined ? "недоступно" : String(claim.observed_count);
+      const denominator = Number(claim.denominator);
+      const observedCount = Number(claim.observed_count);
+      const observed = claim.observed_count === null || claim.observed_count === undefined
+        ? "недоступно"
+        : Number.isFinite(observedCount) && Number.isFinite(denominator) && denominator > 0
+          ? `${observedCount} из ${denominator} (${Math.round(observedCount / denominator * 100)}%)`
+          : String(claim.observed_count);
       return {
         claim: ownerText(claim.claim),
-        scope: `${ownerText(claim.competitor_set_rule)} Знаменатель: ${Number(claim.denominator)}.`,
+        scope: `${ownerText(claim.competitor_set_rule)} Знаменатель: ${denominator}.`,
         result: `Наблюдалось: ${observed}.`,
         limitation: ownerText(claim.limitation),
       };
@@ -1213,8 +1304,8 @@ function cards(
     });
   }
   for (const item of unknowns.slice(0, 3)) result.push({ kind: "problem", title: "Существенное неизвестное", body: item });
-  const descriptor = actionDescriptor(view);
-  const gateKinds: ActionKind[] = ["confirm-goal", "confirm-business-model", "approve-strategy", "authorize-and-create", "authorize-correction"];
+  const descriptor = ownerActionDescriptor(view);
+  const gateKinds: ActionKind[] = ["confirm-goal", "confirm-business-model", "select-focus", "approve-strategy", "authorize-and-create", "authorize-correction"];
   if (descriptor && gateKinds.includes(descriptor.kind)) {
     const current = recommendation(view, stage);
     const correctionDecision = descriptor.kind === "authorize-correction";
@@ -1250,7 +1341,7 @@ async function project(
   const stage = currentStage(view.state);
   const stageIndex = OWNER_JOURNEY_STAGES.findIndex((item) => item.id === stage);
   const unknowns = materialUnknowns(view.state);
-  const baseDescriptor = actionDescriptor(view);
+  const baseDescriptor = ownerActionDescriptor(view);
   const descriptor = baseDescriptor && access?.path === "existing" && access.canRevoke
     ? {
         ...baseDescriptor,
@@ -1452,6 +1543,24 @@ function required(values: Record<string, unknown>, key: string) {
   return value;
 }
 
+function normalizedFirstPartyHost(value: unknown) {
+  try {
+    return new URL(String(value ?? "")).hostname.toLowerCase().replace(/^www\./u, "");
+  } catch {
+    return "";
+  }
+}
+
+export function strategyLandingRequiresContextReanalysis(state: InternalState, landingPage: string) {
+  const analyzedHost = normalizedFirstPartyHost(record(state.site_analysis).url);
+  const requestedHost = normalizedFirstPartyHost(landingPage);
+  if (!analyzedHost || !requestedHost) return false;
+  const sameFirstParty = analyzedHost === requestedHost
+    || analyzedHost.endsWith(`.${requestedHost}`)
+    || requestedHost.endsWith(`.${analyzedHost}`);
+  return !sameFirstParty;
+}
+
 export class P0OwnerJourney {
   private readonly application: P0Application;
   private readonly agentProjection: ((ownerKey: string) => Promise<P0AgentOwnerProjection | null>) | null;
@@ -1474,9 +1583,10 @@ export class P0OwnerJourney {
     const access = accessState && this.accessReadiness ? this.accessReadiness.project(accessState) : null;
     if (accessState && !accessIsActive(accessState)) return projectAccessOnly(ownerKey, accessState, access!);
     const initial = await this.application.query(ownerKey);
-    const view = this.agentProjection ? initial : await this.continueSafeWork(ownerKey, initial);
-    const agent = this.agentProjection ? await this.agentProjection(ownerKey) : null;
-    return project(ownerKey, view, agent, access);
+    if (!this.agentProjection) return project(ownerKey, await this.continueSafeWork(ownerKey, initial), null, access);
+    const agent = await this.agentProjection(ownerKey);
+    const current = await this.application.query(ownerKey);
+    return project(ownerKey, current, agent, access);
   }
 
   async submit(ownerKey: string, submission: OwnerActionSubmission): Promise<OwnerJourneyProjection> {
@@ -1511,13 +1621,14 @@ export class P0OwnerJourney {
       const nextAccess = this.accessReadiness!.project(accessState);
       if (!accessIsActive(accessState)) return projectAccessOnly(ownerKey, accessState, nextAccess);
       const initial = await this.application.query(ownerKey);
-      const view = this.agentProjection ? initial : await this.continueSafeWork(ownerKey, initial);
-      const agent = this.agentProjection ? await this.agentProjection(ownerKey) : null;
-      return project(ownerKey, view, agent, nextAccess);
+      if (!this.agentProjection) return project(ownerKey, await this.continueSafeWork(ownerKey, initial), null, nextAccess);
+      const agent = await this.agentProjection(ownerKey);
+      const current = await this.application.query(ownerKey);
+      return project(ownerKey, current, agent, nextAccess);
     }
 
     let view = await this.application.query(ownerKey);
-    const descriptor = actionDescriptor(view);
+    const descriptor = ownerActionDescriptor(view);
     if (!descriptor || submission.handle !== await actionHandle(ownerKey, view, descriptor)) {
       throw new P0ApplicationError("P0_OWNER_ACTION_STALE", "Действие больше не соответствует текущему состоянию. Обновите страницу.");
     }
@@ -1586,25 +1697,36 @@ export class P0OwnerJourney {
           key_constraints: values.keyConstraints,
         },
       });
-    } else if (descriptor.kind === "approve-strategy") {
+    } else if (descriptor.kind === "select-focus") {
       await command({
-        action: "approve_strategy",
-        confirmation: "APPROVE_CAMPAIGN_STRATEGY",
-        answers: {
-          business_goal: required(values, "businessGoal"),
-          campaign_focus: required(values, "campaignFocus"),
-          advertised_offer: required(values, "offer"),
-          target_audience: required(values, "audience"),
-          qualified_result: required(values, "qualifiedResult"),
-          exclusions: required(values, "exclusions"),
-          geography: required(values, "geography"),
-          period: { start_date: required(values, "periodStart"), end_date: required(values, "periodEnd") },
-          landing_page: required(values, "landingPage"),
-          weekly_budget: required(values, "weeklyBudget"),
-          target_result_cost: values.targetResultCost,
-          core_message: required(values, "message"),
-        },
+        action: "select_focus",
+        confirmation: "SELECT_PRODUCT_FOCUS",
+        focus_offer_id: required(values, "focusOffer"),
       });
+    } else if (descriptor.kind === "approve-strategy") {
+      const landingPage = required(values, "landingPage");
+      if (strategyLandingRequiresContextReanalysis(view.state, landingPage)) {
+        await command({ action: "analyze_site", url: landingPage });
+      } else {
+        await command({
+          action: "approve_strategy",
+          confirmation: "APPROVE_CAMPAIGN_STRATEGY",
+          answers: {
+            business_goal: required(values, "businessGoal"),
+            campaign_focus: required(values, "campaignFocus"),
+            advertised_offer: required(values, "offer"),
+            target_audience: required(values, "audience"),
+            qualified_result: required(values, "qualifiedResult"),
+            exclusions: required(values, "exclusions"),
+            geography: required(values, "geography"),
+            period: { start_date: required(values, "periodStart"), end_date: required(values, "periodEnd") },
+            landing_page: landingPage,
+            weekly_budget: required(values, "weeklyBudget"),
+            target_result_cost: values.targetResultCost,
+            core_message: required(values, "message"),
+          },
+        });
+      }
     } else if (descriptor.kind === "revalidate-draft") {
       await command({ action: "revalidate_draft", draft_id: descriptor.target });
     } else if (descriptor.kind === "revalidate-auction-protocol") {
@@ -1683,8 +1805,13 @@ export class P0OwnerJourney {
       }
     }
 
-    if (!this.agentProjection) view = await this.continueSafeWork(ownerKey, view, descriptor.kind !== "authorize-and-create");
-    const agent = this.agentProjection ? await this.agentProjection(ownerKey) : null;
+    let agent: P0AgentOwnerProjection | null = null;
+    if (!this.agentProjection) {
+      view = await this.continueSafeWork(ownerKey, view, descriptor.kind !== "authorize-and-create");
+    } else {
+      agent = await this.agentProjection(ownerKey);
+      view = await this.application.query(ownerKey);
+    }
     const access = accessState && this.accessReadiness ? this.accessReadiness.project(accessState) : null;
     return project(ownerKey, view, agent, access);
   }

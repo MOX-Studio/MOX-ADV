@@ -81,6 +81,18 @@ class MemoryStore {
   }
 }
 
+class ResumeConflictStore extends MemoryStore {
+  conflictNext = false;
+
+  async compareAndSwap(runId, expectedVersion, state) {
+    if (!this.conflictNext) return super.compareAndSwap(runId, expectedVersion, state);
+    this.conflictNext = false;
+    if (this.runs.get(runId)?.version !== expectedVersion) return false;
+    this.runs.set(runId, structuredClone(state));
+    return false;
+  }
+}
+
 function model(turns) {
   return {
     adapter_id: "durable-coordinator-model",
@@ -157,6 +169,32 @@ test("durable coordinator waits until due, restarts in a fresh runtime, compacts
   assert.equal(completed.budget.usage.tool_calls, 2);
   assert.equal(completed.budget.usage.cost_microusd, 160);
   assert.equal(completed.budget.limits.max_cost_microusd, 1_000);
+});
+
+test("a concurrent coordinator resume returns the durable winner instead of an unavailable-agent error", async () => {
+  let current = START;
+  const store = new ResumeConflictStore();
+  const interrupted = await new P0AgentRuntime({
+    application: authority(99),
+    model: model([new Error("provider quota")]),
+    store,
+    now: () => current,
+  }).coordinate({ owner_key: "owner", budgets });
+  assert.equal(interrupted.stop_reason.code, "TEMPORARY_PROVIDER_FAILURE");
+
+  current = "2026-08-24T10:00:31.000Z";
+  store.conflictNext = true;
+  const resumedModel = model([toolTurn("should-not-run-in-losing-reader")]);
+  const winner = await new P0AgentRuntime({
+    application: authority(99),
+    model: resumedModel,
+    store,
+    now: () => current,
+  }).coordinate({ owner_key: "owner", budgets });
+
+  assert.equal(winner.status, "RUNNING");
+  assert.equal(resumedModel.calls, 0);
+  assert.equal(projectP0AgentRunForOwner(winner).status, "working");
 });
 
 test("persisted model cost budget stops before any proposed tool can execute", async () => {

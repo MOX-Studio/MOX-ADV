@@ -650,6 +650,7 @@ export async function buildAnalyticsEvidence({
         rows: competitorInputs.map((observation) => record(observation.matrix_row)).filter((row) => Object.keys(row).length).map((row) => {
           const price = record(row.published_price);
           const sample = record(row.ad_visibility_sample);
+          const analysis = record(row.campaign_analysis);
           const source = record(row.source);
           return {
             competitor: text(row.competitor),
@@ -671,6 +672,19 @@ export async function buildAnalyticsEvidence({
               device: text(sample.device),
               observedAt: text(sample.observation_date),
             },
+            campaignAnalysis: Object.keys(analysis).length ? {
+              evidenceStatus: text(analysis.evidence_status) as NonNullable<CompetitorMatrixRowInput["campaignAnalysis"]>["evidenceStatus"],
+              patternId: text(analysis.pattern_id),
+              patternLabel: text(analysis.pattern_label),
+              campaignType: text(analysis.campaign_type),
+              audienceSignal: text(analysis.audience_signal),
+              adMessage: text(analysis.ad_message),
+              callToAction: text(analysis.call_to_action),
+              strategyFit: text(analysis.strategy_fit),
+              weakness: text(analysis.weakness),
+              improvementHypothesis: text(analysis.improvement_hypothesis),
+              changedFamily: text(analysis.changed_family) as NonNullable<CompetitorMatrixRowInput["campaignAnalysis"]>["changedFamily"],
+            } : null,
           } satisfies CompetitorMatrixRowInput;
         }),
       })
@@ -1698,6 +1712,7 @@ export async function buildAnalyticsEvidence({
       versions: { schema: ANALYTICS_EVIDENCE_SCHEMA, extractor: "bounded-competitor-matrix-v1", policy: "public-competitor-pages/2.0.0" },
       facts: competitorMatrix?.rows.length ? [
         `${competitorMatrix.rows.length} bounded public landing observations`,
+        `${competitorMatrix.rows.filter((row) => row.campaign_analysis).length} strategy-aligned competitor campaign analyses`,
         `Candidate set denominator: ${competitorMatrix.candidate_set.candidates.length}`,
       ] : [],
       limitations: [

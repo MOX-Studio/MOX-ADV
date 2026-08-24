@@ -42,9 +42,19 @@ For a settled change that spans several sessions but never needed Wayfinder, sta
 
 ### to-tickets: implementation backlog
 
-Invoke `to-tickets` only after the spec is accepted. Review and approve the proposed granularity and blockers before publication. Each published ticket must be a complete, independently verifiable vertical slice sized for one fresh context window.
+Invoke `to-tickets` only after the spec is accepted. Review and approve the proposed granularity and blockers before publication. Each published Task must be a complete, independently verifiable vertical slice sized for one fresh context window.
 
-Implementation tickets reference the spec as their parent. They are not children of the Wayfinder map and do not carry `wayfinder:*` labels. Native blockers define the frontier. Once child tickets are published, remove `ready-for-agent` from the parent spec if an automated runner might otherwise implement the entire spec directly.
+For a module checklist, audit, or accepted requirement set, `to-tickets` publishes a requirement-level hierarchy rather than one aggregate Feature:
+
+1. map every incomplete or partial owner-verifiable requirement to exactly one `[FEATURE]`;
+2. create all implementation `[TASK]` children for that Feature;
+3. create one final owner-run `[CHECKPOINT]` child, blocked by every Task;
+4. write the linked Task and Checkpoint checklist into the Feature body;
+5. publish native Module → Feature → Task/Checkpoint sub-issue links and cross-Feature dependencies through prerequisite Checkpoints.
+
+Before publication, produce and verify complete `source requirement → Feature → Tasks → Checkpoint` traceability. Derive each Feature's Task count from real independently executable seams sized for one fresh context window; a uniform Tasks-per-Feature template is invalid unless every count has a specific seam-based justification. Validate every generated issue against the Russian-language rule in `issue-tracker.md`. Collapsing several requirements into one Feature requires explicit owner approval. A Feature cannot be accepted or closed before its own human Checkpoint passes.
+
+Implementation tickets reference their Feature and accepted source requirement. They are not children of the Wayfinder map and do not carry `wayfinder:*` labels. Native blockers define the frontier. Features and Checkpoints do not receive `ready-for-agent`; executable Tasks do. Once child tickets are published, remove `ready-for-agent` from any parent artifact that an automated runner might otherwise implement directly.
 
 ### /ready: one ticket per session
 

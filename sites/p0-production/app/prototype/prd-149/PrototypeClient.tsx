@@ -399,7 +399,7 @@ function AutomationMap() {
       <div><span>Исследование</span><strong>АГЕНТ</strong></div>
       <div><span>Бизнес-смысл</span><strong>ИСПРАВЛЯЕТ ВЛАДЕЛЕЦ</strong></div>
       <div><span>Точный пакет</span><strong>РАЗОВОЕ ПРАВО</strong></div>
-      <div><span>Показы и расходы</span><strong className={styles.unavailable}>НЕДОСТУПНО</strong></div>
+      <div><span>Запуск показов и расходов</span><strong className={styles.unavailable}>ЗАПРЕЩЁН В P0</strong></div>
     </section>
   );
 }

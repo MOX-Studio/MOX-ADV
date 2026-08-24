@@ -65,7 +65,7 @@ test("bounded candidate set requires rationale and a finite exact-destination al
   assert.throws(
     () => createBoundedCompetitorCandidateSet({
       rule: "Все конкуренты",
-      candidates: Array.from({ length: 7 }, (_, index) => ({
+      candidates: Array.from({ length: 11 }, (_, index) => ({
         competitor: `Конкурент ${index}`,
         rationale: "Сопоставимое предложение",
         exactDestinations: [`https://competitor-${index}.example/offer`],
@@ -133,11 +133,83 @@ test("matrix keeps detailed public observations and denominator-aware aggregate 
   assert.match(matrix.limitations.join(" "), /не показывают расходы, CPC, конверсии, CPA, ROI, прибыльность/u);
 });
 
+test("campaign analyses aggregate recurring competitor patterns and preserve improvement hypotheses", () => {
+  const campaignAnalysis = {
+    evidenceStatus: "HYPOTHESIS_FROM_PUBLIC_POSITIONING",
+    patternId: "dedicated-service-offer",
+    patternLabel: "Комплексная услуга на отдельной посадочной",
+    campaignType: "Гипотеза поисковой кампании",
+    audienceSignal: "Компании, выбирающие подрядчика",
+    adMessage: "Комплексная услуга под ключ",
+    callToAction: "Оставить заявку",
+    strategyFit: "Соответствует утверждённому рекламному фокусу",
+    weakness: "Не уточняет B2B-лицо, принимающее решение",
+    improvementHypothesis: "Уточнить B2B-аудиторию и квалифицированный результат",
+    changedFamily: "AUDIENCE_SPECIFICITY",
+  };
+  const matrix = buildCompetitorMatrix({
+    candidateSet: candidateSet(),
+    rows: [
+      row({ campaignAnalysis }),
+      row({
+        competitor: "Бета",
+        exactLanding: "https://beta.example/services/exhibition",
+        source: { label: "Публичная страница услуги", url: "https://beta.example/services/exhibition" },
+        campaignAnalysis,
+      }),
+    ],
+  });
+
+  assert.equal(matrix.rows[0].campaign_analysis.pattern_id, "dedicated-service-offer");
+  assert.match(matrix.rows[0].campaign_analysis.improvement_hypothesis, /B2B-аудиторию/u);
+  const pattern = matrix.aggregate_claims.find((claim) => claim.claim.includes("Комплексная услуга на отдельной посадочной"));
+  assert.equal(pattern.observed_count, 2);
+  assert.equal(pattern.denominator, 3);
+  assert.equal(pattern.evidence_status, "PARTIAL");
+
+  assert.throws(
+    () => buildCompetitorMatrix({
+      candidateSet: candidateSet(),
+      rows: [row({
+        adVisibilitySample: {
+          status: "UNAVAILABLE",
+          query: null,
+          source: "Срез недоступен",
+          geography: "Москва",
+          device: "desktop",
+          observedAt: "2026-08-24T10:00:00.000Z",
+        },
+        campaignAnalysis: { ...campaignAnalysis, evidenceStatus: "OBSERVED_AD" },
+      })],
+    }),
+    (error) => error instanceof BoundedCompetitorResearchError && error.code === "COMPETITOR_CAMPAIGN_ANALYSIS_INVALID",
+  );
+});
+
 test("empty research remains unavailable rather than becoming a zero-valued market claim", () => {
   const matrix = buildCompetitorMatrix({ candidateSet: candidateSet(), rows: [] });
   assert.equal(matrix.status, "UNAVAILABLE");
   assert.ok(matrix.aggregate_claims.every((claim) => claim.observed_count === null));
   assert.ok(matrix.coverage.every((item) => item.status === "UNAVAILABLE"));
+});
+
+test("unavailable ad-visibility samples do not become a zero-visibility claim", () => {
+  const matrix = buildCompetitorMatrix({
+    candidateSet: candidateSet(),
+    rows: [row({
+      adVisibilitySample: {
+        status: "UNAVAILABLE",
+        query: null,
+        source: "Поисковый срез недоступен",
+        geography: "Москва",
+        device: "desktop",
+        observedAt: "2026-08-24T10:00:00.000Z",
+      },
+    })],
+  });
+  const visibility = matrix.aggregate_claims.find((claim) => claim.claim === "Рекламная видимость наблюдалась");
+  assert.equal(visibility.observed_count, null);
+  assert.equal(visibility.evidence_status, "UNAVAILABLE");
 });
 
 test("matrix rejects non-allowlisted landing, prompt injection, and hidden performance claims", () => {

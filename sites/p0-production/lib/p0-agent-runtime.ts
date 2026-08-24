@@ -871,6 +871,14 @@ export class P0AgentRuntime {
   }) {
     requireText(ownerKey, "Agent owner key", 500);
     assertBudgets(budgets);
+    const concurrentWinner = async (error: unknown, runId?: string) => {
+      if (!(error instanceof P0AgentRuntimeError) || error.code !== "P0_AGENT_RUN_CONFLICT") throw error;
+      const winner = (runId ? await this.store.load(runId) : null)
+        ?? await this.store.loadCurrent?.(ownerKey)
+        ?? null;
+      if (!winner || winner.owner_key !== ownerKey || winner.objective.kind !== "COORDINATE_OWNER_JOURNEY") throw error;
+      return clone(winner);
+    };
     const startCurrent = async () => {
       const contract = await this.application.contract(ownerKey, "COORDINATE_OWNER_JOURNEY");
       assertApplicationContract(contract, "COORDINATE_OWNER_JOURNEY");
@@ -883,10 +891,7 @@ export class P0AgentRuntime {
           run_id: runId,
         });
       } catch (error) {
-        if (!(error instanceof P0AgentRuntimeError) || error.code !== "P0_AGENT_RUN_CONFLICT") throw error;
-        const winner = await this.store.load(runId);
-        if (!winner) throw error;
-        return winner;
+        return concurrentWinner(error, runId);
       }
     };
     const current = await this.store.loadCurrent?.(ownerKey) ?? null;
@@ -907,7 +912,12 @@ export class P0AgentRuntime {
     const resumeAt = current.stop_reason?.resume_at;
     if (resumeAt && Date.parse(resumeAt) > Date.parse(this.now())) return clone(current);
     const compact = current.observations.length > (current.compaction?.through_observation_sequence ?? 0);
-    const resumed = await this.resume({ owner_key: ownerKey, run_id: current.run_id, compact });
+    let resumed: P0AgentRunState;
+    try {
+      resumed = await this.resume({ owner_key: ownerKey, run_id: current.run_id, compact });
+    } catch (error) {
+      return concurrentWinner(error, current.run_id);
+    }
     if (resumed.stop_reason?.code !== "RESUME_PRECONDITION_FAILED") return resumed;
     return startCurrent();
   }

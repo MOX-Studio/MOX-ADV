@@ -144,10 +144,99 @@ function namedVariant(product: unknown, label: string, bucketOrdinal: number) {
   return `${base.slice(0, Math.max(1, 255 - suffix.length)).trim()}${suffix}`;
 }
 
+function matrixCompetitiveControlBasis(evidence: Record<string, unknown> | null | undefined) {
+  const matrix = record(evidence?.competitor_matrix);
+  const candidateSet = record(matrix.candidate_set);
+  const candidates = Array.isArray(candidateSet.candidates) ? candidateSet.candidates as Array<Record<string, unknown>> : [];
+  const rows = Array.isArray(matrix.rows) ? matrix.rows as Array<Record<string, unknown>> : [];
+  const denominator = candidates.length;
+  if (denominator < 2 || rows.length < 2) return null;
+  const sources = Array.isArray(evidence?.sources) ? evidence.sources as Array<Record<string, unknown>> : [];
+  const evidenceIds = [...new Set(sources
+    .filter((source) => text(source.source_id) === "competitors" || text(source.source_kind).toLowerCase().includes("competitor"))
+    .flatMap((source) => Array.isArray(source.evidence_ids) ? source.evidence_ids.map(String) : []))].sort();
+  const competitorIdentity = (row: Record<string, unknown>) => keyText(row.competitor);
+  const availableAdSamples = rows.filter((row) => {
+    const sample = record(row.ad_visibility_sample);
+    return sample.status === "OBSERVED" || sample.status === "NOT_OBSERVED";
+  });
+  const sampledCompetitors = new Set(availableAdSamples.map(competitorIdentity).filter(Boolean));
+  const adObservedCompetitors = new Set(availableAdSamples
+    .filter((row) => record(row.ad_visibility_sample).status === "OBSERVED")
+    .map(competitorIdentity).filter(Boolean));
+  const positionedCompetitors = new Set(rows.map(competitorIdentity).filter(Boolean));
+  const analyzedPatterns = Map.groupBy(
+    rows.filter((row) => Object.keys(record(row.campaign_analysis)).length > 0),
+    (row) => text(record(row.campaign_analysis).pattern_id),
+  );
+  const dominantAnalysis = [...analyzedPatterns.entries()]
+    .map(([patternId, patternRows]) => ({
+      patternId,
+      patternRows,
+      competitorCount: new Set(patternRows.map(competitorIdentity).filter(Boolean)).size,
+    }))
+    .filter((item) => item.patternId && item.competitorCount >= 2)
+    .sort((left, right) => right.competitorCount - left.competitorCount || left.patternId.localeCompare(right.patternId))[0];
+  const basis = (kind: string, patternId: string, observedCount: number, sampledCount: number, scope: string) => ({
+    kind,
+    evidence_ids: evidenceIds,
+    pattern_id: patternId,
+    sample_rule_id: null,
+    sample_rule_version: null,
+    fallback_reason: null,
+    observed_count: observedCount,
+    denominator,
+    sampled_count: sampledCount,
+    prevalence_percent: Math.round(observedCount / denominator * 100),
+    evidence_status: sampledCount === denominator ? "AVAILABLE" : "PARTIAL",
+    scope,
+  });
+  if (dominantAnalysis) {
+    const analysis = record(dominantAnalysis.patternRows[0].campaign_analysis);
+    const observedAd = analysis.evidence_status === "OBSERVED_AD";
+    return {
+      ...basis(
+        observedAd ? "COMPETITIVE_AD_NORM_CONTROL" : "COMPETITIVE_POSITIONING_CONTROL",
+        dominantAnalysis.patternId,
+        dominantAnalysis.competitorCount,
+        observedAd ? sampledCompetitors.size : positionedCompetitors.size,
+        `${dominantAnalysis.competitorCount} из ${denominator} конкурентов (${Math.round(dominantAnalysis.competitorCount / denominator * 100)}%) используют паттерн «${text(analysis.pattern_label)}». ${observedAd ? "Паттерн наблюдался в ограниченном рекламном срезе." : "Это гипотеза по публичному позиционированию, а не доказательство запуска рекламы."}`,
+      ),
+      pattern_label: text(analysis.pattern_label),
+      campaign_type: text(analysis.campaign_type),
+      strategy_fit: text(analysis.strategy_fit),
+      observed_weakness: text(analysis.weakness),
+      improvement_hypothesis: text(analysis.improvement_hypothesis),
+      changed_family: text(analysis.changed_family),
+    };
+  }
+  if (adObservedCompetitors.size >= 2) {
+    return basis(
+      "COMPETITIVE_AD_NORM_CONTROL",
+      "observed-search-service-intent-to-dedicated-landing",
+      adObservedCompetitors.size,
+      sampledCompetitors.size,
+      `${adObservedCompetitors.size} из ${denominator} конкурентов (${Math.round(adObservedCompetitors.size / denominator * 100)}%) наблюдались в ограниченном рекламном срезе; проверено ${sampledCompetitors.size} из ${denominator}.`,
+    );
+  }
+  if (positionedCompetitors.size >= 2) {
+    return basis(
+      "COMPETITIVE_POSITIONING_CONTROL",
+      "dedicated-service-landing-with-comprehensive-offer",
+      positionedCompetitors.size,
+      positionedCompetitors.size,
+      `${positionedCompetitors.size} из ${denominator} конкурентов (${Math.round(positionedCompetitors.size / denominator * 100)}%) используют отдельную публичную посадочную с конкретным предложением; это позиционирование, а не доказательство запуска рекламы.`,
+    );
+  }
+  return null;
+}
+
 function competitiveControlBasis(
   evidence: Record<string, unknown> | null | undefined,
   sampleRules: CompetitiveSampleRule[],
 ) {
+  const matrixBasis = matrixCompetitiveControlBasis(evidence);
+  if (matrixBasis) return matrixBasis;
   const sampleRule = sampleRules[0];
   if (!sampleRule) {
     return {
@@ -199,8 +288,37 @@ function competitiveControlBasis(
   };
 }
 
+function competitorImprovement(controlBasis: Record<string, unknown>) {
+  if (!["COMPETITIVE_AD_NORM_CONTROL", "COMPETITIVE_POSITIONING_CONTROL"].includes(text(controlBasis.kind))) return null;
+  const adObserved = controlBasis.kind === "COMPETITIVE_AD_NORM_CONTROL";
+  const observedCount = Number(controlBasis.observed_count);
+  const denominator = Number(controlBasis.denominator);
+  const prevalencePercent = Number(controlBasis.prevalence_percent);
+  const patternLabel = text(controlBasis.pattern_label) || text(controlBasis.pattern_id);
+  const changedFamily = ["QUALIFIED_ACTION", "AUDIENCE_SPECIFICITY", "MESSAGE_OFFER"].includes(text(controlBasis.changed_family))
+    ? text(controlBasis.changed_family) as "QUALIFIED_ACTION" | "AUDIENCE_SPECIFICITY" | "MESSAGE_OFFER"
+    : "AUDIENCE_SPECIFICITY";
+  const weakness = text(controlBasis.observed_weakness).replace(/[.!?]+$/u, "");
+  const improvement = (text(controlBasis.improvement_hypothesis)
+    || "Уточнить B2B-аудиторию и квалифицированный результат относительно рыночного контроля.").replace(/[.!?]+$/u, "");
+  return {
+    hypothesis_id: `competitor-public-web-${text(controlBasis.pattern_id) || "pattern"}-${changedFamily.toLowerCase()}@1.1.0`,
+    source: "COMPETITOR_PUBLIC_WEB",
+    mechanism: `${observedCount} из ${denominator} конкурентов (${prevalencePercent}%) используют паттерн «${patternLabel}». ${adObserved ? "Наблюдаемую кампанию сохраняем как контроль." : "Это гипотеза по позиционированию; используем её как контроль без заявления о запуске рекламы."}${weakness ? ` Ограничение: ${weakness}.` : ""} Улучшение для цели стратегии: ${improvement}.`,
+    changed_family: changedFamily,
+    evidence_ids: Array.isArray(controlBasis.evidence_ids) ? controlBasis.evidence_ids.map(String) : [],
+    prevalence: {
+      observed_count: Number(controlBasis.observed_count),
+      denominator: Number(controlBasis.denominator),
+      percent: Number(controlBasis.prevalence_percent),
+      sampled_count: Number(controlBasis.sampled_count),
+      evidence_status: text(controlBasis.evidence_status),
+    },
+  };
+}
+
 function variantLabel(family: PlaybookChangedFamily | null, controlKind: string) {
-  if (!family) return controlKind === "COMPETITIVE_NORM_CONTROL" ? "Контроль" : "STRATEGY_BASELINE_FALLBACK";
+  if (!family) return controlKind.startsWith("COMPETITIVE_") ? "Рыночный контроль" : "STRATEGY_BASELINE_FALLBACK";
   const labels: Record<PlaybookChangedFamily, string> = {
     QUALIFIED_ACTION: "Целевое действие",
     AUDIENCE_SPECIFICITY: "Аудитория",
@@ -675,6 +793,7 @@ export async function buildCampaignRecommendationSet({
   });
   const coreCapability = evaluateCoreDirectCapability(directCapabilitySnapshot);
   const controlBasis = competitiveControlBasis(analyticsEvidence, playbook.competitiveSampleRules);
+  const competitorHypothesis = competitorImprovement(controlBasis);
   const marketEvidence = analyticsEvidence?.market_evidence && typeof analyticsEvidence.market_evidence === "object"
     ? analyticsEvidence.market_evidence as Record<string, unknown>
     : {};
@@ -767,8 +886,9 @@ export async function buildCampaignRecommendationSet({
   const candidateAudit: CandidateAuditRecord[] = playbook.audits.map(playbookCandidateAudit);
   const compiled: CampaignDraftCandidate[] = [];
   const seenTreatments = new Map<string, string>();
-  const activeRules = playbook.rules.slice(0, MAX_IMPROVEMENTS_PER_DELIVERY_BUCKET);
-  const overflowRules = playbook.rules.slice(MAX_IMPROVEMENTS_PER_DELIVERY_BUCKET);
+  const playbookImprovementLimit = MAX_IMPROVEMENTS_PER_DELIVERY_BUCKET - (competitorHypothesis ? 1 : 0);
+  const activeRules = playbook.rules.slice(0, playbookImprovementLimit);
+  const overflowRules = playbook.rules.slice(playbookImprovementLimit);
   for (const [bucketIndex, bucket] of buckets.entries()) {
     const bucketId = text(bucket.delivery_bucket_id);
     for (const rule of overflowRules) {
@@ -784,23 +904,30 @@ export async function buildCampaignRecommendationSet({
         playbook_rule_id: rule.rule_id,
       });
     }
-    const specifications: Array<{ rule: CuratedPlaybookRule | null; family: PlaybookChangedFamily | null }> = [
-      { rule: null, family: null },
-      ...activeRules.map((rule) => ({ rule, family: rule.changed_family })),
+    const specifications: Array<{
+      rule: CuratedPlaybookRule | null;
+      competitor_hypothesis: ReturnType<typeof competitorImprovement>;
+      family: PlaybookChangedFamily | null;
+    }> = [
+      { rule: null, competitor_hypothesis: null, family: null },
+      ...(competitorHypothesis ? [{ rule: null, competitor_hypothesis: competitorHypothesis, family: competitorHypothesis.changed_family }] : []),
+      ...activeRules.map((rule) => ({ rule, competitor_hypothesis: null, family: rule.changed_family })),
     ];
     let comparator: CampaignDraftCandidate | null = null;
     for (const specification of specifications) {
       const rule = specification.rule;
+      const publicWebHypothesis = specification.competitor_hypothesis;
+      const isImprovement = Boolean(rule || publicWebHypothesis);
       const family = specification.family;
       const clusterIds = (bucket.demand_cluster_ids as string[]).map(text).sort();
       const clusterLabel = clusterIds.length ? `Demand pack: ${clusterIds.join(", ")}` : "Demand evidence gap";
-      const shortLabel = variantLabel(family, controlBasis.kind);
+      const shortLabel = publicWebHypothesis ? "Улучшенная гипотеза" : variantLabel(family, controlBasis.kind);
       const editable = editableDraft(model, strategy, family, shortLabel, clusterLabel, bucketIndex + 1);
       const identityInput = {
         strategy_revision_id: strategyRevisionId,
         delivery_key_fingerprint: bucket.delivery_key_fingerprint,
         demand_cluster_ids: clusterIds,
-        variant: rule ? `${rule.rule_id}@${rule.rule_version}` : controlBasis.kind,
+        variant: rule ? `${rule.rule_id}@${rule.rule_version}` : publicWebHypothesis?.hypothesis_id ?? controlBasis.kind,
         capability_profile: `${CORE_DIRECT_CAPABILITY_PROFILE.profile_id}@${CORE_DIRECT_CAPABILITY_PROFILE.profile_version}`,
         playbook_release_digest: playbook.release?.content_digest ?? null,
       };
@@ -875,12 +1002,12 @@ export async function buildCampaignRecommendationSet({
         "Campaign Draft не имеет допустимого demand evidence и доступен только для review.",
       ));
       publicationBlockers.push(...capability.blockers.map((blocker) => publicationBlocker(blocker.code, blocker.message, blocker.field_path)));
-      const expectedFields = rule ? expectedChangedFields(rule) : [];
+      const expectedFields = rule ? expectedChangedFields(rule) : publicWebHypothesis ? actualChangedFields : [];
       const undeclaredChanges = actualChangedFields.filter((pointer) => !expectedFields.includes(pointer));
       const missingDeclaredChanges = expectedFields.filter((pointer) => !actualChangedFields.includes(pointer));
       let suppressionReason: string | null = null;
-      if (rule && actualChangedFields.length === 0) suppressionReason = "HIDDEN:NO_MATERIAL_DELTA";
-      else if (rule && (undeclaredChanges.length > 0 || missingDeclaredChanges.length > 0)) {
+      if (isImprovement && actualChangedFields.length === 0) suppressionReason = "HIDDEN:NO_MATERIAL_DELTA";
+      else if (isImprovement && (undeclaredChanges.length > 0 || missingDeclaredChanges.length > 0)) {
         suppressionReason = "HIDDEN:POLICY_REJECTED:ONE_FACTOR_DELTA_MISMATCH";
         publicationBlockers.push(publicationBlocker(
           "ONE_FACTOR_DELTA_MISMATCH",
@@ -918,9 +1045,9 @@ export async function buildCampaignRecommendationSet({
         demand_cluster_ids: clusterIds,
         covered_leaf_ids: leafLedger.filter((leaf) => leaf.delivery_bucket_id === bucketId).map((leaf) => leaf.leaf_id),
         variant: {
-          kind: rule ? "IMPROVEMENT" : "CONTROL",
-          code: rule?.changed_family ?? "CONTROL",
-          control_basis: rule ? null : controlBasis,
+          kind: isImprovement ? "IMPROVEMENT" : "CONTROL",
+          code: family ?? "CONTROL",
+          control_basis: isImprovement ? null : controlBasis,
           hypothesis: rule ? {
             hypothesis_id: `${rule.rule_id}@${rule.rule_version}`,
             source: "ACTIVE_PLAYBOOK",
@@ -931,12 +1058,19 @@ export async function buildCampaignRecommendationSet({
             comparator_draft_id: comparator?.draft_id ?? null,
             playbook_release_id: playbook.release?.release_id ?? null,
             playbook_rule_id: rule.rule_id,
+          } : publicWebHypothesis ? {
+            ...publicWebHypothesis,
+            changed_fields: actualChangedFields,
+            held_constant_fields: ["/direct/campaign/UnifiedCampaign/BiddingStrategy/Network", "/direct/ad/ResponsiveAd/Href"],
+            comparator_draft_id: comparator?.draft_id ?? null,
+            playbook_release_id: null,
+            playbook_rule_id: null,
           } : null,
-          comparator_draft_id: rule ? comparator?.draft_id ?? null : null,
+          comparator_draft_id: isImprovement ? comparator?.draft_id ?? null : null,
         },
-        treatment_delta: rule ? {
+        treatment_delta: isImprovement ? {
           comparator_draft_id: comparator?.draft_id ?? null,
-          changed_family: rule.changed_family,
+          changed_family: family,
           changed_fields: actualChangedFields,
           expected_changed_fields: expectedFields,
           material: actualChangedFields.length > 0,
@@ -964,8 +1098,8 @@ export async function buildCampaignRecommendationSet({
         capability_selection: capability,
         protocol_budget_readiness: {
           status: "PREREGISTERED",
-          comparator_draft_id: rule ? comparator?.draft_id ?? null : draftId,
-          one_factor_attribution: rule ? actualChangedFields.length > 0 && undeclaredChanges.length === 0 && missingDeclaredChanges.length === 0 : false,
+          comparator_draft_id: isImprovement ? comparator?.draft_id ?? null : draftId,
+          one_factor_attribution: isImprovement ? actualChangedFields.length > 0 && undeclaredChanges.length === 0 && missingDeclaredChanges.length === 0 : false,
           weekly_budget_micro_rub: record(projectionSearch.WbMaximumClicks).WeeklySpendLimit ?? null,
           period: {
             start: projectionCampaign.StartDate ?? null,
@@ -989,7 +1123,7 @@ export async function buildCampaignRecommendationSet({
         registeredAt: generatedAt,
       });
       compiled.push(draft);
-      if (!rule) comparator = draft;
+      if (!isImprovement) comparator = draft;
     }
   }
 

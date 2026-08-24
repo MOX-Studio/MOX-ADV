@@ -231,6 +231,115 @@ test("requires two independent records of the same pattern before calling a cont
   assert.deepEqual(corroborated.drafts[0].variant.control_basis.evidence_ids, ["evidence-a", "evidence-b"]);
 });
 
+test("turns a 90 percent bounded competitor ad pattern into a market control and one improved hypothesis", async () => {
+  const candidates = Array.from({ length: 10 }, (_, index) => ({
+    competitor: `Конкурент ${index + 1}`,
+    rationale: "Сопоставимое публичное предложение",
+    exact_destinations: [`https://competitor-${index + 1}.example/branding`],
+  }));
+  const evidence = {
+    snapshot_id: "snapshot-competitor-ad-pattern",
+    sources: [{
+      source_id: "competitors",
+      source_kind: "competitor_public_web",
+      status: "PARTIAL",
+      facts: ["Bounded public ad observations"],
+      evidence_ids: candidates.map((_, index) => `evidence-${index + 1}`),
+    }],
+    competitor_matrix: {
+      candidate_set: { competitor_set_rule: "Десять сопоставимых агентств", candidates },
+      rows: candidates.map((candidate, index) => ({
+        competitor: candidate.competitor,
+        observed_offer_message: "Комплексный брендинг под ключ",
+        exact_landing: candidate.exact_destinations[0],
+        ad_visibility_sample: {
+          status: index < 9 ? "OBSERVED" : "NOT_OBSERVED",
+          query: "заказать брендинг",
+          source: "Ограниченный публичный поисковый срез",
+        },
+        campaign_analysis: index < 9 ? {
+          evidence_status: "OBSERVED_AD",
+          pattern_id: "generic-branding-search-ad",
+          pattern_label: "Общий оффер брендинга по коммерческому запросу",
+          campaign_type: "Поисковая кампания",
+          audience_signal: "Компании, ищущие брендинг",
+          ad_message: "Комплексный брендинг под ключ",
+          call_to_action: "Оставить заявку",
+          strategy_fit: "Соответствует фокусу на корпоративном брендинге",
+          weakness: "Не квалифицирует B2B-лицо, принимающее решение",
+          improvement_hypothesis: "Уточнить B2B-аудиторию и квалифицированную заявку на проект",
+          changed_family: "AUDIENCE_SPECIFICITY",
+        } : null,
+      })),
+    },
+  };
+  const value = await recommendationSet(evidence, { playbookReleases: [] });
+  const visible = value.drafts.filter((draft) => draft.visibility === "VISIBLE");
+  const control = visible.find((draft) => draft.variant.kind === "CONTROL");
+  const treatment = visible.find((draft) => draft.variant.kind === "IMPROVEMENT");
+
+  assert.equal(visible.length, 2);
+  assert.equal(control.variant.control_basis.kind, "COMPETITIVE_AD_NORM_CONTROL");
+  assert.equal(control.variant.control_basis.observed_count, 9);
+  assert.equal(control.variant.control_basis.denominator, 10);
+  assert.equal(control.variant.control_basis.prevalence_percent, 90);
+  assert.equal(control.variant.control_basis.sampled_count, 10);
+  assert.equal(control.variant.control_basis.pattern_id, "generic-branding-search-ad");
+  assert.match(control.variant.control_basis.observed_weakness, /B2B-лицо/u);
+  assert.match(control.campaign_name, /Рыночный контроль/u);
+  assert.equal(treatment.variant.hypothesis.source, "COMPETITOR_PUBLIC_WEB");
+  assert.equal(treatment.variant.hypothesis.changed_family, "AUDIENCE_SPECIFICITY");
+  assert.equal(treatment.variant.hypothesis.prevalence.percent, 90);
+  assert.match(treatment.variant.hypothesis.mechanism, /9 из 10 конкурентов \(90%\)/u);
+  assert.match(treatment.variant.hypothesis.mechanism, /Уточнить B2B-аудиторию/u);
+  assert.match(treatment.campaign_name, /Улучшенная гипотеза/u);
+  assert.equal(treatment.treatment_delta.exactly_one_hypothesis_family, true);
+  assert.equal(treatment.auction_protocol.attribution.status, "ONE_FACTOR");
+  assert.deepEqual(treatment.auction_protocol.traffic_split, { comparator_percent: 50, treatment_percent: 50 });
+});
+
+test("turns public competitor positioning into a clearly qualified control when ad visibility is unavailable", async () => {
+  const candidates = Array.from({ length: 4 }, (_, index) => ({
+    competitor: `Агентство ${index + 1}`,
+    rationale: "Сопоставимое публичное предложение",
+    exact_destinations: [`https://agency-${index + 1}.example/branding`],
+  }));
+  const value = await recommendationSet({
+    snapshot_id: "snapshot-competitor-positioning-pattern",
+    sources: [{ source_id: "competitors", source_kind: "competitor_public_web", status: "PARTIAL", facts: ["Public positioning"], evidence_ids: ["evidence-positioning"] }],
+    competitor_matrix: {
+      candidate_set: { competitor_set_rule: "Четыре агентства", candidates },
+      rows: candidates.map((candidate) => ({
+        competitor: candidate.competitor,
+        observed_offer_message: "Комплексный брендинг под ключ",
+        exact_landing: candidate.exact_destinations[0],
+        ad_visibility_sample: { status: "UNAVAILABLE", query: null, source: "Срез не выполнялся" },
+        campaign_analysis: {
+          evidence_status: "HYPOTHESIS_FROM_PUBLIC_POSITIONING",
+          pattern_id: "dedicated-branding-offer",
+          pattern_label: "Комплексный брендинг на отдельной посадочной",
+          campaign_type: "Гипотеза поисковой кампании",
+          audience_signal: "Компании, выбирающие брендинг",
+          ad_message: "Комплексный брендинг под ключ",
+          call_to_action: "Перейти на страницу услуги",
+          strategy_fit: "Соответствует рекламному фокусу",
+          weakness: "Не уточняет управленческую аудиторию",
+          improvement_hypothesis: "Уточнить собственников и директоров по маркетингу",
+          changed_family: "AUDIENCE_SPECIFICITY",
+        },
+      })),
+    },
+  }, { playbookReleases: [] });
+  const control = value.drafts.find((draft) => draft.variant.kind === "CONTROL");
+  const treatment = value.drafts.find((draft) => draft.variant.kind === "IMPROVEMENT");
+
+  assert.equal(control.variant.control_basis.kind, "COMPETITIVE_POSITIONING_CONTROL");
+  assert.match(control.variant.control_basis.scope, /гипотеза по публичному позиционированию, а не доказательство запуска рекламы/iu);
+  assert.equal(control.variant.control_basis.pattern_id, "dedicated-branding-offer");
+  assert.equal(treatment.variant.hypothesis.prevalence.percent, 100);
+  assert.match(treatment.auction_protocol.tested_change, /гипотеза по позиционирован/u);
+});
+
 test("terminates at one control plus at most two improvements and audits excluded playbook rules", async () => {
   const value = await recommendationSet();
   assert.equal(value.termination.contract, "FINITE_NON_RECURSIVE_ONE_PASS");

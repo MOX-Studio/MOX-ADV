@@ -29,6 +29,7 @@ import {
   type DirectExecutionRecord,
 } from "./execution-safety.ts";
 import { readP0CuratedPlaybookV1 } from "./p0-curated-playbook-v1.ts";
+import { collectProductionCompetitorResearch } from "./production-competitor-research.ts";
 import {
   P0Application,
   type P0ApplicationStore,
@@ -59,7 +60,7 @@ import {
   D1DirectAuditStore,
   ensureP0DirectAuditTables,
 } from "./p0-direct-audit-d1-store.ts";
-import { OpenAIResponsesModelAdapter } from "./openai-responses-model.ts";
+import { createP0ModelAdapter } from "./p0-model-provider.ts";
 import { resolveHostnameWithDnsJson } from "./public-dns.ts";
 import { researchPublicFirstPartySite } from "./site-research.ts";
 import { cleanText } from "./text.ts";
@@ -821,6 +822,16 @@ async function researchSite(rawUrl: string) {
   });
 }
 
+async function readCompetitorResearch() {
+  const configured = runtimeEnv().P0_COMPETITOR_RESEARCH_JSON;
+  if (!configured) throw new Error("Bounded production competitor candidate set is not configured.");
+  return collectProductionCompetitorResearch(configured, {
+    fetch,
+    resolveHostname,
+    now,
+  });
+}
+
 async function ensureTables() {
   const db = runtimeEnv().DB;
   if (!db) throw new Error("Sites D1 binding DB недоступен.");
@@ -1367,6 +1378,7 @@ const application = new P0Application({
     researchSite,
     readCurrencyLimits,
     readMarketEvidence,
+    ...(runtimeEnv().P0_COMPETITOR_RESEARCH_JSON ? { readCompetitorResearch } : {}),
     async readPlaybookReleases() {
       return [readP0CuratedPlaybookV1()];
     },
@@ -1440,11 +1452,13 @@ function productionAgentRuntime() {
       executeTool: (input) => application.executeAgentTool(input),
       evaluate: (input) => application.evaluateAgentObjective(input),
     },
-    model: new OpenAIResponsesModelAdapter({
-      apiKey: runtime.OPENAI_API_KEY ?? "",
+    model: createP0ModelAdapter({
+      provider: runtime.P0_AGENT_PROVIDER ?? "",
       model: runtime.P0_AGENT_MODEL ?? "gpt-5-mini",
-      fetcher: fetch,
-    }),
+      openaiApiKey: runtime.OPENAI_API_KEY ?? "",
+      codexBridgeUrl: runtime.P0_CODEX_BRIDGE_URL ?? "",
+      codexBridgeToken: runtime.P0_CODEX_BRIDGE_TOKEN ?? "",
+    }, fetch),
     store: new D1P0AgentRunStore(runtime.DB),
     now,
   });

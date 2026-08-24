@@ -7,7 +7,7 @@ import {
 } from "./site-research.ts";
 
 export const BOUNDED_COMPETITOR_RESEARCH_SCHEMA = "p0-bounded-competitor-research-v1";
-const MAXIMUM_CANDIDATES = 6;
+const MAXIMUM_CANDIDATES = 10;
 const MAXIMUM_DESTINATIONS_PER_CANDIDATE = 3;
 
 export type CompetitorCandidateSet = {
@@ -38,6 +38,19 @@ export type CompetitorMatrixRowInput = {
     device: string;
     observedAt: string;
   };
+  campaignAnalysis?: {
+    evidenceStatus: "OBSERVED_AD" | "HYPOTHESIS_FROM_PUBLIC_POSITIONING";
+    patternId: string;
+    patternLabel: string;
+    campaignType: string;
+    audienceSignal: string;
+    adMessage: string;
+    callToAction: string;
+    strategyFit: string;
+    weakness: string;
+    improvementHypothesis: string;
+    changedFamily: "QUALIFIED_ACTION" | "AUDIENCE_SPECIFICITY" | "MESSAGE_OFFER";
+  } | null;
 };
 
 export type CompetitorMatrix = {
@@ -62,6 +75,19 @@ export type CompetitorMatrix = {
       device: string;
       observation_date: string;
     };
+    campaign_analysis: {
+      evidence_status: "OBSERVED_AD" | "HYPOTHESIS_FROM_PUBLIC_POSITIONING";
+      pattern_id: string;
+      pattern_label: string;
+      campaign_type: string;
+      audience_signal: string;
+      ad_message: string;
+      call_to_action: string;
+      strategy_fit: string;
+      weakness: string;
+      improvement_hypothesis: string;
+      changed_family: "QUALIFIED_ACTION" | "AUDIENCE_SPECIFICITY" | "MESSAGE_OFFER";
+    } | null;
   }>;
   coverage: Array<{ competitor: string; status: "OBSERVED" | "UNAVAILABLE" }>;
   aggregate_claims: Array<{
@@ -227,9 +253,36 @@ export function buildCompetitorMatrix(input: {
     const query = ad.status === "UNAVAILABLE"
       ? ad.query === null ? null : fail("COMPETITOR_VISIBILITY_SAMPLE_INVALID", "Unavailable visibility query должна оставаться null.")
       : requiredText(ad.query, "COMPETITOR_VISIBILITY_SAMPLE_INVALID", 500);
-    const adSource = requiredText(ad.source, "COMPETITOR_VISIBILITY_SAMPLE_INVALID", 300);
+    const adSource = requiredText(ad.source, "COMPETITOR_VISIBILITY_SAMPLE_INVALID", 1_000);
     const adGeography = requiredText(ad.geography, "COMPETITOR_SCOPE_REQUIRED", 200);
     const adDevice = requiredText(ad.device, "COMPETITOR_SCOPE_REQUIRED", 100);
+    const rawAnalysis = row.campaignAnalysis;
+    const campaignAnalysis = rawAnalysis ? (() => {
+      if (!["OBSERVED_AD", "HYPOTHESIS_FROM_PUBLIC_POSITIONING"].includes(rawAnalysis.evidenceStatus)) {
+        fail("COMPETITOR_CAMPAIGN_ANALYSIS_INVALID", "Campaign analysis evidence status не поддерживается.");
+      }
+      if (rawAnalysis.evidenceStatus === "OBSERVED_AD" && ad.status !== "OBSERVED") {
+        fail("COMPETITOR_CAMPAIGN_ANALYSIS_INVALID", "Observed campaign analysis требует наблюдаемую рекламную видимость.");
+      }
+      if (!["QUALIFIED_ACTION", "AUDIENCE_SPECIFICITY", "MESSAGE_OFFER"].includes(rawAnalysis.changedFamily)) {
+        fail("COMPETITOR_CAMPAIGN_ANALYSIS_INVALID", "Campaign improvement требует одну поддержанную hypothesis family.");
+      }
+      const analysis = {
+        evidence_status: rawAnalysis.evidenceStatus,
+        pattern_id: requiredText(rawAnalysis.patternId, "COMPETITOR_CAMPAIGN_PATTERN_REQUIRED", 200),
+        pattern_label: requiredText(rawAnalysis.patternLabel, "COMPETITOR_CAMPAIGN_PATTERN_REQUIRED", 500),
+        campaign_type: requiredText(rawAnalysis.campaignType, "COMPETITOR_CAMPAIGN_TYPE_REQUIRED", 500),
+        audience_signal: requiredText(rawAnalysis.audienceSignal, "COMPETITOR_CAMPAIGN_AUDIENCE_REQUIRED", 1_000),
+        ad_message: requiredText(rawAnalysis.adMessage, "COMPETITOR_CAMPAIGN_MESSAGE_REQUIRED", 1_000),
+        call_to_action: requiredText(rawAnalysis.callToAction, "COMPETITOR_CAMPAIGN_CTA_REQUIRED", 500),
+        strategy_fit: requiredText(rawAnalysis.strategyFit, "COMPETITOR_CAMPAIGN_STRATEGY_FIT_REQUIRED", 1_000),
+        weakness: requiredText(rawAnalysis.weakness, "COMPETITOR_CAMPAIGN_WEAKNESS_REQUIRED", 1_000),
+        improvement_hypothesis: requiredText(rawAnalysis.improvementHypothesis, "COMPETITOR_CAMPAIGN_HYPOTHESIS_REQUIRED", 1_000),
+        changed_family: rawAnalysis.changedFamily,
+      };
+      Object.values(analysis).forEach(assertSafeObservationText);
+      return analysis;
+    })() : null;
     [productsServices, observedOfferMessage, priceValue, sourceLabel, geography, device, query, adSource, adGeography, adDevice]
       .forEach(assertSafeObservationText);
     return {
@@ -250,6 +303,7 @@ export function buildCompetitorMatrix(input: {
         device: adDevice,
         observation_date: validObservationDate(ad.observedAt),
       },
+      campaign_analysis: campaignAnalysis,
     };
   }).sort((left, right) => left.competitor.localeCompare(right.competitor, "ru-RU") || left.exact_landing.localeCompare(right.exact_landing));
 
@@ -259,9 +313,14 @@ export function buildCompetitorMatrix(input: {
   const pricesObserved = rows.length
     ? new Set(rows.filter((row) => row.published_price.status === "PUBLISHED").map((row) => row.competitor)).size
     : null;
-  const visibilityObserved = rows.length
-    ? new Set(rows.filter((row) => row.ad_visibility_sample.status === "OBSERVED").map((row) => row.competitor)).size
+  const availableVisibilitySamples = rows.filter((row) => row.ad_visibility_sample.status !== "UNAVAILABLE");
+  const visibilityObserved = availableVisibilitySamples.length
+    ? new Set(availableVisibilitySamples.filter((row) => row.ad_visibility_sample.status === "OBSERVED").map((row) => row.competitor)).size
     : null;
+  const campaignPatterns = Map.groupBy(
+    rows.filter((row) => row.campaign_analysis),
+    (row) => row.campaign_analysis!.pattern_id,
+  );
   const aggregate = (claim: string, observedCount: number | null) => ({
     claim,
     competitor_set_rule: candidateSet.competitor_set_rule,
@@ -270,6 +329,14 @@ export function buildCompetitorMatrix(input: {
     evidence_status: evidenceStatus(observedCount, denominator),
     limitation: "Наблюдение относится только к ограниченному набору и не доказывает эффективность.",
   });
+  const campaignPatternClaims = [...campaignPatterns.entries()]
+    .map(([, patternRows]) => {
+      const analysis = patternRows[0].campaign_analysis!;
+      const count = new Set(patternRows.map((row) => row.competitor)).size;
+      const prefix = analysis.evidence_status === "OBSERVED_AD" ? "Рекламный паттерн" : "Гипотеза по позиционированию";
+      return aggregate(`${prefix}: ${analysis.pattern_label}`, count);
+    })
+    .sort((left, right) => (right.observed_count ?? 0) - (left.observed_count ?? 0) || left.claim.localeCompare(right.claim, "ru-RU"));
   return {
     schema_version: BOUNDED_COMPETITOR_RESEARCH_SCHEMA,
     status: evidenceStatus(offersObserved, denominator),
@@ -283,6 +350,7 @@ export function buildCompetitorMatrix(input: {
       aggregate("Публичное предложение наблюдалось", offersObserved),
       aggregate("Публичная цена опубликована", pricesObserved),
       aggregate("Рекламная видимость наблюдалась", visibilityObserved),
+      ...campaignPatternClaims,
     ],
     limitations: [
       "Матрица описывает только публично наблюдаемое позиционирование в указанную дату и в указанном срезе.",

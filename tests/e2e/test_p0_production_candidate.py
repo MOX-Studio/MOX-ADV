@@ -330,7 +330,7 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 self.assertEqual(2, competitor_matrix.locator(".owner-competitor-candidates article").count())
                 self.assertEqual(1, competitor_matrix.locator(".owner-competitor-rows > article").count())
                 self.assertTrue(competitor_matrix.get_by_text("от 120 000 ₽", exact=True).is_visible())
-                self.assertTrue(competitor_matrix.get_by_text("Наблюдалось: 1.", exact=True).first.is_visible())
+                self.assertTrue(competitor_matrix.get_by_text("Наблюдалось: 1 из 2 (50%).", exact=True).first.is_visible())
                 self.assertIn("Знаменатель: 2", competitor_matrix.inner_text())
                 self.assertIn("Публичные наблюдения не показывают расходы, CPC, конверсии, CPA, ROI, прибыльность", competitor_matrix.inner_text())
                 checkpoint("Что узнал агент")

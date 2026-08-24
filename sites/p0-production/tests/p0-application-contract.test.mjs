@@ -573,6 +573,101 @@ test("authoritative application collects market evidence only for a Model revisi
   assert.doesNotMatch(JSON.stringify(agentRead.observation.facts.demand_cost_research), /keyword_id|campaign_id|ad_group_id/iu);
 });
 
+test("agent collects configured bounded competitor evidence and invalidates stale strategy lineage", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "mox-p0-competitor-refresh-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new JsonDurableStore(join(directory, "state.json"));
+  const contextWithoutCompetitors = context();
+  delete contextWithoutCompetitors.competitor_candidate_set;
+  delete contextWithoutCompetitors.competitor_observations;
+  const initial = new P0Application({
+    store,
+    adapters: adapters({ async readContext() { return structuredClone(contextWithoutCompetitors); } }),
+  });
+
+  let result = await initial.command("owner", { action: "analyze_site", expected_revision: 0, url: "https://owner.example/" });
+  result = await initial.command("owner", {
+    action: "confirm_context_goal",
+    expected_revision: result.revision,
+    confirmation: "CONFIRM_CONTEXT_GOAL",
+    goal: result.state.context_state.provisional_business_goal.value,
+  });
+  result = await initial.command("owner", { action: "save_business_model", expected_revision: result.revision, value: ownerModel(result.state) });
+  result = await approveStrategy(initial, result);
+  assert.equal(result.state.analytics_evidence_snapshot.competitor_matrix, null);
+  assert.ok(result.state.strategy);
+
+  const competitorFixture = context();
+  const refreshed = new P0Application({
+    store,
+    adapters: adapters({
+      async readContext() { return structuredClone(contextWithoutCompetitors); },
+      async readCompetitorResearch() {
+        return {
+          competitor_candidate_set: structuredClone(competitorFixture.competitor_candidate_set),
+          competitor_observations: structuredClone(competitorFixture.competitor_observations),
+        };
+      },
+    }),
+  });
+  const contract = await refreshed.agentContract("owner", "COORDINATE_OWNER_JOURNEY");
+  assert.equal(contract.policy.allowed_tools.includes("p0_collect_bounded_competitor_research"), true);
+  const collected = await refreshed.executeAgentTool({
+    owner_key: "owner",
+    run_id: "agent-competitor-refresh",
+    objective: contract.objective,
+    authority: contract.authority,
+    call: {
+      id: "collect-competitors",
+      name: "p0_collect_bounded_competitor_research",
+      arguments: { expected_revision: result.revision },
+    },
+    observation_sequence: 1,
+  });
+
+  assert.equal(collected.observation.facts.competitor_research_status, "PARTIAL");
+  assert.equal(collected.observation.facts.observed_landing_count, 1);
+  assert.equal(collected.observation.facts.candidate_denominator, 2);
+  assert.equal(collected.observation.source_references.some((item) => item.locator === "https://alpha.example/participate"), true);
+  const after = await refreshed.query("owner");
+  assert.equal(after.state.analytics_evidence_snapshot.competitor_matrix.rows.length, 1);
+  assert.equal(after.state.analytics_evidence_snapshot.competitor_matrix.candidate_set.candidates.length, 2);
+  assert.equal(after.state.strategy, null);
+  assert.ok(after.state.strategy_questionnaire);
+  assert.equal(after.state.last_decision_invalidation.reason_code, "EVIDENCE_LINEAGE_CHANGED");
+});
+
+test("restart preserves a long owner-confirmed audience and its Product Focus lineage", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "mox-p0-owner-audience-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new JsonDurableStore(join(directory, "state.json"));
+  const application = new P0Application({ store, adapters: adapters() });
+
+  let result = await application.command("owner", { action: "analyze_site", expected_revision: 0, url: "https://owner.example/" });
+  result = await application.command("owner", {
+    action: "confirm_context_goal",
+    expected_revision: result.revision,
+    confirmation: "CONFIRM_CONTEXT_GOAL",
+    goal: result.state.context_state.provisional_business_goal.value,
+  });
+  const value = ownerModel(result.state);
+  value.product = "Комплексный брендинг и ребрендинг под ключ для российских B2B-компаний";
+  value.audience = "Собственники, генеральные и маркетинговые директора, а также бренд-менеджеры российских компаний, которым нужен запуск нового бренда, ребрендинг или систематизация айдентики.";
+  value.customer_context = value.audience;
+  result = await application.command("owner", {
+    action: "save_business_model",
+    expected_revision: result.revision,
+    value,
+  });
+  assert.equal(result.state.product_focus?.decision_status, "OWNER_SELECTED");
+
+  const restarted = new P0Application({ store, adapters: adapters() });
+  const queried = await restarted.query("owner");
+  assert.equal(queried.state.business_model.audience, value.audience);
+  assert.equal(queried.state.business_model.field_evidence.audience.owner_confirmed, true);
+  assert.equal(queried.state.product_focus?.decision_status, "OWNER_SELECTED");
+});
+
 test("application persists focus cards and an owner focus edit revises focus lineage and invalidates downstream artifacts", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "mox-p0-product-focus-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -1213,9 +1308,10 @@ test("cold-start research proceeds with unavailable account history and never pe
   assert.deepEqual(agentContract.tools.map((tool) => tool.name), [
     "p0_read_owner_journey",
     "p0_read_bounded_competitor_research",
+    "p0_refresh_competitor_campaign_hypotheses",
     "p0_record_owner_journey_assessment",
   ]);
-  assert.deepEqual(agentContract.policy.allowed_permissions, ["P0_APPLICATION_READ", "P0_OBSERVATION_RECORD"]);
+  assert.deepEqual(agentContract.policy.allowed_permissions, ["P0_APPLICATION_READ", "P0_LOCAL_DRAFT_WRITE", "P0_OBSERVATION_RECORD"]);
 });
 
 test("Context preflight fails closed for stale, partial or mismatched exact API binding", async (t) => {
@@ -3985,9 +4081,9 @@ test("authoritative application owns the agent objective, typed tool schema, per
   const initial = await value.application.agentContract("owner", "COORDINATE_OWNER_JOURNEY");
   assert.equal(initial.schema_version, "p0-agent-application-contract-v1");
   assert.equal(initial.objective.kind, "COORDINATE_OWNER_JOURNEY");
-  assert.deepEqual(initial.policy.allowed_tools, ["p0_read_owner_journey", "p0_read_bounded_competitor_research", "p0_audit_direct_account", "p0_continue_due_safe_work", "p0_prepare_rejected_correction", "p0_dispatch_approved_package", "p0_record_owner_journey_assessment"]);
-  assert.deepEqual(initial.policy.allowed_permissions, ["P0_APPLICATION_READ", "P0_PROVIDER_READ", "P0_LOCAL_DRAFT_WRITE", "P0_APPROVED_DISPATCH", "P0_OBSERVATION_RECORD"]);
-  assert.deepEqual(initial.tools.map((tool) => tool.name), ["p0_read_owner_journey", "p0_read_bounded_competitor_research", "p0_audit_direct_account", "p0_continue_due_safe_work", "p0_prepare_rejected_correction", "p0_dispatch_approved_package", "p0_record_owner_journey_assessment"]);
+  assert.deepEqual(initial.policy.allowed_tools, ["p0_read_owner_journey", "p0_read_bounded_competitor_research", "p0_refresh_competitor_campaign_hypotheses", "p0_audit_direct_account", "p0_continue_due_safe_work", "p0_prepare_rejected_correction", "p0_dispatch_approved_package", "p0_record_owner_journey_assessment"]);
+  assert.deepEqual(initial.policy.allowed_permissions, ["P0_APPLICATION_READ", "P0_LOCAL_DRAFT_WRITE", "P0_PROVIDER_READ", "P0_APPROVED_DISPATCH", "P0_OBSERVATION_RECORD"]);
+  assert.deepEqual(initial.tools.map((tool) => tool.name), ["p0_read_owner_journey", "p0_read_bounded_competitor_research", "p0_refresh_competitor_campaign_hypotheses", "p0_audit_direct_account", "p0_continue_due_safe_work", "p0_prepare_rejected_correction", "p0_dispatch_approved_package", "p0_record_owner_journey_assessment"]);
   assert.ok(initial.tools.every((tool) => tool.input_schema.additionalProperties === false));
   assert.equal(initial.authority.application_revision, 0);
   assert.match(initial.authority.authority_digest, /^sha256:[a-f0-9]{64}$/u);
@@ -4226,6 +4322,7 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
   assert.equal(projection.competitorMatrix.rows[0].publishedPrice, "от 120 000 ₽");
   assert.match(projection.competitorMatrix.rows[0].adVisibilitySample, /Объявление наблюдалось/u);
   assert.match(projection.competitorMatrix.aggregateClaims[0].scope, /Знаменатель: 2/u);
+  assert.equal(projection.competitorMatrix.aggregateClaims[0].result, "Наблюдалось: 1 из 2 (50%).");
   assert.match(projection.competitorMatrix.limitations.join(" "), /не показывают расходы, CPC, конверсии, CPA, ROI, прибыльность/u);
   await assert.rejects(
     journey.submit(ownerKey, { handle: staleHandle, values: {} }),

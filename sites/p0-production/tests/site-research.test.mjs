@@ -108,6 +108,31 @@ test("cancels an oversized streaming response at the configured byte limit", asy
   assert.equal(cancelled, true);
 });
 
+test("keeps entry-page evidence when a secondary first-party page exhausts the byte budget", async () => {
+  let cancelled = false;
+  const oversized = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new Uint8Array(900));
+      controller.enqueue(new Uint8Array(900));
+    },
+    cancel() { cancelled = true; },
+  });
+  const adapter = transport({
+    "https://owner.example/": html('<p>Комплексный брендинг для бизнеса.</p><a href="/services">Услуги</a>'),
+    "https://owner.example/services": new Response(oversized, { headers: { "content-type": "text/html" } }),
+  });
+
+  const result = await researchPublicFirstPartySite("https://owner.example/", {
+    ...adapter,
+    now: () => "2026-08-21T10:00:00.000Z",
+    limits: { maximumPages: 2, maximumRedirects: 1, maximumTotalBytes: 1_000 },
+  });
+
+  assert.equal(result.pages.length, 1);
+  assert.match(result.text_excerpt, /Комплексный брендинг/u);
+  assert.equal(cancelled, true);
+});
+
 test("rejects credential-bearing, local and link-local URL literals before resolution", async () => {
   const adapter = transport({});
   for (const url of [
