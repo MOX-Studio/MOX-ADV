@@ -541,10 +541,17 @@ test("authoritative application collects market evidence only for a Model revisi
   assert.equal(marketReads, 1);
   assert.equal(result.state.analytics_evidence_snapshot.market_evidence.frequency.status, "AVAILABLE");
   const persistedSnapshot = result.state.analytics_evidence_snapshot.snapshot_id;
+  const persistedObservation = result.state.analytics_evidence_snapshot.market_evidence.frequency.canonical_observations[0];
+  assert.equal(persistedObservation.method, "top_requests");
+  assert.deepEqual(persistedObservation.region_names, ["Москва"]);
+  assert.equal(persistedObservation.device, "desktop");
+  assert.match(persistedObservation.observed_at, /^2026-08-21T10:00:/u);
+  assert.equal(persistedObservation.provider_provenance.source, "YANDEX_WORDSTAT_V1");
 
   const queried = await application.query("owner");
   assert.equal(marketReads, 1);
   assert.equal(queried.state.analytics_evidence_snapshot.snapshot_id, persistedSnapshot);
+  assert.deepEqual(queried.state.analytics_evidence_snapshot.market_evidence.frequency.canonical_observations[0], persistedObservation);
 
   result = await application.command("owner", { action: "save_business_model", expected_revision: queried.revision, value: ownerModel(queried.state) });
   assert.equal(marketReads, 2);

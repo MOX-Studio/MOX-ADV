@@ -67,9 +67,22 @@ test("builds a bounded typed multi-seed demand and comparable-cost research plan
   assert.ok(plan.seeds.some((item) => item.dimension === "OFFER_LANGUAGE"));
   assert.ok(plan.seeds.some((item) => item.dimension === "CUSTOMER_PROBLEM"));
   assert.ok(plan.seeds.some((item) => item.dimension === "HIGH_INTENT_ACTION"));
-  assert.ok(plan.seeds.some((item) => item.dimension === "BRAND"));
   assert.ok(plan.seeds.some((item) => item.dimension === "NON_BRAND"));
-  assert.equal(plan.seeds.find((item) => item.dimension === "BRAND").phrase, "MOX Expo участие со стендом в промышленной выставке");
+  assert.equal(new Set(plan.seeds.map((item) => item.phrase.toLocaleLowerCase("ru-RU"))).size, plan.seeds.length);
+  const offerSeed = plan.seeds.find((item) => item.dimension === "OFFER_LANGUAGE");
+  assert.equal(offerSeed.phrase, "MOX Expo участие со стендом в промышленной выставке");
+  assert.deepEqual(offerSeed.formulation_provenance, [
+    { dimension: "OFFER_LANGUAGE", input_index: 0, source_phrase: "MOX Expo участие со стендом в промышленной выставке" },
+    { dimension: "BRAND", input_index: 0, source_phrase: "MOX Expo" },
+  ]);
+  assert.equal(plan.dimensions.find((item) => item.dimension === "BRAND").status, "PLANNED");
+  assert.equal(plan.dimensions.find((item) => item.dimension === "BRAND").formulation_count, 1);
+  assert.deepEqual(plan.seeds.find((item) => item.dimension === "CUSTOMER_PROBLEM").formulation_provenance, [
+    { dimension: "CUSTOMER_PROBLEM", input_index: 0, source_phrase: "Найти новых оптовых покупателей" },
+  ]);
+  assert.deepEqual(plan.seeds.find((item) => item.dimension === "HIGH_INTENT_ACTION").formulation_provenance, [
+    { dimension: "HIGH_INTENT_ACTION", input_index: 0, source_phrase: "Оставить заявку на участие" },
+  ]);
   assert.equal(plan.seeds.find((item) => item.dimension === "NON_BRAND").phrase, "участие со стендом в промышленной выставке");
   assert.deepEqual(plan.exclusions, ["бесплатно", "вакансии"]);
   assert.deepEqual(plan.scope.regions, [{ id: 213, name: "Москва" }]);
@@ -279,14 +292,27 @@ test("normalizes Wordstat rows and sums each uniquely assigned row once as a sco
   const frequency = await buildScopedDemandEvidence(batch, clusters);
   assert.equal(frequency.status, "AVAILABLE");
   assert.deepEqual(frequency.observed_unique_count, { value: 67, semantics: "LOWER_BOUND_OBSERVED_TOP_ROWS" });
+  assert.equal(frequency.canonical_observation_schema, "wordstat-canonical-observation-v1");
+  assert.equal(frequency.canonical_observations.length, 3);
+  assert.deepEqual(frequency.canonical_observations, frequency.unique_assigned_rows);
   assert.equal(frequency.unique_assigned_rows.length, 3);
   assert.equal(frequency.coverage.returned_rows, 8);
   assert.equal(frequency.coverage.excluded_unique_rows, 1);
   assert.equal(frequency.excluded_rows[0].reason_code, "RELEVANCE_RULE_NO_MATCH");
   assert.equal(frequency.excluded_rows[0].classifier_version, "demand-relevance-rules-v1");
-  assert.equal(new Set(frequency.unique_assigned_rows.map((row) => row.row_id)).size, 3);
+  assert.equal(new Set(frequency.canonical_observations.map((observation) => observation.observation_id)).size, 3);
+  assert.ok(frequency.canonical_observations.every((observation) => observation.observation_id === observation.row_id));
   assert.equal(frequency.clusters.reduce((sum, cluster) => sum + cluster.observed_unique_count.value, 0), 67);
   assert.ok(frequency.unique_assigned_rows.every((row) => row.provenance.call_ids.length === 2));
+  assert.ok(frequency.unique_assigned_rows.every((row) => row.method === "top_requests"));
+  assert.ok(frequency.unique_assigned_rows.every((row) => row.region_names[0] === "Москва" && row.device === "desktop"));
+  assert.ok(frequency.unique_assigned_rows.every((row) => row.observed_at === "2026-08-21T10:00:04.000Z"));
+  assert.ok(frequency.unique_assigned_rows.every((row) => row.provider_provenance.source === "YANDEX_WORDSTAT_V1"));
+  assert.ok(frequency.unique_assigned_rows.every((row) => row.provider_provenance.endpoint === WORDSTAT_ENDPOINTS.top_requests));
+  assert.ok(frequency.unique_assigned_rows.every((row) => row.provider_provenance.batch_id === batch.batch_id));
+  assert.equal(frequency.scopes[0].status, "AVAILABLE");
+  assert.equal(frequency.scopes[0].call_coverage.complete, true);
+  assert.deepEqual(frequency.scopes[0].call_coverage.unavailable_seed_ids, []);
   assert.equal(frequency.seed_matched_row_counts.find((item) => item.seed_id === "seed-participation").value, 19);
   assert.equal(frequency.semantics.lower_bound, true);
   assert.equal(frequency.seasonality.status, "AVAILABLE");
@@ -569,7 +595,38 @@ test("a partial multi-seed response keeps the available lower bound and names th
   const frequency = await buildScopedDemandEvidence(batch, clusters);
   assert.equal(frequency.status, "PARTIAL");
   assert.equal(frequency.observed_unique_count.value, 67);
+  assert.equal(frequency.scopes.length, 1);
+  assert.equal(frequency.scopes[0].status, "PARTIAL");
+  assert.equal(frequency.scopes[0].call_coverage.complete, false);
+  assert.deepEqual(frequency.scopes[0].call_coverage.unavailable_seed_ids, ["seed-stand"]);
+  assert.equal(frequency.coverage.planned_top_request_calls, 2);
+  assert.equal(frequency.coverage.available_top_request_calls, 1);
+  assert.equal(frequency.coverage.unavailable_top_request_calls, 1);
+  assert.deepEqual(frequency.coverage.unavailable_seed_ids, ["seed-stand"]);
+  assert.ok(frequency.unique_assigned_rows.every((row) => row.count > 0));
   assert.ok(frequency.gaps.some((gap) => gap.code === "WORDSTAT_QUOTA_EXHAUSTED"));
+});
+
+test("a missing non-frequency call keeps canonical demand as a partial lower bound, never complete evidence", async () => {
+  const top = await jsonFixture("top-requests");
+  const regions = await jsonFixture("regions");
+  let tick = 0;
+  const batch = await collectOfficialWordstatBatch({
+    token: "fixture-secret",
+    clientId: "fixture-client",
+    seeds: [seed],
+  }, async (input) => {
+    const path = new URL(String(input)).pathname;
+    return response(path.endsWith("topRequests") ? top : path.endsWith("regions") ? regions : {});
+  }, () => `2026-08-21T10:05:${String(tick++).padStart(2, "0")}.000Z`);
+
+  const frequency = await buildScopedDemandEvidence(batch, clusters);
+  assert.equal(frequency.status, "PARTIAL");
+  assert.equal(frequency.observed_unique_count.value, 67);
+  assert.equal(frequency.scopes[0].status, "AVAILABLE");
+  assert.equal(frequency.seasonality.status, "UNAVAILABLE");
+  assert.ok(frequency.gaps.some((gap) => gap.code === "WORDSTAT_RESPONSE_PARTIAL"));
+  assert.equal(frequency.canonical_observations.some((observation) => observation.count === 0), false);
 });
 
 test("validates Wordstat scope and batch quota before any provider request", async () => {

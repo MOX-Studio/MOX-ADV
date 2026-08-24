@@ -1414,7 +1414,7 @@ export async function buildAnalyticsEvidence({
       },
       extraction: {
         method: "api_parser",
-        version: "wordstat-v1-scoped-demand-v1",
+        version: "wordstat-v1-canonical-observation-v2",
         selector_or_jsonpath: "$.topRequests + $.dynamics + $.regions",
         request_digest: await contentHash(marketEvidence.frequency.scopes),
       },
@@ -1428,6 +1428,7 @@ export async function buildAnalyticsEvidence({
       qualityFlags: ["LOWER_BOUND_OBSERVED_TOP_ROWS", "SOURCE_WINDOW_END_UNDISCLOSED"],
       providerMetadata: {
         snapshot_batch_id: marketEvidence.snapshot_batch_id,
+        canonical_observation_ids: marketEvidence.frequency.canonical_observations.map((observation) => observation.observation_id),
         unique_assigned_row_ids: marketEvidence.frequency.unique_assigned_rows.map((row) => row.row_id),
       },
       freshnessPolicy: "wordstat-rolling-30d/24h-v1",
@@ -1798,7 +1799,7 @@ export async function buildAnalyticsEvidence({
         allowed_methods: ["POST /v1/topRequests", "POST /v1/dynamics", "POST /v1/regions"],
         browser_cabinet_allowed: false,
       },
-      versions: { schema: ANALYTICS_EVIDENCE_SCHEMA, extractor: "wordstat-v1-scoped-demand-v1", policy: "official-yandex-wordstat-read-only/v1" },
+      versions: { schema: ANALYTICS_EVIDENCE_SCHEMA, extractor: "wordstat-v1-canonical-observation-v2", policy: "official-yandex-wordstat-read-only/v1" },
       facts: marketEvidence.frequency.status === "UNAVAILABLE" ? [] : [
         `${marketEvidence.frequency.unique_assigned_rows.length} unique assigned Wordstat top rows`,
         "Cluster frequency is LOWER_BOUND_OBSERVED_TOP_ROWS.",
@@ -1851,7 +1852,7 @@ export async function buildAnalyticsEvidence({
     model_extractor: text(modelResearch.agent) || "GPT_SITES_EVIDENCE_RESEARCH_V3",
     direct_adapter: "direct-v501-campaign-inventory-v2",
     metrika_adapter: "metrika-management-and-stat-v2",
-    wordstat_adapter: "wordstat-v1-scoped-demand-v1",
+    wordstat_adapter: "wordstat-v1-canonical-observation-v2",
     competitor_policy: "public-competitor-pages-v2",
   };
   const hashes = {

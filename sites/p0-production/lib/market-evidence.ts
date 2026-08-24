@@ -4,6 +4,7 @@ const JSONbig = JSONbigFactory({ useNativeBigInt: true });
 
 export const MARKET_EVIDENCE_CONTRACT = "demand-cost-packing-v1";
 export const WORDSTAT_BATCH_SCHEMA = "wordstat-observation-batch-v1";
+export const WORDSTAT_CANONICAL_OBSERVATION_SCHEMA = "wordstat-canonical-observation-v1";
 export const WORDSTAT_API_HOST = "api.wordstat.yandex.net";
 export const WORDSTAT_ENDPOINTS = {
   top_requests: `https://${WORDSTAT_API_HOST}/v1/topRequests`,
@@ -105,6 +106,12 @@ export type WordstatObservationBatch = {
 
 export const DEMAND_COST_RESEARCH_PLAN_SCHEMA = "demand-cost-research-plan-v1";
 export type DemandSeedDimension = "OFFER_LANGUAGE" | "CUSTOMER_PROBLEM" | "HIGH_INTENT_ACTION" | "BRAND" | "NON_BRAND";
+export type DemandFormulationProvenance = {
+  dimension: DemandSeedDimension;
+  input_index: number;
+  source_phrase: string;
+};
+
 export type DemandCostResearchPlan = {
   schema_version: typeof DEMAND_COST_RESEARCH_PLAN_SCHEMA;
   plan_id: string;
@@ -132,7 +139,10 @@ export type DemandCostResearchPlan = {
     formulation_count: number;
     limitation: string | null;
   }>;
-  seeds: Array<WordstatSeed & { dimension: DemandSeedDimension }>;
+  seeds: Array<WordstatSeed & {
+    dimension: DemandSeedDimension;
+    formulation_provenance: DemandFormulationProvenance[];
+  }>;
   comparable_cost_scope: {
     required_direct_audit: "COMPLETE";
     phrase: "EXACT";
@@ -218,20 +228,61 @@ export async function buildDemandCostResearchPlan(input: {
   if (!offer) throw new Error("Demand research plan requires offer language.");
   const brandTokens = new Set(input.brandTerms.flatMap((value) => boundedPhrase(value).toLocaleLowerCase("ru-RU").split(/\s+/u)).filter(Boolean));
   const nonBrandOffer = offer.split(/\s+/u).filter((word) => !brandTokens.has(word.toLocaleLowerCase("ru-RU"))).join(" ") || offer;
-  const candidates: Array<{ dimension: DemandSeedDimension; phrase: string }> = [
-    { dimension: "OFFER_LANGUAGE", phrase: offer },
-    ...input.customerProblems.map((value) => ({ dimension: "CUSTOMER_PROBLEM" as const, phrase: boundedPhrase(`${value} ${nonBrandOffer}`) })),
-    ...input.highIntentActions.map((value) => ({ dimension: "HIGH_INTENT_ACTION" as const, phrase: boundedPhrase(`${value} ${nonBrandOffer}`) })),
-    ...input.brandTerms.map((value) => ({ dimension: "BRAND" as const, phrase: boundedPhrase(`${value} ${nonBrandOffer}`) })),
-    { dimension: "NON_BRAND", phrase: nonBrandOffer },
+  const candidates: Array<{
+    dimension: DemandSeedDimension;
+    phrase: string;
+    provenance: DemandFormulationProvenance;
+  }> = [
+    {
+      dimension: "OFFER_LANGUAGE",
+      phrase: offer,
+      provenance: { dimension: "OFFER_LANGUAGE", input_index: 0, source_phrase: normalizedText(input.offerLanguage) },
+    },
+    ...input.customerProblems.map((value, index) => ({
+      dimension: "CUSTOMER_PROBLEM" as const,
+      phrase: boundedPhrase(`${value} ${nonBrandOffer}`),
+      provenance: { dimension: "CUSTOMER_PROBLEM" as const, input_index: index, source_phrase: normalizedText(value) },
+    })),
+    ...input.highIntentActions.map((value, index) => ({
+      dimension: "HIGH_INTENT_ACTION" as const,
+      phrase: boundedPhrase(`${value} ${nonBrandOffer}`),
+      provenance: { dimension: "HIGH_INTENT_ACTION" as const, input_index: index, source_phrase: normalizedText(value) },
+    })),
+    ...input.brandTerms.map((value, index) => ({
+      dimension: "BRAND" as const,
+      phrase: boundedPhrase(`${value} ${nonBrandOffer}`),
+      provenance: { dimension: "BRAND" as const, input_index: index, source_phrase: normalizedText(value) },
+    })),
+    {
+      dimension: "NON_BRAND",
+      phrase: nonBrandOffer,
+      provenance: { dimension: "NON_BRAND", input_index: 0, source_phrase: normalizedText(input.offerLanguage) },
+    },
   ];
-  const unique = new Map<string, { dimension: DemandSeedDimension; phrase: string }>();
+  const unique = new Map<string, {
+    dimension: DemandSeedDimension;
+    phrase: string;
+    formulation_provenance: DemandFormulationProvenance[];
+  }>();
   for (const candidate of candidates) {
-    const identity = candidate.phrase.toLocaleLowerCase("ru-RU");
-    if (!candidate.phrase || unique.has(`${candidate.dimension}:${identity}`)) continue;
-    unique.set(`${candidate.dimension}:${identity}`, candidate);
+    const identity = normalizedPhrase(candidate.phrase);
+    if (!candidate.phrase || !candidate.provenance.source_phrase) continue;
+    const existing = unique.get(identity);
+    if (existing) {
+      if (!existing.formulation_provenance.some((item) => item.dimension === candidate.provenance.dimension
+        && item.input_index === candidate.provenance.input_index
+        && item.source_phrase === candidate.provenance.source_phrase)) {
+        existing.formulation_provenance.push(candidate.provenance);
+      }
+      continue;
+    }
+    unique.set(identity, {
+      dimension: candidate.dimension,
+      phrase: candidate.phrase,
+      formulation_provenance: [candidate.provenance],
+    });
   }
-  const selected = [...unique.values()].slice(0, 8);
+  const selected = [...unique.values()].slice(0, WORDSTAT_MAXIMUM_SEEDS);
   const dimensionCounters = new Map<DemandSeedDimension, number>();
   const seeds = selected.map((candidate, index) => {
     const ordinal = (dimensionCounters.get(candidate.dimension) ?? 0) + 1;
@@ -241,6 +292,7 @@ export async function buildDemandCostResearchPlan(input: {
       seed_id: `${dimensionSlug}-${ordinal}`,
       cluster_id: index === 0 ? "demand-cluster-primary" : `demand-cluster-${dimensionSlug}-${ordinal}`,
       dimension: candidate.dimension,
+      formulation_provenance: candidate.formulation_provenance,
       phrase: candidate.phrase,
       dynamics_phrase: plusPhrase(candidate.phrase),
       dynamics_period: "monthly" as const,
@@ -254,7 +306,7 @@ export async function buildDemandCostResearchPlan(input: {
   });
   const dimensions = (["OFFER_LANGUAGE", "CUSTOMER_PROBLEM", "HIGH_INTENT_ACTION", "BRAND", "NON_BRAND"] as DemandSeedDimension[])
     .map((dimension) => {
-      const formulationCount = seeds.filter((seed) => seed.dimension === dimension).length;
+      const formulationCount = seeds.filter((seed) => seed.formulation_provenance.some((origin) => origin.dimension === dimension)).length;
       return {
         dimension,
         status: formulationCount ? "PLANNED" as const : "UNAVAILABLE" as const,
@@ -489,21 +541,47 @@ type ExcludedDemandRow = {
 };
 type DemandScopeEvidence = {
   scope_fingerprint: string;
+  status: "AVAILABLE" | "PARTIAL" | "UNAVAILABLE";
+  method: "top_requests";
   operator_profile: WordstatOperatorProfile;
   region_ids: number[];
   region_names: string[];
   device: WordstatSeed["device"];
   observed_unique_count: { value: number | null; semantics: "LOWER_BOUND_OBSERVED_TOP_ROWS" };
   unique_assigned_row_ids: string[];
+  call_coverage: {
+    planned_call_ids: string[];
+    available_call_ids: string[];
+    unavailable_call_ids: string[];
+    unavailable_seed_ids: string[];
+    complete: boolean;
+  };
 };
 
-type AssignedDemandRow = {  row_id: string;
+type AssignedDemandRow = {
+  schema_version: typeof WORDSTAT_CANONICAL_OBSERVATION_SCHEMA;
+  observation_id: string;
+  row_id: string;
   phrase: string;
   normalized_phrase: string;
   count: number;
+  method: "top_requests";
+  region_ids: number[];
+  region_names: string[];
+  device: WordstatSeed["device"];
+  observed_at: string;
   assigned_cluster_id: string;
   scope_fingerprint: string;
   provenance: { call_ids: string[]; seed_ids: string[]; request_fingerprints: string[] };
+  provider_provenance: {
+    source: "YANDEX_WORDSTAT_V1";
+    endpoint: typeof WORDSTAT_ENDPOINTS.top_requests;
+    batch_id: string;
+    call_ids: string[];
+    seed_ids: string[];
+    request_fingerprints: string[];
+    requested_at: string[];
+  };
 };
 
 function normalizedPhrase(value: unknown) {
@@ -517,8 +595,13 @@ function tokenCount(value: string) {
 function topScopeKey(call: WordstatCall) {
   return JSON.stringify({
     batch_id: call.batch_id,
+    method: call.method,
     operator_profile: call.operator_profile,
     region_ids: [...call.scope.region_ids].sort((left, right) => left - right),
+    region_names: call.scope.region_ids
+      .map((id, index) => ({ id, name: call.scope.region_names[index] }))
+      .sort((left, right) => left.id - right.id)
+      .map((item) => item.name),
     device: call.scope.device,
   });
 }
@@ -606,17 +689,38 @@ async function assignedRowsForScope(calls: WordstatCall[], clusterSpecs: Map<str
         || left.call.seed_id.localeCompare(right.call.seed_id));
     const assigned = ranked[0];
     const scopeFingerprint = await sha256(JSON.parse(topScopeKey(assigned.call)));
+    const callIds = [...new Set(observations.map((item) => item.call.call_id))].sort();
+    const seedIds = [...new Set(observations.map((item) => item.call.seed_id))].sort();
+    const requestFingerprints = [...new Set(observations.map((item) => item.call.request_fingerprint))].sort();
+    const requestedAt = [...new Set(observations.map((item) => item.call.requested_at))].sort();
+    const rowId = `wordstat-row:${(await sha256({ scope: scopeFingerprint, normalized_phrase: normalized })).slice("sha256:".length)}`;
     rows.push({
-      row_id: `wordstat-row:${(await sha256({ scope: scopeFingerprint, normalized_phrase: normalized })).slice("sha256:".length)}`,
+      schema_version: WORDSTAT_CANONICAL_OBSERVATION_SCHEMA,
+      observation_id: rowId,
+      row_id: rowId,
       phrase: observations.map((item) => item.phrase).sort()[0],
       normalized_phrase: normalized,
       count: counts[0],
+      method: "top_requests",
+      region_ids: [...assigned.call.scope.region_ids],
+      region_names: [...assigned.call.scope.region_names],
+      device: assigned.call.scope.device,
+      observed_at: requestedAt.at(-1) ?? assigned.call.requested_at,
       assigned_cluster_id: assigned.call.cluster_id,
       scope_fingerprint: scopeFingerprint,
       provenance: {
-        call_ids: [...new Set(observations.map((item) => item.call.call_id))].sort(),
-        seed_ids: [...new Set(observations.map((item) => item.call.seed_id))].sort(),
-        request_fingerprints: [...new Set(observations.map((item) => item.call.request_fingerprint))].sort(),
+        call_ids: callIds,
+        seed_ids: seedIds,
+        request_fingerprints: requestFingerprints,
+      },
+      provider_provenance: {
+        source: "YANDEX_WORDSTAT_V1",
+        endpoint: WORDSTAT_ENDPOINTS.top_requests,
+        batch_id: assigned.call.batch_id,
+        call_ids: callIds,
+        seed_ids: seedIds,
+        request_fingerprints: requestFingerprints,
+        requested_at: requestedAt,
       },
     });
   }
@@ -678,13 +782,15 @@ export async function buildScopedDemandEvidence(batch: WordstatObservationBatch,
   const topCalls = batch.calls.filter((call) => call.method === "top_requests");
   const availableTopCalls = topCalls.filter((call) => call.status === "AVAILABLE");
   const gaps: DemandGap[] = batch.calls.flatMap((call) => call.gaps);
-  const byScope = Map.groupBy(availableTopCalls, topScopeKey);
+  const byScope = Map.groupBy(topCalls, topScopeKey);
   const specsById = new Map(clusterSpecs.map((cluster) => [cluster.cluster_id, cluster]));
   const scopes: DemandScopeEvidence[] = [];
   const allRows: AssignedDemandRow[] = [];
   const allExcludedRows: ExcludedDemandRow[] = [];
   for (const [scopeKey, calls] of [...byScope.entries()].sort(([left], [right]) => left.localeCompare(right))) {
-    const { rows, excludedRows, conflicts } = await assignedRowsForScope(calls, specsById);
+    const availableCalls = calls.filter((call) => call.status === "AVAILABLE");
+    const unavailableCalls = calls.filter((call) => call.status === "UNAVAILABLE");
+    const { rows, excludedRows, conflicts } = await assignedRowsForScope(availableCalls, specsById);
     gaps.push(...conflicts);
     allExcludedRows.push(...excludedRows);
     const scope = JSON.parse(scopeKey) as Record<string, unknown>;
@@ -692,12 +798,21 @@ export async function buildScopedDemandEvidence(batch: WordstatObservationBatch,
     const value = rows.reduce((sum, row) => sum + row.count, 0);
     scopes.push({
       scope_fingerprint: rows[0]?.scope_fingerprint ?? await sha256(scope),
+      status: !availableCalls.length ? "UNAVAILABLE" : unavailableCalls.length ? "PARTIAL" : "AVAILABLE",
+      method: "top_requests",
       operator_profile: first.operator_profile,
-      region_ids: first.scope.region_ids,
-      region_names: first.scope.region_names,
+      region_ids: [...first.scope.region_ids],
+      region_names: [...first.scope.region_names],
       device: first.scope.device,
       observed_unique_count: { value: rows.length ? value : null, semantics: "LOWER_BOUND_OBSERVED_TOP_ROWS" },
-      unique_assigned_row_ids: rows.map((row) => row.row_id),
+      unique_assigned_row_ids: rows.map((row) => row.row_id).sort(),
+      call_coverage: {
+        planned_call_ids: calls.map((call) => call.call_id).sort(),
+        available_call_ids: availableCalls.map((call) => call.call_id).sort(),
+        unavailable_call_ids: unavailableCalls.map((call) => call.call_id).sort(),
+        unavailable_seed_ids: [...new Set(unavailableCalls.map((call) => call.seed_id))].sort(),
+        complete: unavailableCalls.length === 0,
+      },
     });
     allRows.push(...rows);
   }
@@ -710,7 +825,10 @@ export async function buildScopedDemandEvidence(batch: WordstatObservationBatch,
   const unavailableTop = topCalls.length - availableTopCalls.length;
   const status = availableTopCalls.length === 0
     ? "UNAVAILABLE"
-    : unavailableTop > 0 || multipleScopes || gaps.some((gap) => gap.code === "WORDSTAT_ROW_COUNT_CONFLICT")
+    : batch.calls.some((call) => call.status === "UNAVAILABLE")
+      || unavailableTop > 0
+      || multipleScopes
+      || gaps.some((gap) => gap.code === "WORDSTAT_ROW_COUNT_CONFLICT")
       ? "PARTIAL"
       : "AVAILABLE";
   const clusterIds = new Set(clusterSpecs.map((cluster) => cluster.cluster_id));
@@ -731,7 +849,7 @@ export async function buildScopedDemandEvidence(batch: WordstatObservationBatch,
         cluster_id: cluster.cluster_id,
         semantic_key: cluster.semantic_key,
         classifier_version: normalizedText(cluster.classification?.version) || "demand-relevance-rules-v1",
-        status: rows.length ? status : "PARTIAL",
+        status: rows.length ? status : status === "UNAVAILABLE" ? "UNAVAILABLE" : "PARTIAL",
         assigned_row_ids: rows.map((row) => row.row_id).sort(),
         scopes: clusterScopes,
         observed_unique_count: {
@@ -764,6 +882,7 @@ export async function buildScopedDemandEvidence(batch: WordstatObservationBatch,
     .sort((left, right) => left.seed_id.localeCompare(right.seed_id));
   const dynamics = batch.calls.filter((call) => call.method === "dynamics");
   const regions = batch.calls.filter((call) => call.method === "regions");
+  const canonicalObservations = allRows.sort((left, right) => left.observation_id.localeCompare(right.observation_id));
   return {
     status,
     source: "YANDEX_WORDSTAT_V1",
@@ -773,7 +892,9 @@ export async function buildScopedDemandEvidence(batch: WordstatObservationBatch,
     batch_finished_at: batch.batch_finished_at,
     declared_window: batch.declared_window,
     source_window_end: batch.source_window_end,
-    canonical_phrases: topCalls.map((call) => call.canonical_phrase),
+    canonical_phrases: [...new Map(topCalls
+      .filter((call) => normalizedText(call.canonical_phrase))
+      .map((call) => [normalizedPhrase(call.canonical_phrase), call.canonical_phrase])).values()],
     observed_unique_count: {
       value: status === "UNAVAILABLE" || multipleScopes || scopes.length !== 1 ? null : scopes[0].observed_unique_count.value,
       semantics: "LOWER_BOUND_OBSERVED_TOP_ROWS",
@@ -784,9 +905,16 @@ export async function buildScopedDemandEvidence(batch: WordstatObservationBatch,
       unique_assignment_rule: "exact canonical seed; required token count; stable cluster_id",
     },
     scopes,
-    unique_assigned_rows: allRows.sort((left, right) => left.row_id.localeCompare(right.row_id)),
+    canonical_observation_schema: WORDSTAT_CANONICAL_OBSERVATION_SCHEMA,
+    canonical_observations: canonicalObservations,
+    unique_assigned_rows: canonicalObservations,
     excluded_rows: allExcludedRows.sort((left, right) => left.row_id.localeCompare(right.row_id)),
     coverage: {
+      planned_top_request_calls: topCalls.length,
+      available_top_request_calls: availableTopCalls.length,
+      unavailable_top_request_calls: topCalls.length - availableTopCalls.length,
+      unavailable_call_ids: topCalls.filter((call) => call.status === "UNAVAILABLE").map((call) => call.call_id).sort(),
+      unavailable_seed_ids: [...new Set(topCalls.filter((call) => call.status === "UNAVAILABLE").map((call) => call.seed_id))].sort(),
       returned_rows: availableTopCalls.reduce((sum, call) => sum + call.rows.length, 0),
       eligible_unique_rows: allRows.length,
       excluded_unique_rows: allExcludedRows.length,
@@ -797,7 +925,9 @@ export async function buildScopedDemandEvidence(batch: WordstatObservationBatch,
     clusters,
     seasonality: normalizedSeasonality(dynamics),
     geo_evidence: {
-      status: regions.every((call) => call.status === "AVAILABLE") && regions.length ? "AVAILABLE" : "UNAVAILABLE",
+      status: regions.length && regions.every((call) => call.status === "AVAILABLE")
+        ? "AVAILABLE"
+        : regions.some((call) => call.status === "AVAILABLE") ? "PARTIAL" : "UNAVAILABLE",
       source: "/v1/regions",
       observations: regions.map((call) => ({ call_id: call.call_id, scope: call.scope, rows: call.rows, gaps: call.gaps })),
     },
