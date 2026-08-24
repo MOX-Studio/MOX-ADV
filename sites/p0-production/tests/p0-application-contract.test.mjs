@@ -940,6 +940,9 @@ test("the authoritative contract persists the fixed Strategy questionnaire and f
   assert.deepEqual(questionnaire.recommendation.placements.value, ["SEARCH"]);
   assert.equal(questionnaire.recommendation.measurement.value, "EXACT_METRIKA_PRIMARY_GOAL");
   assert.equal(questionnaire.recommendation.economics.target_result_cost_rub, 40_000);
+  assert.equal(questionnaire.recommendation.prelaunch_cost.status, "BOUNDED_TRAFFIC_FALLBACK");
+  assert.equal(questionnaire.recommendation.prelaunch_cost.range, null);
+  assert.equal(questionnaire.recommendation.prelaunch_cost.effectiveness_forecast, false);
   assert.deepEqual(questionnaire.material_questions.map((item) => item.field_id), ["period", "weekly_budget"]);
   assert.deepEqual(questionnaire.human_decision_gate.unresolved_field_ids, ["period", "weekly_budget"]);
   for (const field of questionnaire.fields) {
@@ -4399,7 +4402,9 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
     "Размещения",
     "Измерение",
     "Экономика результата",
+    "Стоимость перехода до запуска",
   ]);
+  assert.match(projection.campaignStrategy.recommendations.at(-1).rationale, /не прогноз|недоступ/iu);
   assert.deepEqual(projection.campaignStrategy.materialQuestions.map((item) => item.field), ["Период", "Недельный бюджет"]);
   assert.ok(projection.campaignStrategy.decisionGate.recommendation);
   assert.ok(projection.campaignStrategy.decisionGate.alternatives);

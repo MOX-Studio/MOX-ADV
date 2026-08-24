@@ -53,6 +53,26 @@ type RecommendationItem<T> = {
   fallback: boolean;
 };
 
+export type StrategyPrelaunchCostDecision = {
+  status: "QUALIFIED_RANGE" | "BOUNDED_TRAFFIC_FALLBACK" | "OWNER_ECONOMICS_EDIT_REQUIRED" | "COST_EVIDENCE_BLOCKED";
+  semantic: "KEYWORD_COST_PER_CLICK_AUCTION_PROXY";
+  range: { low: number; high: number; currency: string; unit: "COST_PER_CLICK" } | null;
+  source: {
+    kind: string;
+    selected_observation_id: string | null;
+    scenario: string;
+    observed_at: string;
+    vat_treatment: string;
+    sample_size: { unit: string; value: number };
+    scope: Record<string, unknown>;
+  } | null;
+  uncertainty: string;
+  consequences: string[];
+  owner_action: string | null;
+  effectiveness_forecast: false;
+  target_result_cost_used_as_keyword_cost: false;
+};
+
 export type StrategyDeliveryRecommendation = {
   objective: RecommendationItem<"QUALIFIED_RESULT" | "TRAFFIC_VALIDATION">;
   bidding: RecommendationItem<"WB_MAXIMUM_CLICKS" | "UNAVAILABLE">;
@@ -63,6 +83,7 @@ export type StrategyDeliveryRecommendation = {
     uncertainty: string | null;
     provenance: "CONFIRMED_BUSINESS_MODEL_ECONOMICS" | "MATERIAL_UNCERTAINTY";
   };
+  prelaunch_cost: StrategyPrelaunchCostDecision;
 };
 
 export type StrategyHumanDecisionGate = {
@@ -218,6 +239,85 @@ function measurementEvidence(analyticsEvidence: Record<string, unknown>) {
   };
 }
 
+export function buildStrategyPrelaunchCostDecision(
+  analyticsEvidence: Record<string, unknown>,
+  confirmedEconomics: boolean,
+): StrategyPrelaunchCostDecision {
+  const cost = record(record(analyticsEvidence.market_evidence).cost);
+  const range = record(cost.range);
+  const low = Number(range.low);
+  const high = Number(range.high);
+  const qualified = cost.status === "AVAILABLE"
+    && Number.isFinite(low) && low >= 0
+    && Number.isFinite(high) && high >= low
+    && Boolean(normalizedText(cost.compact_source, 255))
+    && Boolean(normalizedText(cost.currency, 20));
+  const common = {
+    semantic: "KEYWORD_COST_PER_CLICK_AUCTION_PROXY" as const,
+    effectiveness_forecast: false as const,
+    target_result_cost_used_as_keyword_cost: false as const,
+  };
+  if (qualified) {
+    const sample = record(cost.sample_size);
+    return {
+      ...common,
+      status: "QUALIFIED_RANGE",
+      range: { low, high, currency: normalizedText(cost.currency, 20), unit: "COST_PER_CLICK" },
+      source: {
+        kind: normalizedText(cost.compact_source, 255),
+        selected_observation_id: normalizedText(cost.selected_observation_id, 255) || null,
+        scenario: normalizedText(cost.scenario, 500),
+        observed_at: normalizedText(cost.as_of, 100),
+        vat_treatment: normalizedText(cost.vat_treatment, 100),
+        sample_size: { unit: normalizedText(sample.unit, 100), value: Number(sample.value) },
+        scope: record(cost.scope),
+      },
+      uncertainty: "Диапазон описывает стоимость перехода в сопоставимом аукционном scope, а не стоимость квалифицированного бизнес-результата.",
+      consequences: [
+        "Диапазон участвует только в оценке покупательной способности недельного бюджета и сравнительной предстартовой чувствительности.",
+        "Он не прогнозирует число результатов, CPA, прибыль или эффективность кампании.",
+      ],
+      owner_action: null,
+    };
+  }
+  const reasons = list(cost.missing_or_conflict_reasons).map((item) => normalizedText(item, 255)).filter(Boolean);
+  const conflicting = reasons.includes("CONFLICTING_COST_EVIDENCE") || cost.status === "CONFLICTING";
+  if (conflicting) {
+    return {
+      ...common,
+      status: "COST_EVIDENCE_BLOCKED",
+      range: null,
+      source: null,
+      uncertainty: "Квалифицированные источники стоимости конфликтуют; ни один диапазон не выбран и источники не усредняются.",
+      consequences: ["Campaign Draft и предстартовая оценка заблокированы до разрешения конфликта стоимости."],
+      owner_action: "Обновить разрешённые API-наблюдения стоимости и разрешить конфликт сопоставимого scope.",
+    };
+  }
+  if (!confirmedEconomics) {
+    return {
+      ...common,
+      status: "OWNER_ECONOMICS_EDIT_REQUIRED",
+      range: null,
+      source: null,
+      uncertainty: "Сопоставимая стоимость перехода недоступна, а безопасный бизнес-предел результата не подтверждён.",
+      consequences: ["Campaign Draft остаётся заблокированным: неизвестную цену перехода нельзя подменить целевой стоимостью результата."],
+      owner_action: "Уточнить и подтвердить экономику результата; агент затем повторит разрешённое исследование стоимости.",
+    };
+  }
+  return {
+    ...common,
+    status: "BOUNDED_TRAFFIC_FALLBACK",
+    range: null,
+    source: null,
+    uncertainty: "Квалифицированная сопоставимая стоимость перехода недоступна; недоступное не считается нулём.",
+    consequences: [
+      "Используется ограниченная недельным бюджетом проверка трафика без обещания стоимости результата.",
+      "Измерение стоимости получает неизвестную середину 50 и полный диапазон чувствительности 0–100.",
+    ],
+    owner_action: null,
+  };
+}
+
 async function buildRecommendation(
   contextState: Record<string, unknown>,
   model: Record<string, unknown>,
@@ -288,6 +388,7 @@ async function buildRecommendation(
       uncertainty: confirmedEconomics ? null : normalizedText(economics.limitation, 1_000) || "Target result cost неизвестна: economics не подтверждена.",
       provenance: confirmedEconomics ? "CONFIRMED_BUSINESS_MODEL_ECONOMICS" : "MATERIAL_UNCERTAINTY",
     },
+    prelaunch_cost: buildStrategyPrelaunchCostDecision(analyticsEvidence, confirmedEconomics),
   };
 }
 
@@ -371,6 +472,7 @@ export async function buildStrategyQuestionnaire({
     ...(!capability.valid ? ["Exact Direct account capabilities не подтверждены."] : []),
     ...(recommendation.measurement.fallback ? ["Measurement требует pre-launch validation."] : []),
     ...(recommendation.economics.uncertainty ? [recommendation.economics.uncertainty] : []),
+    ...(recommendation.prelaunch_cost.status === "COST_EVIDENCE_BLOCKED" ? [recommendation.prelaunch_cost.uncertainty] : []),
   ];
   const unresolvedFieldIds = materialQuestions.map((item) => item.field_id);
   const humanDecisionGate: StrategyHumanDecisionGate | null = unresolvedFieldIds.length || evidenceProblems.length ? {

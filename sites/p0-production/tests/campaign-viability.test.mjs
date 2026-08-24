@@ -346,6 +346,34 @@ test("uses disclosed midpoint 50 and dimension-level 0/100 sensitivity for optio
   assert.ok(result.evidence_gaps.optional.some((gap) => gap.code === "PRELAUNCH_COST_UNAVAILABLE"));
 });
 
+test("strategy cost edit requests and conflicts block viability while the explicit fallback remains sensitivity-bounded", async () => {
+  const generated = await recommendationSet();
+  const recommendation = (status) => ({
+    prelaunch_cost: {
+      status,
+      semantic: "KEYWORD_COST_PER_CLICK_AUCTION_PROXY",
+      range: null,
+      source: null,
+      uncertainty: "Qualified cost unavailable.",
+      consequences: [],
+      owner_action: status === "BOUNDED_TRAFFIC_FALLBACK" ? null : "Resolve material input.",
+      effectiveness_forecast: false,
+      target_result_cost_used_as_keyword_cost: false,
+    },
+  });
+
+  const fallback = await rescore(generated.drafts, evidence(), { strategy: { ...strategy, recommendation: recommendation("BOUNDED_TRAFFIC_FALLBACK") } });
+  assert.ok(fallback.every((draft) => draft.viability_score.eligibility.status === "ELIGIBLE"));
+
+  const editRequired = await rescore(generated.drafts, evidence(), { strategy: { ...strategy, recommendation: recommendation("OWNER_ECONOMICS_EDIT_REQUIRED") } });
+  assert.ok(editRequired.every((draft) => draft.viability_score.eligibility.blockers.some((item) => item.code === "PRELAUNCH_COST_OWNER_EDIT_REQUIRED")));
+  assert.ok(editRequired.every((draft) => draft.viability_score.score === null));
+
+  const blocked = await rescore(generated.drafts, evidence(), { strategy: { ...strategy, recommendation: recommendation("COST_EVIDENCE_BLOCKED") } });
+  assert.ok(blocked.every((draft) => draft.viability_score.eligibility.blockers.some((item) => item.code === "PRELAUNCH_COST_EVIDENCE_BLOCKED")));
+  assert.ok(blocked.every((draft) => draft.viability_score.score === null));
+});
+
 test("preserves exact semantic ties only inside the fixed Recommendation Set capability cohort", async () => {
   const generated = await recommendationSet();
   const source = generated.drafts[0];
@@ -429,11 +457,17 @@ test("discloses bounded evidence pointers and exact frequency/cost scopes", asyn
   assert.equal(result.scopes.cost.scenario, "day-level P25-P75");
   assert.equal(result.scopes.cost.currency, "RUB");
   assert.equal(result.scopes.cost.vat_treatment, "INCLUDED");
+  assert.equal(result.scopes.cost.unit, "COST_PER_CLICK_AUCTION_PROXY");
+  assert.equal(result.scopes.cost.effectiveness_forecast, false);
+  assert.equal(result.scopes.cost.target_result_cost_used, false);
   assert.deepEqual(result.scopes.cost.sample_size, { unit: "clicks", value: 42 });
   assert.equal(result.scopes.cost.scope.campaign_id, "10");
   assert.equal(result.scopes.cost.scope.ad_group_id, "20");
   assert.equal(result.scopes.cost.scope.keyword_id, "30");
   assert.ok(Object.values(result.dimensions).every((dimension) => dimension.evidence_pointers.length <= 32));
+  assert.ok(result.dimensions.economics.features.some((item) => item.rule === "weekly-budget-qualified-click-capacity-v1"));
+  assert.ok(result.dimensions.economics.features.every((item) => item.rule !== "cost-to-target-ratio-v1"));
+  assert.ok(result.dimensions.economics.features.every((item) => !(item.input_pointers.includes("/draft/market_evidence/cost/range/high") && item.input_pointers.includes("/strategy/target_result_cost"))));
 });
 
 test("does not compare distinct exact keyword-auction cost scopes", async () => {

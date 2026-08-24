@@ -185,6 +185,10 @@ export type ViabilityScoreResult = {
   explanation: {
     label: typeof SCORE_LABEL;
     comparative_not_predictive: true;
+    keyword_cost_semantics: "COST_PER_CLICK_AUCTION_PROXY";
+    target_result_cost_semantics: "BUSINESS_RESULT_COST";
+    keyword_cost_used_as_target_result_cost: false;
+    effectiveness_forecast: false;
     landing_advisory_used: false;
     post_launch_inputs_used: false;
     calibration_used: false;
@@ -497,6 +501,21 @@ function evaluateEligibility(
       "Подтвердить value, margin и lead-to-sale inputs; положительный бюджет или вручную введённая стоимость результата не заменяют economics.",
     ));
   }
+  const prelaunchCost = record(record(strategy.recommendation).prelaunch_cost);
+  if (prelaunchCost.status === "OWNER_ECONOMICS_EDIT_REQUIRED") {
+    blockers.push(blocker(
+      "PRELAUNCH_COST_OWNER_EDIT_REQUIRED",
+      "/strategy/recommendation/prelaunch_cost",
+      "Подтвердить бизнес-экономику результата; неизвестную стоимость перехода нельзя заменить target result cost.",
+    ));
+  }
+  if (prelaunchCost.status === "COST_EVIDENCE_BLOCKED") {
+    blockers.push(blocker(
+      "PRELAUNCH_COST_EVIDENCE_BLOCKED",
+      "/strategy/recommendation/prelaunch_cost",
+      "Обновить разрешённые API-наблюдения и разрешить конфликт сопоставимой стоимости без усреднения источников.",
+    ));
+  }
   const missingStrategy = requiredStrategyFields(strategy);
   if (missingStrategy.length) {
     blockers.push(blocker("STRATEGY_INCOMPLETE", `/strategy/${missingStrategy[0]}`, "Принять полную Campaign Strategy revision."));
@@ -755,6 +774,9 @@ function scoreScopes(draft: DraftCandidate) {
         high: numberOrNull(record(cost.range).high),
         kind: boundedText(record(cost.range).kind, 100) || null,
       },
+      unit: "COST_PER_CLICK_AUCTION_PROXY",
+      effectiveness_forecast: false,
+      target_result_cost_used: false,
       evidence_ids: costEvidenceIds(cost),
     },
   };
@@ -816,19 +838,21 @@ function economicsDimension(model: Record<string, unknown>, strategy: Record<str
           : plannedUnits < 20 ? 75 : 100;
   const { cost, evidenceIds } = costObservation(draft);
   const high = numberOrNull(record(cost.range).high);
-  const ratio = high !== null && targetCost !== null && targetCost > 0 ? high / targetCost : null;
-  const ratioValue = ratio === null ? null
-    : ratio <= 0.05 ? 100
-      : ratio <= 0.1 ? 80
-        : ratio <= 0.2 ? 50
-          : ratio <= 0.33 ? 20 : 0;
+  const minimumWeeklyClicks = high !== null && high > 0 && weeklyBudget !== null && weeklyBudget > 0
+    ? weeklyBudget / high
+    : null;
+  const clickCapacityValue = minimumWeeklyClicks === null ? null
+    : minimumWeeklyClicks >= 100 ? 100
+      : minimumWeeklyClicks >= 50 ? 80
+        : minimumWeeklyClicks >= 25 ? 50
+          : minimumWeeklyClicks >= 10 ? 20 : 0;
   return dimension("economics", [
     capacityValue === null
       ? unknownFeature("planned-result-units-v1", ["/strategy/weekly_budget", "/strategy/target_result_cost"], "economics-inputs")
       : feature({ rule: "planned-result-units-v1", pointers: ["/strategy/weekly_budget", "/strategy/target_result_cost"], value: capacityValue }),
-    ratioValue === null
-      ? unknownFeature("cost-to-target-ratio-v1", ["/draft/market_evidence/cost/range/high", "/strategy/target_result_cost"], "prelaunch-cost")
-      : feature({ rule: "cost-to-target-ratio-v1", pointers: ["/draft/market_evidence/cost/range/high", "/strategy/target_result_cost"], value: ratioValue, evidenceIds }),
+    clickCapacityValue === null
+      ? unknownFeature("weekly-budget-qualified-click-capacity-v1", ["/strategy/weekly_budget", "/draft/market_evidence/cost/range/high"], "prelaunch-cost", "Qualified CPC range is unavailable; weekly click purchasing power is unknown and is not a result forecast.")
+      : feature({ rule: "weekly-budget-qualified-click-capacity-v1", pointers: ["/strategy/weekly_budget", "/draft/market_evidence/cost/range/high"], value: clickCapacityValue, evidenceIds }),
     feature({ rule: "economics-consistency-v1", pointers: ["/strategy/weekly_budget", "/strategy/target_result_cost"], value: weeklyBudget && targetCost ? 100 : 0 }),
   ]);
 }
@@ -1306,6 +1330,10 @@ export async function scoreCampaignDrafts<T extends DraftCandidate>({
       explanation: {
         label: SCORE_LABEL,
         comparative_not_predictive: true,
+        keyword_cost_semantics: "COST_PER_CLICK_AUCTION_PROXY",
+        target_result_cost_semantics: "BUSINESS_RESULT_COST",
+        keyword_cost_used_as_target_result_cost: false,
+        effectiveness_forecast: false,
         landing_advisory_used: false,
         post_launch_inputs_used: false,
         calibration_used: false,

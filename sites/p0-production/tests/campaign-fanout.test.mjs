@@ -459,6 +459,34 @@ const availableDemandEvidence = {
   },
 };
 
+test("feeds every unavailable-cost Strategy outcome into Draft eligibility without blocking the bounded fallback", async () => {
+  const decision = (status) => ({
+    status,
+    semantic: "KEYWORD_COST_PER_CLICK_AUCTION_PROXY",
+    range: null,
+    source: null,
+    uncertainty: "Qualified CPC unavailable.",
+    consequences: [],
+    owner_action: status === "BOUNDED_TRAFFIC_FALLBACK" ? null : "Resolve material input.",
+    effectiveness_forecast: false,
+    target_result_cost_used_as_keyword_cost: false,
+  });
+  for (const [status, blockerCode] of [
+    ["BOUNDED_TRAFFIC_FALLBACK", null],
+    ["OWNER_ECONOMICS_EDIT_REQUIRED", "PRELAUNCH_COST_OWNER_EDIT_REQUIRED"],
+    ["COST_EVIDENCE_BLOCKED", "PRELAUNCH_COST_EVIDENCE_BLOCKED"],
+  ]) {
+    const value = await recommendationSet(availableDemandEvidence, {
+      strategy: { ...strategy, recommendation: { prelaunch_cost: decision(status) } },
+    });
+    for (const draft of value.drafts) {
+      assert.equal(draft.prelaunch_cost_decision.status, status);
+      assert.equal(draft.publication_blockers.some((item) => item.code === blockerCode), blockerCode !== null);
+      if (blockerCode) assert.equal(draft.publish_eligibility, "BLOCKED_HARD");
+    }
+  }
+});
+
 test("matches the checked-in Recommendation Set identity and disposition golden", async () => {
   const value = await recommendationSet(availableDemandEvidence);
   const actual = {

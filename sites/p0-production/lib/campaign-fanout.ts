@@ -803,6 +803,7 @@ export async function buildCampaignRecommendationSet({
   const cost = marketEvidence.cost && typeof marketEvidence.cost === "object"
     ? marketEvidence.cost as Record<string, unknown>
     : {};
+  const prelaunchCostDecision = record(record(strategy.recommendation).prelaunch_cost);
   const demandClusters = Array.isArray(frequency.clusters) ? frequency.clusters as Array<Record<string, unknown>> : [];
   const demandClusterIds = demandClusters.map((cluster) => text(cluster.cluster_id)).filter(Boolean).sort();
   const selectedCost = Array.isArray(cost.observations)
@@ -965,6 +966,16 @@ export async function buildCampaignRecommendationSet({
         snapshot: directCapabilitySnapshot,
       });
       const publicationBlockers: Array<Record<string, unknown>> = [...coreCapability.blockers];
+      if (prelaunchCostDecision.status === "OWNER_ECONOMICS_EDIT_REQUIRED") publicationBlockers.push(publicationBlocker(
+        "PRELAUNCH_COST_OWNER_EDIT_REQUIRED",
+        "Подтвердить экономику результата; недоступную стоимость перехода нельзя подменить target result cost.",
+        "/strategy/recommendation/prelaunch_cost",
+      ));
+      if (prelaunchCostDecision.status === "COST_EVIDENCE_BLOCKED") publicationBlockers.push(publicationBlocker(
+        "PRELAUNCH_COST_EVIDENCE_BLOCKED",
+        "Конфликт сопоставимой стоимости должен быть разрешён по разрешённым API-источникам без усреднения.",
+        "/strategy/recommendation/prelaunch_cost",
+      ));
       const readinessMeasurement = record(measurementDestinationReadiness?.measurement);
       const readinessDestination = record(measurementDestinationReadiness?.destination);
       if (!measurementDestinationReadiness) publicationBlockers.push(publicationBlocker(
@@ -1091,6 +1102,7 @@ export async function buildCampaignRecommendationSet({
           packing: deliveryPacking,
         },
         market_evidence_status: demandReady ? "AVAILABLE" : demandPartial ? "PARTIAL" : "EVIDENCE_GAP",
+        prelaunch_cost_decision: Object.keys(prelaunchCostDecision).length ? structuredClone(prelaunchCostDecision) : null,
         shortlist_eligible: publishEligibility === "ELIGIBLE",
         publish_eligibility: publishEligibility,
         publication_blockers: publicationBlockers,

@@ -1245,6 +1245,24 @@ function campaignStrategyProjection(state: InternalState): OwnerJourneyProjectio
     };
   };
   const economics = record(recommendation.economics);
+  const prelaunchCost = record(recommendation.prelaunch_cost);
+  const prelaunchCostRange = record(prelaunchCost.range);
+  const prelaunchCostSource = record(prelaunchCost.source);
+  const prelaunchCostValue = prelaunchCost.status === "QUALIFIED_RANGE"
+    ? `${Number(prelaunchCostRange.low).toLocaleString("ru-RU")}–${Number(prelaunchCostRange.high).toLocaleString("ru-RU")} ${ownerText(prelaunchCostRange.currency, "", 20)} за переход`
+    : prelaunchCost.status === "OWNER_ECONOMICS_EDIT_REQUIRED"
+      ? "Нужно уточнить экономику результата"
+      : prelaunchCost.status === "COST_EVIDENCE_BLOCKED"
+        ? "Конфликт стоимости блокирует подготовку"
+        : "Ограниченный бюджетом тест трафика";
+  const prelaunchCostRationale = [
+    ownerText(prelaunchCost.uncertainty, "Сопоставимая стоимость перехода недоступна; это не нулевая цена."),
+    ...(prelaunchCost.status === "QUALIFIED_RANGE" && prelaunchCostSource.kind
+      ? [`Источник: ${ownerText(COST_SOURCE_LABELS[String(prelaunchCostSource.kind)], "Сопоставимый источник")}; наблюдение ${ownerText(prelaunchCostSource.observed_at, "без даты", 100)}.`]
+      : []),
+    ...list(prelaunchCost.consequences).map((item) => ownerText(item)),
+    ...(prelaunchCost.owner_action ? [`Следующий шаг: ${ownerText(prelaunchCost.owner_action)}`] : []),
+  ].join(" ");
   const questions = list(questionnaire.material_questions).map((value) => {
     const item = record(value);
     const decision = record(item.decision);
@@ -1270,6 +1288,12 @@ function campaignStrategyProjection(state: InternalState): OwnerJourneyProjectio
         rationale: ownerText(economics.uncertainty, "Целевая стоимость подтверждена Business Model."),
         confidence: economics.target_result_cost_rub ? "Высокая" : "Ограниченная",
       },
+      ...(Object.keys(prelaunchCost).length ? [{
+        label: "Стоимость перехода до запуска",
+        value: prelaunchCostValue,
+        rationale: prelaunchCostRationale,
+        confidence: prelaunchCost.status === "QUALIFIED_RANGE" ? "Средняя" : "Ограниченная",
+      }] : []),
     ],
     materialQuestions: approved ? [] : questions,
     decisionGate: !approved && Object.keys(gate).length ? {

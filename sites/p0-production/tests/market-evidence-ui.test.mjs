@@ -95,4 +95,34 @@ test("Model disclosure renders selected source without averaging plus scenario, 
   assert.match(html, /2 auction_scenarios/);
   assert.match(html, /первый подходящий источник/);
   assert.match(html, /9007199254740993/);
+  assert.match(html, /стоимость перехода.*не стоимость.*результата/iu);
+  assert.match(html, /не прогноз.*эффективност/iu);
+});
+
+test("cost disclosure renders every explicit unavailable-cost outcome without inventing a range", async (t) => {
+  const MarketEvidenceDisclosure = await loadComponent(t);
+  const decisions = [
+    ["BOUNDED_TRAFFIC_FALLBACK", /ограниченный бюджетом тест трафика/iu],
+    ["OWNER_ECONOMICS_EDIT_REQUIRED", /уточнить экономику результата/iu],
+    ["COST_EVIDENCE_BLOCKED", /конфликт.*блокирует/iu],
+  ];
+  for (const [status, expected] of decisions) {
+    const html = renderToStaticMarkup(React.createElement(MarketEvidenceDisclosure, {
+      evidence: evidence(),
+      context: "model",
+      costDecision: {
+        status,
+        semantic: "KEYWORD_COST_PER_CLICK_AUCTION_PROXY",
+        range: null,
+        source: null,
+        uncertainty: "Квалифицированная стоимость недоступна.",
+        consequences: ["Нельзя оценивать стоимость бизнес-результата."],
+        effectiveness_forecast: false,
+        target_result_cost_used_as_keyword_cost: false,
+      },
+    }));
+    assert.match(html, expected);
+    assert.doesNotMatch(html, /0–0|0 RUB/u);
+    assert.match(html, /Квалифицированная стоимость недоступна/iu);
+  }
 });

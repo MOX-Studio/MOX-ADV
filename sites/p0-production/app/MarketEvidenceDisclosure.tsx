@@ -20,7 +20,14 @@ function costSummary(cost: MarketEvidence) {
   return `${cost.range.low}–${cost.range.high} ${cost.currency}`;
 }
 
-export function MarketEvidenceDisclosure({ evidence, context = "model" }: { evidence: MarketEvidence; context?: "model" | "draft" }) {
+function costDecisionLabel(decision: MarketEvidence) {
+  if (decision.status === "OWNER_ECONOMICS_EDIT_REQUIRED") return "Нужно уточнить экономику результата";
+  if (decision.status === "COST_EVIDENCE_BLOCKED") return "Конфликт стоимости блокирует подготовку";
+  if (decision.status === "BOUNDED_TRAFFIC_FALLBACK") return "Ограниченный бюджетом тест трафика";
+  return "Квалифицированный диапазон применён";
+}
+
+export function MarketEvidenceDisclosure({ evidence, context = "model", costDecision }: { evidence: MarketEvidence; context?: "model" | "draft"; costDecision?: MarketEvidence }) {
   const frequency = evidence.frequency || {};
   const cost = evidence.cost || {};
   const scopes = Array.isArray(frequency.scopes) ? frequency.scopes : [];
@@ -45,6 +52,7 @@ export function MarketEvidenceDisclosure({ evidence, context = "model" }: { evid
         <strong>{costSummary(cost)}</strong>
         <small>{cost.compact_source || "Недоступно"}</small>
         <small>{cost.aggregation === "FIRST_QUALIFIED_SOURCE_NO_AVERAGING" ? "Первый подходящий источник, без усреднения" : machineLabel(cost.aggregation, "Правило объединения недоступно")}</small>
+        <small>Это стоимость перехода в аукционном scope, не стоимость бизнес-результата; диапазон не прогнозирует эффективность.</small>
       </article>
     </div>
     <details>
@@ -73,6 +81,12 @@ export function MarketEvidenceDisclosure({ evidence, context = "model" }: { evid
         </>}
       </div>
     </details>
+    {costDecision && <article className="market-evidence-cost-decision" data-cost-outcome={costDecision.status}>
+      <span>Последствие для стратегии</span>
+      <strong>{costDecisionLabel(costDecision)}</strong>
+      <p>{costDecision.uncertainty || "Неопределённость стоимости раскрыта."}</p>
+      {Array.isArray(costDecision.consequences) && costDecision.consequences.length > 0 && <ul className="limitations">{costDecision.consequences.map((item: string) => <li key={item}>{item}</li>)}</ul>}
+    </article>}
     {context === "draft" && evidence.packing && <details>
       <summary>Раскрыть детерминированную упаковку показа</summary>
       <div className="market-evidence-detail"><code>{JSON.stringify(evidence.packing)}</code></div>

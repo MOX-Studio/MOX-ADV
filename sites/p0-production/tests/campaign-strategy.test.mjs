@@ -72,7 +72,22 @@ function input(overrides = {}) {
         { predicate: "exact_goal_binding", confidence: { tier: "TIER_1_VERIFIED" } },
         { predicate: "observed_performance", confidence: { tier: "TIER_1_VERIFIED" } },
       ],
-      market_evidence: { frequency: { status: "AVAILABLE" }, cost: { status: "AVAILABLE" } },
+      market_evidence: {
+        frequency: { status: "AVAILABLE" },
+        cost: {
+          status: "AVAILABLE",
+          compact_source: "DIRECT_HISTORY_OWN_EMPIRICAL",
+          selected_observation_id: "cost-history-1",
+          scenario: "day-level P25-P75",
+          scope: { comparison: { phrase: "Точное совпадение", geography: "Москва", placement: "Результаты поиска", strategy: "Максимум кликов", season: "Текущий сезон" } },
+          as_of: "2026-08-23T12:00:00.000Z",
+          currency: "RUB",
+          vat_treatment: "INCLUDED",
+          sample_size: { unit: "clicks", value: 42 },
+          range: { low: 110, high: 170, kind: "EMPIRICAL_IQR" },
+          missing_or_conflict_reasons: [],
+        },
+      },
     },
     productFocus: {
       focus_revision_id: "focus-r1",
@@ -102,6 +117,12 @@ test("builds a complete adaptive Campaign Strategy recommendation from exact lin
   assert.equal(questionnaire.recommendation.measurement.value, "EXACT_METRIKA_PRIMARY_GOAL");
   assert.equal(questionnaire.recommendation.economics.target_result_cost_rub, 40_000);
   assert.equal(questionnaire.recommendation.economics.uncertainty, null);
+  assert.equal(questionnaire.recommendation.prelaunch_cost.status, "QUALIFIED_RANGE");
+  assert.deepEqual(questionnaire.recommendation.prelaunch_cost.range, { low: 110, high: 170, currency: "RUB", unit: "COST_PER_CLICK" });
+  assert.equal(questionnaire.recommendation.prelaunch_cost.source.kind, "DIRECT_HISTORY_OWN_EMPIRICAL");
+  assert.equal(questionnaire.recommendation.prelaunch_cost.effectiveness_forecast, false);
+  assert.equal(questionnaire.recommendation.prelaunch_cost.target_result_cost_used_as_keyword_cost, false);
+  assert.match(questionnaire.recommendation.prelaunch_cost.consequences.join(" "), /не прогнозирует.*результат/iu);
   assert.equal(questionnaire.direct_capability_snapshot_id, "direct-capability:owner");
   assert.equal(questionnaire.product_focus_revision_id, "focus-r1");
   assert.equal(questionnaire.playbook_lineage.release_id, "p0-curated-playbook-v1");
@@ -117,6 +138,11 @@ test("sparse or conflicting evidence creates a complete prepared Human Decision 
   base.analyticsEvidence.conflicts = [{ conflict_id: "conflict-offer", predicate: "product", material: true, resolution: "UNRESOLVED_OWNER_DECISION" }];
   base.analyticsEvidence.gaps = [{ gap_id: "gap-measurement", code: "METRIKA_REPORT_UNAVAILABLE", description: "Нет подтверждённого отчёта результата", material: true }];
   base.model.owner_contract.economics = { status: "MATERIAL_UNCERTAINTY", target_result_cost_rub: null, limitation: "Маржа и конверсия в продажу не подтверждены." };
+  base.analyticsEvidence.market_evidence.cost = {
+    status: "UNAVAILABLE",
+    range: null,
+    missing_or_conflict_reasons: ["NO_QUALIFIED_PRELAUNCH_COST_SOURCE"],
+  };
 
   const questionnaire = await buildStrategyQuestionnaire(base);
 
@@ -124,12 +150,48 @@ test("sparse or conflicting evidence creates a complete prepared Human Decision 
   assert.equal(questionnaire.recommendation.measurement.confidence, "LOW");
   assert.equal(questionnaire.recommendation.economics.target_result_cost_rub, null);
   assert.match(questionnaire.recommendation.economics.uncertainty, /не подтверждены/u);
+  assert.equal(questionnaire.recommendation.prelaunch_cost.status, "OWNER_ECONOMICS_EDIT_REQUIRED");
+  assert.match(questionnaire.recommendation.prelaunch_cost.owner_action, /экономик/iu);
   assert.ok(questionnaire.human_decision_gate);
   assert.match(questionnaire.human_decision_gate.recommendation, /не утверждать|уточнить/iu);
   assert.ok(questionnaire.human_decision_gate.evidence.some((item) => item.includes("Нет подтверждённого отчёта")));
   assert.ok(questionnaire.human_decision_gate.alternatives.length >= 2);
   assert.ok(questionnaire.human_decision_gate.consequences.length >= 1);
   assert.equal(["LOW", "MEDIUM"].includes(questionnaire.human_decision_gate.confidence), true);
+});
+
+test("unavailable qualified cost chooses a bounded non-predictive traffic fallback when business economics is confirmed", async () => {
+  const base = input();
+  base.analyticsEvidence.market_evidence.cost = {
+    status: "UNAVAILABLE",
+    range: null,
+    missing_or_conflict_reasons: ["NO_QUALIFIED_PRELAUNCH_COST_SOURCE"],
+  };
+
+  const questionnaire = await buildStrategyQuestionnaire(base);
+
+  assert.equal(questionnaire.recommendation.prelaunch_cost.status, "BOUNDED_TRAFFIC_FALLBACK");
+  assert.equal(questionnaire.recommendation.prelaunch_cost.range, null);
+  assert.equal(questionnaire.recommendation.prelaunch_cost.source, null);
+  assert.equal(questionnaire.recommendation.prelaunch_cost.effectiveness_forecast, false);
+  assert.match(questionnaire.recommendation.prelaunch_cost.uncertainty, /недоступ/iu);
+  assert.match(questionnaire.recommendation.prelaunch_cost.consequences.join(" "), /середин|чувствитель/iu);
+});
+
+test("conflicting qualified cost fails closed instead of selecting or averaging a source", async () => {
+  const base = input();
+  base.analyticsEvidence.market_evidence.cost = {
+    status: "UNAVAILABLE",
+    range: null,
+    missing_or_conflict_reasons: ["CONFLICTING_COST_EVIDENCE"],
+  };
+
+  const questionnaire = await buildStrategyQuestionnaire(base);
+
+  assert.equal(questionnaire.recommendation.prelaunch_cost.status, "COST_EVIDENCE_BLOCKED");
+  assert.equal(questionnaire.recommendation.prelaunch_cost.range, null);
+  assert.match(questionnaire.recommendation.prelaunch_cost.owner_action, /обнов/iu);
+  assert.ok(questionnaire.human_decision_gate.evidence.some((item) => /конфликт/iu.test(item)));
 });
 
 test("unsupported exact account capability stays explicit and fails closed without a provider default", async () => {
