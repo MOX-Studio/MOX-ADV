@@ -5,6 +5,7 @@ import {
 import {
   projectOwnerGoalInterview,
   type OwnerGoalInterviewProjection,
+  type OwnerGoalInterviewQuestion,
 } from "./p0-owner-journey-transition.ts";
 import { BUSINESS_MODEL_FIELD_ORDER } from "./business-model-contract.ts";
 import type { P0AgentOwnerProjection } from "./p0-agent-runtime.ts";
@@ -41,6 +42,8 @@ export type OwnerActionField = {
 export type OwnerJourneyProjection = {
   accessReadiness: AccessReadinessProjection | null;
   goalInterview: OwnerGoalInterviewProjection | null;
+  campaignGoal: string | null;
+  campaignGoalConfirmed: boolean;
   journey: {
     stages: Array<{ id: OwnerJourneyStageId; label: string; status: "complete" | "current" | "upcoming" }>;
     currentStage: OwnerJourneyStageId;
@@ -547,6 +550,45 @@ function answerValue(state: InternalState, fieldId: string): unknown {
 function questionnaireValue(state: InternalState, fieldId: string): unknown {
   const fields = list(record(state.strategy_questionnaire).fields);
   return record(fields.find((field) => record(field).field_id === fieldId)).recommended_value;
+}
+
+function preparedGoalInterviewQuestions(state: InternalState): OwnerGoalInterviewQuestion[] | null {
+  const context = record(state.context_state);
+  const provisionalGoal = ownerText(record(context.provisional_business_goal).value, "", 500);
+  if (!provisionalGoal) return null;
+  return [
+    {
+      key: "campaign-goal",
+      prompt: "Какой бизнес-результат должна поддержать рекламная кампания?",
+      target: { kind: "BUSINESS_GOAL" },
+      materiality: {
+        boundary: "MATERIAL_UNCERTAINTY",
+        whyMaterial: "Бизнес-результат определяет цель кампании и способ оценки качественного обращения.",
+        consequences: ["Исправление изменит цель кампании и зависимые рекомендации."],
+      },
+      recommendation: {
+        answer: provisionalGoal,
+        rationale: "Агент сформулировал ближайший проверяемый результат по доступным страницам бизнеса.",
+        evidence: "Публичные страницы компании и доступное описание обращения клиента.",
+        confidence: "MEDIUM",
+      },
+    },
+    {
+      key: "qualified-contact",
+      prompt: "Как отличить качественное обращение от случайного?",
+      materiality: {
+        boundary: "MATERIAL_UNCERTAINTY",
+        whyMaterial: "Критерий качества определяет, какое обращение поддерживает бизнес-цель кампании.",
+        consequences: ["Ответ станет основанием для проверки сформированной модели бизнеса."],
+      },
+      recommendation: {
+        answer: "Обращение от клиента, который подтвердил потребность в услуге и готов обсудить задачу.",
+        rationale: "Такой критерий отделяет проверяемый бизнес-результат от любого заполнения формы.",
+        evidence: "Подтверждённая владельцем цель кампании и доступный способ обращения на сайте.",
+        confidence: "MEDIUM",
+      },
+    },
+  ];
 }
 
 function currentStage(state: InternalState): OwnerJourneyStageId {
@@ -1699,11 +1741,20 @@ async function project(
       }
     : baseDescriptor;
   const campaigns = campaignOptions(view);
+  const goalInterview = view.state.owner_goal_interview
+    ? await projectOwnerGoalInterview(ownerKey, view.state.owner_goal_interview)
+    : null;
+  const context = record(view.state.context_state);
+  const campaignGoal = ownerText(
+    record(context.business_goal_decision).value ?? record(context.provisional_business_goal).value,
+    "",
+    500,
+  ) || null;
   return {
     accessReadiness: access,
-    goalInterview: view.state.owner_goal_interview
-      ? await projectOwnerGoalInterview(ownerKey, view.state.owner_goal_interview)
-      : null,
+    goalInterview,
+    campaignGoal,
+    campaignGoalConfirmed: Boolean(record(context.business_goal_decision).owner_confirmed),
     journey: {
       stages: OWNER_JOURNEY_STAGES.map((item, index) => ({
         ...item,
@@ -1737,7 +1788,7 @@ async function project(
     cards: cards(view, stage, unknowns, agent),
     campaignOptions: campaigns,
     packageSummary: packageSummary(view, campaigns),
-    primaryAction: descriptor ? {
+    primaryAction: descriptor && !goalInterview?.primaryAction ? {
       handle: await actionHandle(ownerKey, view, descriptor),
       label: descriptor.label,
       description: descriptor.description,
@@ -1831,6 +1882,8 @@ async function projectAccessOnly(
   return {
     accessReadiness: access,
     goalInterview: null,
+    campaignGoal: null,
+    campaignGoalConfirmed: false,
     journey: {
       currentStage: "goal",
       stages: OWNER_JOURNEY_STAGES.map((stage, index) => ({ ...stage, status: index === 0 ? "current" : "upcoming" })),
@@ -1973,6 +2026,32 @@ export class P0OwnerJourney {
     }
 
     let view = await this.application.query(ownerKey);
+    const interview = view.state.owner_goal_interview
+      ? await projectOwnerGoalInterview(ownerKey, view.state.owner_goal_interview)
+      : null;
+    if (interview?.primaryAction) {
+      if (submission.handle !== interview.primaryAction.handle) {
+        throw new P0ApplicationError("P0_OWNER_ACTION_STALE", "Действие больше не соответствует текущему состоянию. Обновите страницу.");
+      }
+      const confirmingBusinessGoal = view.state.owner_goal_interview?.phase === "confirmation"
+        && view.state.owner_goal_interview.current.target?.kind === "BUSINESS_GOAL";
+      view = await this.application.submitOwnerGoalInterview(ownerKey, {
+        expected_revision: view.revision,
+        submission,
+      });
+      if (confirmingBusinessGoal && view.state.context_state?.business_goal_decision && !view.state.business_model) {
+        view = await this.application.command(ownerKey, {
+          action: "confirm_context_goal",
+          expected_revision: view.revision,
+          confirmation: "CONFIRM_CONTEXT_GOAL",
+          goal: view.state.context_state.business_goal_decision.value,
+        });
+      }
+      const agent = this.agentProjection ? await this.agentProjection(ownerKey) : null;
+      if (agent) view = await this.application.query(ownerKey);
+      const access = accessState && this.accessReadiness ? this.accessReadiness.project(accessState) : null;
+      return project(ownerKey, view, agent, access);
+    }
     const descriptor = ownerActionDescriptor(view);
     if (!descriptor || submission.handle !== await actionHandle(ownerKey, view, descriptor)) {
       throw new P0ApplicationError("P0_OWNER_ACTION_STALE", "Действие больше не соответствует текущему состоянию. Обновите страницу.");
@@ -2017,6 +2096,16 @@ export class P0OwnerJourney {
 
     if (descriptor.kind === "analyze-business") {
       await command({ action: "analyze_site", url: required(values, "website") });
+      if (!view.state.owner_goal_interview) {
+        const questions = preparedGoalInterviewQuestions(view.state);
+        if (questions) {
+          view = await this.application.startOwnerGoalInterview(ownerKey, {
+            expected_revision: view.revision,
+            interview_key: `owner-goal-${view.revision}`,
+            questions,
+          });
+        }
+      }
     } else if (descriptor.kind === "confirm-goal") {
       await command({ action: "confirm_context_goal", confirmation: "CONFIRM_CONTEXT_GOAL", goal: required(values, "goal") });
     } else if (descriptor.kind === "confirm-business-model") {

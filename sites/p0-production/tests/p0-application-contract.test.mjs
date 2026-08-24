@@ -4628,11 +4628,19 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
   });
   ownerResponses.push(projection);
   assert.equal(projection.journey.currentStage, "goal");
-  projection = await journey.submit(ownerKey, {
-    handle: projection.primaryAction.handle,
-    values: values(projection),
-  });
-  ownerResponses.push(projection);
+  assert.equal(projection.primaryAction, null);
+  assert.ok(projection.goalInterview?.primaryAction);
+  for (let step = 0; step < 7; step += 1) {
+    const action = projection.goalInterview.primaryAction;
+    assert.ok(action);
+    projection = await journey.submit(ownerKey, {
+      handle: action.handle,
+      values: Object.fromEntries(action.fields.map((field) => [field.key, field.value])),
+    });
+    ownerResponses.push(projection);
+  }
+  assert.equal(projection.goalInterview.complete, true);
+  assert.equal(projection.goalInterview.confirmedAnswers.length, 2);
   assert.equal(projection.journey.currentStage, "findings");
   assert.equal(projection.introduction, undefined);
   assert.equal(projection.competitorMatrix.status, "Частично");

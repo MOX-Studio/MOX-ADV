@@ -202,6 +202,19 @@ test("goal interview follows question, recommendation, correction, confirmation 
   assert.equal(projection.phase, "question");
   assert.equal(projection.question, questions[1].prompt);
   assert.equal(projection.confirmedAnswers.length, 1);
+
+  state = await transitionOwnerGoalInterview("owner", state, { handle: projection.primaryAction.handle });
+  projection = await projectOwnerGoalInterview("owner", state);
+  state = await transitionOwnerGoalInterview("owner", state, {
+    handle: projection.primaryAction.handle,
+    values: { answer: questions[1].recommendation.answer },
+  });
+  projection = await projectOwnerGoalInterview("owner", state);
+  state = await transitionOwnerGoalInterview("owner", state, { handle: projection.primaryAction.handle });
+  projection = await projectOwnerGoalInterview("owner", state);
+  assert.equal(projection.complete, true);
+  assert.equal(projection.primaryAction, null);
+  assert.equal(projection.confirmedAnswers.length, 2);
 });
 
 test("goal interview rejects stale or invalid actions without losing confirmed answers", async () => {

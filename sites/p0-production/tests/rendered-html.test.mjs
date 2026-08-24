@@ -50,6 +50,24 @@ test("owner measurement report renders all readiness states, explicit window and
   }
 });
 
+test("goal interview renders recommendations, corrections, saved answers and accessible keyboard status without technical identifiers", () => {
+  for (const label of [
+    "ДИАЛОГ С АГЕНТОМ",
+    "Рекомендованный ответ",
+    "Исправление владельца",
+    "Сохранённые ответы",
+    "Цель рекламной кампании",
+    "Ctrl/⌘ + Enter",
+  ]) {
+    assert.match(clientSource, new RegExp(label.replace(/[+]/gu, "\\+"), "u"));
+  }
+  assert.match(clientSource, /role="alert"/u);
+  assert.match(clientSource, /role="status"/u);
+  assert.match(clientSource, /interviewHeadingRef\.current\?\.focus/u);
+  assert.doesNotMatch(clientSource, /interviewKey|questionKey|schema_version|revision/u);
+  assert.match(ownerStyles, /\.owner-interview\b/u);
+});
+
 test("owner Direct report omits the guidance cards below its verified details", () => {
   assert.match(clientSource, /owner-direct-details/u);
   assert.doesNotMatch(clientSource, /owner-direct-guidance/u);

@@ -1800,17 +1800,17 @@ async function applyPendingOwnerGoalInterviewAnswer(state: P0Document, appliedAt
       await invalidateDecisionAuthority(state, "CONTEXT_MATERIAL_CHANGE", "Owner interview materially corrected the confirmed business goal.", appliedAt);
       invalidateContextDownstream(state);
       state.analytics_evidence_snapshot = null;
-      context.status = "GOAL_CONFIRMED";
-      context.business_goal_decision = {
-        value: pending.answer,
-        provisional_value: context.provisional_business_goal.value,
-        decision: pending.answer === context.provisional_business_goal.value ? "CONFIRMED" : "CORRECTED",
-        decided_at: appliedAt,
-        owner_confirmed: true,
-      };
-      context.context_revision_id = `context-interview-r${interview.revision}`;
-      context.material_fingerprint = await confirmedContextMaterialFingerprint(context.research_fingerprint, pending.answer);
     }
+    context.status = "GOAL_CONFIRMED";
+    context.business_goal_decision = {
+      value: pending.answer,
+      provisional_value: context.provisional_business_goal.value,
+      decision: pending.answer === context.provisional_business_goal.value ? "CONFIRMED" : "CORRECTED",
+      decided_at: appliedAt,
+      owner_confirmed: true,
+    };
+    context.context_revision_id = `context-interview-r${interview.revision}`;
+    context.material_fingerprint = await confirmedContextMaterialFingerprint(context.research_fingerprint, pending.answer);
   } else {
     if (!state.business_model) lineageError("исправление модели потеряло persisted Business Model.");
     const model = state.business_model;
@@ -1832,21 +1832,21 @@ async function applyPendingOwnerGoalInterviewAnswer(state: P0Document, appliedAt
         model[contractField] = pending.answer as never;
         model.missing_questions = model.owner_contract.questions.map((item) => item.question);
       }
-      model.field_evidence[field] = {
-        ...model.field_evidence[field],
-        confidence: "OWNER_CONFIRMED",
-        source_url: model.field_evidence[field]?.source_url ?? state.site_analysis?.url ?? "",
-        quote: pending.answer,
-        owner_confirmed: true,
-        owner_confirmed_at: appliedAt,
-        owner_edited: true,
-      };
       model.source = "REAL_SITE_RESEARCH_PLUS_OWNER_CONFIRMATION";
       state.analytics_evidence_snapshot = null;
       state.product_focus = null;
       state.strategy_questionnaire = null;
       invalidateStrategyDownstream(state);
     }
+    model.field_evidence[field] = {
+      ...model.field_evidence[field],
+      confidence: "OWNER_CONFIRMED",
+      source_url: model.field_evidence[field]?.source_url ?? state.site_analysis?.url ?? "",
+      quote: pending.answer,
+      owner_confirmed: true,
+      owner_confirmed_at: appliedAt,
+      owner_edited: previousValue !== pending.answer,
+    };
   }
   state.owner_goal_interview_pending_answer = null;
   return true;

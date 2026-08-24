@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import styles from "./prototype/prd-149/prototype.module.css";
 import type {
   OwnerActionField,
@@ -43,6 +43,8 @@ export default function P0Client() {
   const [selectedStage, setSelectedStage] = useState<OwnerJourneyStageId | null>(null);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
+  const interviewHeadingRef = useRef<HTMLHeadingElement>(null);
+  const errorRef = useRef<HTMLParagraphElement>(null);
 
   useEffect(() => {
     request("/api/p0")
@@ -51,11 +53,21 @@ export default function P0Client() {
         const requestedStage = new URL(window.location.href).searchParams.get("stage");
         setSelectedStage(next.journey.stages.some((stage) => stage.id === requestedStage)
           ? requestedStage as OwnerJourneyStageId
-          : next.journey.currentStage);
+          : next.goalInterview?.primaryAction ? "goal" : next.journey.currentStage);
       })
       .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
       .finally(() => setBusy(false));
   }, []);
+
+  useEffect(() => {
+    if (selectedStage === "goal" && projection?.goalInterview?.primaryAction) {
+      interviewHeadingRef.current?.focus();
+    }
+  }, [projection?.goalInterview?.primaryAction?.handle, selectedStage]);
+
+  useEffect(() => {
+    if (error) errorRef.current?.focus();
+  }, [error]);
 
   useEffect(() => {
     if (!projection) return;
@@ -73,6 +85,37 @@ export default function P0Client() {
     }, 3_000);
     return () => window.clearTimeout(timer);
   }, [projection]);
+
+  async function submitInterview(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const action = projection?.goalInterview?.primaryAction;
+    if (!action || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const next = await request("/api/p0", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          handle: action.handle,
+          values: actionValues(event.currentTarget, action.fields),
+        }),
+      });
+      setProjection(next);
+      setSelectedStage(next.goalInterview?.primaryAction ? "goal" : next.journey.currentStage);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function keyboardSubmit(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      event.currentTarget.form?.requestSubmit();
+    }
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -134,6 +177,13 @@ export default function P0Client() {
 
           {activeStageStatus === "upcoming" && <StageUnavailable projection={projection} stage={activeStage} />}
           {activeStage === "goal" && activeStageStatus !== "upcoming" && <GoalStageSummary projection={projection} />}
+          {activeStage === "goal" && activeStageStatus !== "upcoming" && projection.goalInterview && <GoalInterview
+            interview={projection.goalInterview}
+            busy={busy}
+            headingRef={interviewHeadingRef}
+            onSubmit={submitInterview}
+            onKeyDown={keyboardSubmit}
+          />}
 
           {activeStage === "findings" && activeStageStatus !== "upcoming" && projection.directReport && <section className="owner-direct-report" data-report-state={projection.directReport.state} aria-labelledby="owner-direct-report-title">
             <header><div><p className="owner-eyebrow">ТЕКУЩЕЕ ПРОДВИЖЕНИЕ В ЯНДЕКС ДИРЕКТЕ</p><h2 id="owner-direct-report-title">Отчёт о текущем продвижении</h2></div><strong>{projection.directReport.status}</strong></header>
@@ -298,7 +348,7 @@ export default function P0Client() {
             <button className={styles.primaryButton} type="submit" disabled={busy}>{busy ? "Агент выполняет работу…" : projection.primaryAction.label}</button>
           </form>}
           {viewingCurrentStage && !projection.primaryAction && projection.businessOutcome.status === "working" && <div className="owner-progress" role="status"><i /><div><strong>Агент продолжает работу</strong><p>Ожидание, повторные проверки и безопасная сверка не требуют действий владельца.</p></div></div>}
-          {error && <p className="owner-error" role="alert">{error}</p>}
+          {error && <p className="owner-error" role="alert" ref={errorRef} tabIndex={-1}>{error}</p>}
         </section>
 
       </div>
@@ -334,11 +384,54 @@ function StageNavigation({ projection, selectedStage, onStage }: { projection: O
 function GoalStageSummary({ projection }: { projection: OwnerJourneyProjection }) {
   const qualifiedResult = projection.businessModel?.fields.find((field) => field.label === "Квалифицированный результат");
   return <section className="owner-stage-summary" aria-labelledby="owner-goal-summary-title">
-    <header><div><p className="owner-eyebrow">ЦЕЛЬ</p><h2 id="owner-goal-summary-title">Цель и бизнес-результат</h2></div><strong>{qualifiedResult ? "Зафиксирована" : "Текущий этап"}</strong></header>
+    <header><div><p className="owner-eyebrow">ЦЕЛЬ</p><h2 id="owner-goal-summary-title">Цель и бизнес-результат</h2></div><strong>{projection.campaignGoalConfirmed ? "Сформирована" : projection.campaignGoal ? "Рекомендация агента" : "Текущий этап"}</strong></header>
     <div>
-      <article><span>Бизнес-результат</span><strong>{qualifiedResult?.value ?? projection.businessOutcome.headline}</strong><p>{qualifiedResult?.limitation ?? projection.businessOutcome.summary}</p></article>
+      <article><span>Цель рекламной кампании</span><strong>{projection.campaignGoal ?? "Агент готовит рекомендацию"}</strong><p>{projection.campaignGoalConfirmed ? "Цель сохранена после подтверждения и определяет бизнес-смысл дальнейшей стратегии." : "Это подготовленная рекомендация; владелец может исправить её перед сохранением."}</p></article>
+      <article><span>Качественный результат</span><strong>{qualifiedResult?.value ?? projection.businessOutcome.headline}</strong><p>{qualifiedResult?.limitation ?? projection.businessOutcome.summary}</p></article>
       <article><span>Целевая стоимость результата</span><strong>{projection.businessModel?.economics.targetResultCost ?? "Будет рассчитана после подтверждения экономики"}</strong><p>{projection.businessModel?.economics.explanation ?? "Агент сначала проверяет доступные факты и готовит цель для решения владельца."}</p></article>
     </div>
+  </section>;
+}
+
+function GoalInterview({
+  interview,
+  busy,
+  headingRef,
+  onSubmit,
+  onKeyDown,
+}: {
+  interview: NonNullable<OwnerJourneyProjection["goalInterview"]>;
+  busy: boolean;
+  headingRef: React.RefObject<HTMLHeadingElement | null>;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+}) {
+  const action = interview.primaryAction;
+  const confidence = interview.recommendedAnswer?.confidence === "MEDIUM" ? "Средняя" : "Ограниченная";
+  return <section className="owner-interview" aria-labelledby="owner-interview-title">
+    <header><div><p className="owner-eyebrow">ДИАЛОГ С АГЕНТОМ</p><h2 id="owner-interview-title" ref={headingRef} tabIndex={-1}>Цель кампании и модель бизнеса</h2></div><strong>{interview.complete ? "Ответы сохранены" : "Нужно решение"}</strong></header>
+    {!interview.complete && <article className="owner-interview-question">
+      <span>Вопрос агента</span><h3>{interview.question}</h3>
+    </article>}
+    {interview.recommendedAnswer && !interview.complete && <article className="owner-interview-recommendation">
+      <span>Рекомендованный ответ</span><h3>{interview.recommendedAnswer.answer}</h3>
+      <p><b>Почему:</b> {interview.recommendedAnswer.rationale}</p>
+      <p><b>Основание:</b> {interview.recommendedAnswer.evidence}</p>
+      <small>Уверенность: {confidence}</small>
+    </article>}
+    {interview.ownerCorrection && !interview.complete && <article className="owner-interview-correction"><span>Исправление владельца</span><strong>{interview.ownerCorrection}</strong></article>}
+    {interview.confirmation && !interview.complete && <article className="owner-interview-confirmation"><span>Ответ перед сохранением · {interview.confirmation.source}</span><strong>{interview.confirmation.answer}</strong></article>}
+    {interview.confirmedAnswers.length > 0 && <section className="owner-interview-history" aria-labelledby="owner-interview-history-title">
+      <h3 id="owner-interview-history-title">Сохранённые ответы</h3>
+      <ol>{interview.confirmedAnswers.map((answer, index) => <li key={`${answer.question}-${index}`}><span>{answer.question}</span><strong>{answer.answer}</strong><small>{answer.source}</small></li>)}</ol>
+    </section>}
+    {action && <form key={action.handle} className="owner-interview-action" onSubmit={onSubmit} aria-label="Ответ агенту" aria-busy={busy}>
+      <header><h3>{action.label}</h3><p>{action.description}</p></header>
+      {action.fields.length > 0 && <div className="owner-fields">{action.fields.map((field) => <OwnerField key={field.key} field={field} onTextareaKeyDown={onKeyDown} />)}</div>}
+      <button className={styles.primaryButton} type="submit" disabled={busy}>{busy ? "Сохраняю ответ…" : action.label}</button>
+      {action.fields.length > 0 && <small className="owner-keyboard-hint">Ctrl/⌘ + Enter — проверить ответ</small>}
+      {busy && <span className="owner-visually-hidden" role="status">Ответ сохраняется</span>}
+    </form>}
   </section>;
 }
 
@@ -384,10 +477,10 @@ function Header() {
   </header>;
 }
 
-function OwnerField({ field }: { field: OwnerActionField }) {
+function OwnerField({ field, onTextareaKeyDown }: { field: OwnerActionField; onTextareaKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void }) {
   const common = { name: field.key, required: field.required, defaultValue: field.value, readOnly: field.readOnly };
   return <label className={field.control === "textarea" ? "wide" : ""}><span>{field.label}</span>
-    {field.control === "textarea" ? <textarea {...common} /> : field.control === "select" ? <select name={field.key} required={field.required} defaultValue={field.value}><option value="" disabled>Выберите</option>{field.options?.map((option) => {
+    {field.control === "textarea" ? <textarea {...common} onKeyDown={onTextareaKeyDown} /> : field.control === "select" ? <select name={field.key} required={field.required} defaultValue={field.value}><option value="" disabled>Выберите</option>{field.options?.map((option) => {
       const value = typeof option === "string" ? option : option.value;
       const label = typeof option === "string" ? option : option.label;
       return <option key={value} value={value}>{label}</option>;

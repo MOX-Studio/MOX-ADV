@@ -19,7 +19,7 @@
 .owner-stage-summary > header { display: flex; gap: 16px; justify-content: space-between; align-items: flex-start; }
 .owner-stage-summary > header h2, .owner-stage-unavailable h2 { margin: 5px 0 0; font-size: 21px; }
 .owner-stage-summary > header > strong { padding: 7px 9px; border-radius: 999px; color: var(--owner-green-dark); background: var(--owner-soft); font-size: 8px; }
-.owner-stage-summary > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+.owner-stage-summary > div { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
 .owner-stage-summary article { padding: 13px; border: 1px solid var(--owner-line); border-radius: 8px; background: white; }
 .owner-stage-summary article span { color: var(--owner-green-dark); font-size: 7px; font-weight: 850; text-transform: uppercase; }
 .owner-stage-summary article > strong { display: block; margin: 7px 0 5px; font-size: 14px; }
@@ -27,6 +27,31 @@
 .owner-stage-unavailable { border-style: dashed; background: #f7f9f7; }
 .owner-stage-unavailable > span { color: var(--owner-muted); font-size: 7px; font-weight: 850; letter-spacing: .12em; }
 .owner-stage-unavailable p { margin-top: 8px; max-width: 780px; }
+.owner-interview { margin-top: 18px; padding: 18px; border: 2px solid var(--owner-green); border-radius: 11px; background: #f8fcf9; }
+.owner-interview > header { display: flex; gap: 16px; justify-content: space-between; align-items: flex-start; }
+.owner-interview > header h2 { margin: 5px 0 0; font-size: 21px; outline: none; }
+.owner-interview > header h2:focus-visible { border-radius: 4px; box-shadow: 0 0 0 3px rgba(19,122,78,.18); }
+.owner-interview > header > strong { padding: 7px 9px; border-radius: 999px; color: var(--owner-green-dark); background: var(--owner-soft); font-size: 8px; white-space: nowrap; }
+.owner-interview-question, .owner-interview-recommendation, .owner-interview-correction, .owner-interview-confirmation { margin-top: 12px; padding: 13px; border: 1px solid var(--owner-line); border-radius: 8px; background: white; }
+.owner-interview-question > span, .owner-interview-recommendation > span, .owner-interview-correction > span, .owner-interview-confirmation > span { display: block; color: var(--owner-green-dark); font-size: 7px; font-weight: 850; text-transform: uppercase; }
+.owner-interview-question h3, .owner-interview-recommendation h3 { margin: 6px 0 0; font-size: 14px; line-height: 1.4; }
+.owner-interview-recommendation { border-left: 4px solid var(--owner-green); background: var(--owner-soft); }
+.owner-interview-recommendation p { margin: 7px 0 0; color: var(--owner-muted); font-size: 8px; line-height: 1.5; }
+.owner-interview-recommendation small { display: block; margin-top: 8px; color: var(--owner-green-dark); font-size: 7px; font-weight: 750; }
+.owner-interview-correction { border-color: #dfbd86; background: var(--owner-amber); }
+.owner-interview-correction strong, .owner-interview-confirmation strong { display: block; margin-top: 7px; font-size: 11px; line-height: 1.45; }
+.owner-interview-history { margin-top: 13px; }
+.owner-interview-history h3 { margin: 0 0 8px; font-size: 11px; }
+.owner-interview-history ol { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.owner-interview-history li { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr) auto; gap: 10px; align-items: start; padding: 10px; border: 1px solid var(--owner-line); border-radius: 7px; background: white; }
+.owner-interview-history li span, .owner-interview-history li small { color: var(--owner-muted); font-size: 7px; line-height: 1.4; }
+.owner-interview-history li strong { font-size: 8px; line-height: 1.4; }
+.owner-interview-action { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--owner-line); }
+.owner-interview-action h3 { margin: 0; font-size: 16px; }
+.owner-interview-action header p { margin: 5px 0 0; color: var(--owner-muted); font-size: 8px; line-height: 1.5; }
+.owner-interview-action > button { min-height: 44px; margin-top: 13px; padding: 0 19px; border: 1px solid var(--owner-green); border-radius: 7px; color: white; background: var(--owner-green); font-size: 10px; font-weight: 800; }
+.owner-keyboard-hint { display: inline-block; margin-left: 10px; color: var(--owner-muted); font-size: 7px; }
+.owner-visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .owner-direct-report { margin-top: 18px; padding: 18px; border: 1px solid var(--owner-line); border-radius: 10px; background: #fbfdfb; }
 .owner-direct-report > header { display: flex; gap: 16px; justify-content: space-between; align-items: flex-start; }
 .owner-direct-report > header h2 { margin: 5px 0 0; font-size: 21px; }

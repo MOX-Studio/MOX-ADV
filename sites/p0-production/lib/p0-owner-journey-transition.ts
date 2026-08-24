@@ -108,6 +108,7 @@ export type OwnerGoalInterviewPrimaryAction = {
 
 export type OwnerGoalInterviewProjection = {
   phase: OwnerGoalInterviewPhase;
+  complete: boolean;
   question: string;
   recommendedAnswer?: OwnerGoalInterviewRecommendation;
   ownerCorrection?: string;
@@ -120,7 +121,7 @@ export type OwnerGoalInterviewProjection = {
     answer: string;
     source: "Рекомендация агента" | "Исправление владельца";
   }>;
-  primaryAction: OwnerGoalInterviewPrimaryAction;
+  primaryAction: OwnerGoalInterviewPrimaryAction | null;
 };
 
 type OwnerGoalInterviewActionKind =
@@ -428,9 +429,11 @@ export async function projectOwnerGoalInterview(
   ownerKey: string,
   state: OwnerGoalInterviewState,
 ): Promise<OwnerGoalInterviewProjection> {
-  const descriptor = actionDescriptor(state);
+  const complete = state.phase === "resumable-continuation" && state.remainingQuestions.length === 0;
+  const descriptor = complete ? null : actionDescriptor(state);
   return {
     phase: state.phase,
+    complete,
     question: state.current.prompt,
     ...(state.phase === "recommendation" || state.phase === "owner-correction" || state.phase === "confirmation"
       ? { recommendedAnswer: structuredClone(state.current.recommendation) }
@@ -444,12 +447,12 @@ export async function projectOwnerGoalInterview(
       answer: answer.answer,
       source: ownerSource(answer.source),
     })),
-    primaryAction: {
+    primaryAction: descriptor ? {
       handle: await opaqueActionHandle(ownerKey, state, descriptor.kind),
       label: descriptor.label,
       description: descriptor.description,
       fields: structuredClone(descriptor.fields),
-    },
+    } : null,
   };
 }
 
@@ -526,9 +529,6 @@ export async function transitionOwnerGoalInterview(
     };
   }
   if (state.phase === "confirmation") {
-    if (state.remainingQuestions.length === 0) {
-      fail("P0_OWNER_INTERVIEW_CONTINUATION_REQUIRED", "Следующий подготовленный вопрос недоступен; подтверждённый ответ не изменён.");
-    }
     const confirmedAnswer: OwnerGoalInterviewConfirmedAnswer = {
       questionKey: state.current.key,
       question: state.current.prompt,

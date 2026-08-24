@@ -200,8 +200,22 @@ def advance_owner_to_findings(page: Page, base_url: str) -> None:
     page.get_by_label("Сайт или адрес компании").fill("https://owner.example/")
     page.get_by_role("button", name="Исследовать бизнес и предложить цель", exact=True).click()
     page.get_by_role("heading", name="Бизнес-цель подготовлена", exact=True).wait_for()
-    page.get_by_role("button", name="Подтвердить цель и продолжить", exact=True).click()
+    interview = page.get_by_role(
+        "region", name="Цель кампании и модель бизнеса", exact=True
+    )
+    interview.get_by_role(
+        "button", name="Показать рекомендованный ответ", exact=True
+    ).click()
+    interview.locator("textarea").press("Control+Enter")
+    interview.get_by_role("button", name="Подтвердить ответ", exact=True).click()
+    interview.get_by_role("button", name="Продолжить опрос", exact=True).click()
+    interview.get_by_role(
+        "button", name="Показать рекомендованный ответ", exact=True
+    ).click()
+    interview.locator("textarea").press("Control+Enter")
+    interview.get_by_role("button", name="Подтвердить ответ", exact=True).click()
     page.get_by_role("heading", name="Агент собрал понимание бизнеса", exact=True).wait_for()
+    page.get_by_role("button", name=re.compile(r"Что узнал агент")).click()
 
 
 class P0ProductionCandidateE2ETests(unittest.TestCase):
@@ -347,13 +361,64 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 ).wait_for()
                 self.assertEqual(
                     1,
-                    page.locator(".owner-action button[type='submit']").count(),
+                    page.locator(".owner-interview-action button[type='submit']").count(),
                 )
                 checkpoint("Цель")
 
-                page.get_by_role(
-                    "button", name="Подтвердить цель и продолжить", exact=True
+                interview = page.get_by_role(
+                    "region", name="Цель кампании и модель бизнеса", exact=True
+                )
+                self.assertTrue(interview.is_visible(), page.locator("body").inner_text())
+                interview.get_by_role(
+                    "button", name="Показать рекомендованный ответ", exact=True
                 ).click()
+                recommended_goal = interview.locator("textarea")
+                self.assertTrue(recommended_goal.input_value())
+                corrected_goal = "Получать квалифицированные заявки на участие от компаний"
+                recommended_goal.fill(corrected_goal)
+                interview.get_by_role("button", name="Проверить ответ", exact=True).click()
+                interview.get_by_role(
+                    "button", name="Проверить исправление", exact=True
+                ).wait_for()
+                self.assertTrue(
+                    interview.get_by_text("Исправление владельца", exact=True).is_visible(),
+                    interview.inner_text(),
+                )
+                interview.get_by_role(
+                    "button", name="Проверить исправление", exact=True
+                ).click()
+                self.assertTrue(
+                    interview.get_by_text(corrected_goal, exact=True).first.is_visible()
+                )
+                interview.get_by_role("button", name="Подтвердить ответ", exact=True).click()
+                interview.get_by_role("button", name="Продолжить опрос", exact=True).wait_for()
+
+                page.reload(wait_until="networkidle")
+                interview = page.get_by_role(
+                    "region", name="Цель кампании и модель бизнеса", exact=True
+                )
+                self.assertTrue(
+                    interview.get_by_text(corrected_goal, exact=True).is_visible()
+                )
+                self.assertTrue(
+                    interview.get_by_text("Исправление владельца", exact=True).is_visible()
+                )
+                self.assertTrue(
+                    page.get_by_text(corrected_goal, exact=True).first.is_visible()
+                )
+                assert_no_horizontal_overflow(self, page)
+
+                interview.get_by_role("button", name="Продолжить опрос", exact=True).click()
+                interview.get_by_role(
+                    "button", name="Показать рекомендованный ответ", exact=True
+                ).click()
+                audience_answer = interview.locator("textarea")
+                self.assertTrue(audience_answer.input_value())
+                audience_answer.press("Control+Enter")
+                interview.get_by_role("button", name="Подтвердить ответ", exact=True).click()
+                page.get_by_role(
+                    "button", name="Подтвердить понимание бизнеса", exact=True
+                ).wait_for()
                 page.get_by_role(
                     "heading", name="Агент собрал понимание бизнеса", exact=True
                 ).wait_for()
