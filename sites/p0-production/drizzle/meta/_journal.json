@@ -29,6 +29,13 @@
       "when": 1787421397513,
       "tag": "0003_stale_stardust",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1787581479590,
+      "tag": "0004_silly_midnight",
+      "breakpoints": true
     }
   ]
 }

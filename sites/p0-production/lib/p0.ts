@@ -53,6 +53,7 @@ import {
 import {
   buildDirectAuditReportDefinitions,
   DirectAccountAuditor,
+  fingerprintDirectAuditCapability,
   type DirectAuditBinding,
   type DirectAuditSummary,
 } from "./direct-audit.ts";
@@ -331,13 +332,31 @@ async function readCurrencyLimits() {
 
 type VerifiedDirectBinding = Awaited<ReturnType<typeof readDirectBinding>>;
 
-function directAuditBinding(value: VerifiedDirectBinding): DirectAuditBinding {
+async function directAuditBinding(value: VerifiedDirectBinding): Promise<DirectAuditBinding> {
+  const capability = value.capability_snapshot;
+  const capabilityFingerprint = await fingerprintDirectAuditCapability({
+    schema_version: capability.schema_version,
+    source: capability.source,
+    account: capability.account,
+    api_version: capability.api_version,
+    currency: capability.currency,
+    available_campaign_types: [...capability.available_campaign_types].sort(),
+    edit_campaigns_grant: capability.edit_campaigns_grant,
+    archived: capability.archived,
+    restrictions: [...capability.restrictions].sort((left, right) => left.element.localeCompare(right.element)),
+    conditional_capabilities: [...capability.conditional_capabilities]
+      .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+  });
   return {
     expected_account: value.binding.expected_account,
     api_account: value.binding.api_account,
     client_id: value.client_id,
     matched: value.binding.matched,
     restrictions: value.capability_snapshot.restrictions,
+    capability: {
+      snapshot_id: capability.snapshot_id,
+      fingerprint: capabilityFingerprint,
+    },
     observed_at: value.observed_at,
   };
 }
@@ -370,7 +389,7 @@ async function readDirectAudit(ownerKey: string, binding: DirectAuditBinding): P
 async function readCompleteCampaignCatalog(binding: VerifiedDirectBinding) {
   const ownerKey = "p0-context";
   const store = new D1DirectAuditStore(runtimeEnv().DB);
-  const summary = await readDirectAudit(ownerKey, directAuditBinding(binding));
+  const summary = await readDirectAudit(ownerKey, await directAuditBinding(binding));
   if (!["COMPLETE", "PARTIAL"].includes(summary.status) || summary.methods_not_read.includes("Campaigns.get")) {
     throw new Error(`Direct campaign audit is ${summary.status}; duplicate preflight cannot continue.`);
   }
@@ -685,7 +704,7 @@ async function readContext(input: { owner_key?: string } = {}): Promise<P0Contex
     throw new Error("Selected business binding does not match the server-side provider configuration.");
   }
   const directBindingPromise = readDirectBinding();
-  const directAuditPromise = directBindingPromise.then((value) => readDirectAudit(ownerKey, directAuditBinding(value)));
+  const directAuditPromise = directBindingPromise.then(async (value) => readDirectAudit(ownerKey, await directAuditBinding(value)));
   const [directBindingResult, directAuditResult, limitsResult, metrikaBindingResult, metrikaResult] = await Promise.allSettled([
     directBindingPromise,
     directAuditPromise,
@@ -1373,7 +1392,7 @@ const application = new P0Application({
     readContext,
     async readDirectAudit() {
       const binding = await readDirectBinding();
-      return readDirectAudit("p0-context", directAuditBinding(binding));
+      return readDirectAudit("p0-context", await directAuditBinding(binding));
     },
     researchSite,
     readCurrencyLimits,

@@ -897,8 +897,14 @@ export async function buildAnalyticsEvidence({
 
   const directOfficial = officialDirectScope(direct);
   const directInventoryReady = direct.inventory_ready === true && directOfficial;
+  const directAuditSnapshot = record(directAudit.snapshot);
   const directAuditReady = directAudit.schema_version === "direct-read-audit-summary-v1"
     && ["COMPLETE", "PARTIAL"].includes(text(directAudit.status))
+    && text(directAuditSnapshot.snapshot_id) === `direct-audit-snapshot:${text(directAudit.audit_id)}`
+    && Number.isSafeInteger(directAuditSnapshot.audit_version)
+    && Number(directAuditSnapshot.audit_version) >= 0
+    && Boolean(text(directAuditSnapshot.capability_snapshot_id))
+    && /^sha256:[a-f0-9]{64}$/u.test(text(directAuditSnapshot.capability_fingerprint))
     && directAuditBinding.matched === true
     && text(directAuditBinding.expected_account) === directAccount
     && text(directAuditBinding.api_account) === directAccount
@@ -942,6 +948,7 @@ export async function buildAnalyticsEvidence({
       ...(directAuditReady ? {
         complete_read_audit: {
           audit_id: text(directAudit.audit_id),
+          snapshot: safeValue(directAudit.snapshot),
           status: text(directAudit.status),
           graph_complete: directAudit.graph_complete === true,
           object_counts: safeValue(directAuditCounts),
@@ -999,6 +1006,7 @@ export async function buildAnalyticsEvidence({
         selector_or_jsonpath: directAuditReady ? `direct-audit:${text(directAudit.audit_id)}` : "$.result.Campaigns",
         request_digest: await contentHash(directAuditReady ? {
           audit_id: text(directAudit.audit_id),
+          snapshot: safeValue(directAudit.snapshot),
           client_login: directAccount,
           methods_read: methodsRead,
           artifact_digests: artifactReferences.map((reference) => reference.digest),
@@ -1019,6 +1027,7 @@ export async function buildAnalyticsEvidence({
         direct_read: {
           ...(directAuditReady ? {
             audit_id: text(directAudit.audit_id),
+            audit_snapshot: safeValue(directAudit.snapshot),
             audit_status: text(directAudit.status),
           } : {}),
           inventory_complete: directReadLimitations.inventory_complete === true,

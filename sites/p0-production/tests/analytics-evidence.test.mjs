@@ -449,6 +449,12 @@ test("links the complete exact-account Direct graph and reports audit through bo
   input.context.direct.audit = {
     schema_version: "direct-read-audit-summary-v1",
     audit_id: "direct-audit-evidence",
+    snapshot: {
+      snapshot_id: "direct-audit-snapshot:direct-audit-evidence",
+      audit_version: 42,
+      capability_snapshot_id: "direct-capability:owner-login",
+      capability_fingerprint: `sha256:${"b".repeat(64)}`,
+    },
     status: "COMPLETE",
     graph_complete: true,
     observed_at: "2026-08-21T10:02:00.000Z",
@@ -487,6 +493,8 @@ test("links the complete exact-account Direct graph and reports audit through bo
   assert.ok(directSource?.facts.some((item) => item.includes("12 groups")));
   assert.equal(directClaim?.confidence.coverage, "complete_for_scope");
   assert.equal(directRecord?.provider_metadata.direct_read.audit_id, "direct-audit-evidence");
+  assert.equal(directRecord?.provider_metadata.direct_read.audit_snapshot.snapshot_id, "direct-audit-snapshot:direct-audit-evidence");
+  assert.equal(directRecord?.provider_metadata.direct_read.audit_snapshot.capability_snapshot_id, "direct-capability:owner-login");
   assert.equal(directRecord?.provider_metadata.direct_read.artifact_references[0].artifact_id, "direct-audit-evidence:campaigns:0");
   assert.equal(directRecord?.collection_policy.browser_cabinet_allowed, false);
   assert.equal(directRecord?.collection_policy.provider_write_methods_reachable, false);

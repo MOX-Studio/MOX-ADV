@@ -92,6 +92,12 @@ function auditSummary(status = "COMPLETE") {
   return {
     schema_version: "direct-read-audit-summary-v1",
     audit_id: "direct-audit-tool",
+    snapshot: {
+      snapshot_id: "direct-audit-snapshot:direct-audit-tool",
+      audit_version: 12,
+      capability_snapshot_id: "direct-capability:fixture",
+      capability_fingerprint: `sha256:${"a".repeat(64)}`,
+    },
     status,
     graph_complete: true,
     observed_at: NOW,

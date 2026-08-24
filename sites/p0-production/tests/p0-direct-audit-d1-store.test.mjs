@@ -73,6 +73,10 @@ test("D1 Direct audit store reloads graph artifacts and exact report retry state
       client_id: "client-4242",
       matched: true,
       restrictions: [],
+      capability: {
+        snapshot_id: "direct-capability:d1-fixture",
+        fingerprint: `sha256:${"a".repeat(64)}`,
+      },
       observed_at: "2026-08-22T19:00:00.000Z",
     },
     provider,
@@ -98,8 +102,19 @@ test("D1 Direct audit store reloads graph artifacts and exact report retry state
   const completed = await auditor(restartedProcess).run();
   assert.equal(completed.status, "COMPLETE");
   assert.equal(database.prepare("SELECT COUNT(*) AS count FROM p0_direct_audit_artifacts").get().count, 6);
+  assert.equal(database.prepare("SELECT COUNT(*) AS count FROM p0_direct_audit_snapshots").get().count, 1);
   const reportReference = completed.artifact_references.find((reference) => reference.kind === "DIRECT_REPORT_TSV");
   const reportArtifact = await restartedProcess.getArtifact(reportReference.artifact_id);
   assert.equal(reportArtifact.tsv, "CampaignId\tClicks\n9007199254740993123\t4\n");
+  const snapshot = await restartedProcess.getSnapshot(completed.snapshot.snapshot_id);
+  assert.equal(snapshot.audit_id, completed.audit_id);
+  assert.equal(snapshot.capability_snapshot_id, "direct-capability:d1-fixture");
+  assert.equal(snapshot.checkpoint.reports[0].request.params.ReportName, "durable-campaign");
+
+  const secondRestart = new D1DirectAuditStore(binding);
+  const reused = await auditor(secondRestart).run();
+  assert.equal(reused.snapshot.snapshot_id, completed.snapshot.snapshot_id);
+  assert.equal(database.prepare("SELECT COUNT(*) AS count FROM p0_direct_audit_snapshots").get().count, 1);
+  assert.equal(database.prepare("SELECT COUNT(*) AS count FROM p0_direct_audit_artifacts").get().count, 6);
   database.close();
 });

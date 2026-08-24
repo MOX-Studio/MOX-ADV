@@ -111,3 +111,19 @@ export const p0DirectAuditArtifacts = sqliteTable("p0_direct_audit_artifacts", {
   valueJson: text("value_json").notNull(),
   createdAt: text("created_at").notNull(),
 }, (table) => [index("p0_direct_audit_artifacts_audit_id_idx").on(table.auditId)]);
+
+export const p0DirectAuditSnapshots = sqliteTable("p0_direct_audit_snapshots", {
+  snapshotId: text("snapshot_id").primaryKey(),
+  auditId: text("audit_id").notNull(),
+  auditVersion: integer("audit_version").notNull(),
+  ownerKey: text("owner_key").notNull(),
+  accountKey: text("account_key").notNull(),
+  clientId: text("client_id").notNull(),
+  capabilitySnapshotId: text("capability_snapshot_id").notNull(),
+  capabilityFingerprint: text("capability_fingerprint").notNull(),
+  valueJson: text("value_json").notNull(),
+  createdAt: text("created_at").notNull(),
+}, (table) => [
+  uniqueIndex("p0_direct_audit_snapshots_audit_id_unique").on(table.auditId),
+  index("p0_direct_audit_snapshots_owner_account_idx").on(table.ownerKey, table.accountKey),
+]);

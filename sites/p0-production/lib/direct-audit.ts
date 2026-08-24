@@ -1,5 +1,6 @@
 export const DIRECT_AUDIT_SCHEMA = "direct-read-audit-v1";
 export const DIRECT_AUDIT_SUMMARY_SCHEMA = "direct-read-audit-summary-v1";
+export const DIRECT_AUDIT_SNAPSHOT_SCHEMA = "direct-read-audit-snapshot-v1";
 
 export type DirectAuditCollection =
   | "campaigns"
@@ -93,6 +94,10 @@ export type DirectAuditBinding = {
   client_id: string;
   matched: boolean;
   restrictions: Array<{ element: string; value: number }>;
+  capability: {
+    snapshot_id: string;
+    fingerprint: string;
+  };
   observed_at: string;
 };
 
@@ -243,17 +248,41 @@ export type DirectAuditCheckpoint = {
   completed_at: string | null;
 };
 
+export type DirectAuditSnapshot = {
+  schema_version: typeof DIRECT_AUDIT_SNAPSHOT_SCHEMA;
+  snapshot_id: string;
+  audit_id: string;
+  audit_version: number;
+  owner_key: string;
+  account: string;
+  client_id: string;
+  capability_snapshot_id: string;
+  capability_fingerprint: string;
+  observed_at: string;
+  completed_at: string;
+  checkpoint: DirectAuditCheckpoint;
+  summary: DirectAuditSummary;
+};
+
 export interface DirectAuditStore {
   loadCurrent(ownerKey: string, account: string): Promise<DirectAuditCheckpoint | null>;
   start(state: DirectAuditCheckpoint, expectedAuditId: string | null): Promise<boolean>;
   compareAndSwap(auditId: string, expectedVersion: number, state: DirectAuditCheckpoint): Promise<boolean>;
   putArtifact(artifact: DirectAuditArtifact): Promise<DirectAuditArtifactReference>;
   getArtifact(artifactId: string): Promise<unknown | null>;
+  putSnapshot(snapshot: DirectAuditSnapshot): Promise<DirectAuditSnapshot>;
+  getSnapshot(snapshotId: string): Promise<DirectAuditSnapshot | null>;
 }
 
 export type DirectAuditSummary = {
   schema_version: typeof DIRECT_AUDIT_SUMMARY_SCHEMA;
   audit_id: string;
+  snapshot: {
+    snapshot_id: string;
+    audit_version: number;
+    capability_snapshot_id: string;
+    capability_fingerprint: string;
+  };
   status: "PENDING" | "COMPLETE" | "PARTIAL";
   graph_complete: boolean;
   observed_at: string;
@@ -435,7 +464,7 @@ export function sanitizeDirectAuditSummary(value: unknown): DirectAuditSummary {
     ? value as DirectAuditSummary
     : null;
   const topLevelKeys = [
-    "schema_version", "audit_id", "status", "graph_complete", "observed_at", "completed_at",
+    "schema_version", "audit_id", "snapshot", "status", "graph_complete", "observed_at", "completed_at",
     "account_binding", "provider_restrictions", "object_counts", "campaign_summaries", "report_summaries",
     "methods_read", "methods_not_read", "limitations", "next_retry_at", "artifact_references",
     "browser_cabinet_used", "provider_write_methods_reachable",
@@ -445,6 +474,12 @@ export function sanitizeDirectAuditSummary(value: unknown): DirectAuditSummary {
     || !exactKeys(summary, topLevelKeys)
     || summary.schema_version !== DIRECT_AUDIT_SUMMARY_SCHEMA
     || !text(summary.audit_id, 255)
+    || !exactKeys(summary.snapshot, ["snapshot_id", "audit_version", "capability_snapshot_id", "capability_fingerprint"])
+    || summary.snapshot.snapshot_id !== `direct-audit-snapshot:${summary.audit_id}`
+    || !Number.isSafeInteger(summary.snapshot.audit_version)
+    || summary.snapshot.audit_version < 0
+    || !text(summary.snapshot.capability_snapshot_id, 255)
+    || !/^sha256:[a-f0-9]{64}$/u.test(summary.snapshot.capability_fingerprint)
     || !["PENDING", "COMPLETE", "PARTIAL"].includes(summary.status)
     || typeof summary.graph_complete !== "boolean"
     || !Number.isFinite(Date.parse(summary.observed_at))
@@ -595,6 +630,10 @@ async function digest(value: unknown) {
   const bytes = new TextEncoder().encode(JSON.stringify(canonicalize(value)));
   const hash = await crypto.subtle.digest("SHA-256", bytes);
   return `sha256:${[...new Uint8Array(hash)].map((item) => item.toString(16).padStart(2, "0")).join("")}`;
+}
+
+export async function fingerprintDirectAuditCapability(value: unknown) {
+  return digest(value);
 }
 
 function blankCollection(): CollectionCheckpoint {
@@ -963,6 +1002,8 @@ export class DirectAccountAuditor {
       || !this.binding.expected_account
       || this.binding.expected_account !== this.binding.api_account
       || !this.binding.client_id
+      || !text(this.binding.capability?.snapshot_id, 255)
+      || !/^sha256:[a-f0-9]{64}$/u.test(text(this.binding.capability?.fingerprint, 255))
       || (this.provider.account !== undefined && this.provider.account !== this.binding.api_account)) {
       throw new DirectAuditProviderError({
         code: "DIRECT_ACCOUNT_MISMATCH",
@@ -982,18 +1023,32 @@ export class DirectAccountAuditor {
     }
   }
 
+  private async loadTerminalSnapshot(state: DirectAuditCheckpoint) {
+    const snapshot = await this.store.getSnapshot(`direct-audit-snapshot:${state.audit_id}`);
+    if (!snapshot) return null;
+    if (snapshot.schema_version !== DIRECT_AUDIT_SNAPSHOT_SCHEMA
+      || snapshot.audit_id !== state.audit_id
+      || snapshot.audit_version !== state.version
+      || snapshot.owner_key !== state.owner_key
+      || snapshot.account !== state.account
+      || snapshot.client_id !== state.client_id
+      || snapshot.capability_snapshot_id !== state.binding.capability.snapshot_id
+      || snapshot.capability_fingerprint !== state.binding.capability.fingerprint
+      || snapshot.completed_at !== state.completed_at
+      || JSON.stringify(snapshot.checkpoint) !== JSON.stringify(state)) {
+      throw new Error("Durable Direct audit snapshot lineage drift detected.");
+    }
+    return sanitizeDirectAuditSummary(snapshot.summary);
+  }
+
   private async loadOrStart() {
     const current = await this.store.loadCurrent(this.ownerKey, this.binding.api_account);
     const timestamp = this.now();
-    if (current && current.schema_version === DIRECT_AUDIT_SCHEMA) {
-      const completedAt = Date.parse(current.completed_at ?? "");
-      const currentTime = Date.parse(timestamp);
-      const staleTerminalAudit = ["COMPLETE", "PARTIAL"].includes(current.status)
-        && Number.isFinite(completedAt)
-        && Number.isFinite(currentTime)
-        && currentTime - completedAt > this.maxAgeMs;
-      if (!staleTerminalAudit) return current;
-    }
+    const sameLineage = current
+      && current.schema_version === DIRECT_AUDIT_SCHEMA
+      && current.client_id === this.binding.client_id
+      && current.binding.capability?.fingerprint === this.binding.capability.fingerprint;
+    if (sameLineage) return current;
     const state = freshState({
       auditId: this.auditId(),
       ownerKey: this.ownerKey,
@@ -1239,6 +1294,12 @@ export class DirectAccountAuditor {
     return {
       schema_version: DIRECT_AUDIT_SUMMARY_SCHEMA,
       audit_id: state.audit_id,
+      snapshot: {
+        snapshot_id: `direct-audit-snapshot:${state.audit_id}`,
+        audit_version: state.version,
+        capability_snapshot_id: state.binding.capability.snapshot_id,
+        capability_fingerprint: state.binding.capability.fingerprint,
+      },
       status,
       graph_complete: pendingCollections.length === 0 && unavailableCollections.length === 0 && criterionGaps.methods.length === 0,
       observed_at: state.completed_at ?? state.updated_at,
@@ -1296,6 +1357,10 @@ export class DirectAccountAuditor {
       || state.binding.expected_account !== state.binding.api_account) {
       throw new Error("Durable Direct audit binding no longer matches the exact advertiser account.");
     }
+    if (["COMPLETE", "PARTIAL"].includes(state.status)) {
+      const snapshot = await this.loadTerminalSnapshot(state);
+      if (snapshot) return snapshot;
+    }
     if (!["COMPLETE", "PARTIAL"].includes(state.status)) {
       const graphComplete = await this.collectGraph(state);
       if (!graphComplete) return this.summarize(state);
@@ -1313,7 +1378,25 @@ export class DirectAccountAuditor {
         await this.save(state);
       }
     }
-    return this.summarize(state);
+    const summary = await this.summarize(state);
+    if (["COMPLETE", "PARTIAL"].includes(summary.status) && state.completed_at) {
+      await this.store.putSnapshot({
+        schema_version: DIRECT_AUDIT_SNAPSHOT_SCHEMA,
+        snapshot_id: summary.snapshot.snapshot_id,
+        audit_id: state.audit_id,
+        audit_version: state.version,
+        owner_key: state.owner_key,
+        account: state.account,
+        client_id: state.client_id,
+        capability_snapshot_id: state.binding.capability.snapshot_id,
+        capability_fingerprint: state.binding.capability.fingerprint,
+        observed_at: summary.observed_at,
+        completed_at: state.completed_at,
+        checkpoint: structuredClone(state),
+        summary: structuredClone(summary),
+      });
+    }
+    return summary;
   }
 
   async run(): Promise<DirectAuditSummary> {

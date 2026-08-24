@@ -2,6 +2,7 @@ import type {
   DirectAuditArtifact,
   DirectAuditArtifactReference,
   DirectAuditCheckpoint,
+  DirectAuditSnapshot,
   DirectAuditStore,
 } from "./direct-audit.ts";
 
@@ -13,6 +14,10 @@ type AuditRow = {
 
 type ArtifactRow = {
   digest: string;
+  value_json: string;
+};
+
+type SnapshotRow = {
   value_json: string;
 };
 
@@ -35,6 +40,15 @@ export async function ensureP0DirectAuditTables(db: D1Database) {
   ).run();
   await db.prepare(
     "CREATE INDEX IF NOT EXISTS p0_direct_audit_artifacts_audit_id_idx ON p0_direct_audit_artifacts(audit_id)",
+  ).run();
+  await db.prepare(
+    "CREATE TABLE IF NOT EXISTS p0_direct_audit_snapshots (snapshot_id TEXT PRIMARY KEY, audit_id TEXT NOT NULL, audit_version INTEGER NOT NULL, owner_key TEXT NOT NULL, account_key TEXT NOT NULL, client_id TEXT NOT NULL, capability_snapshot_id TEXT NOT NULL, capability_fingerprint TEXT NOT NULL, value_json TEXT NOT NULL, created_at TEXT NOT NULL)",
+  ).run();
+  await db.prepare(
+    "CREATE UNIQUE INDEX IF NOT EXISTS p0_direct_audit_snapshots_audit_id_unique ON p0_direct_audit_snapshots(audit_id)",
+  ).run();
+  await db.prepare(
+    "CREATE INDEX IF NOT EXISTS p0_direct_audit_snapshots_owner_account_idx ON p0_direct_audit_snapshots(owner_key, account_key)",
   ).run();
 }
 
@@ -150,5 +164,41 @@ export class D1DirectAuditStore implements DirectAuditStore {
       "SELECT digest, value_json FROM p0_direct_audit_artifacts WHERE artifact_id = ?",
     ).bind(artifactId).first<ArtifactRow>();
     return row ? JSON.parse(row.value_json) as unknown : null;
+  }
+
+  async putSnapshot(snapshot: DirectAuditSnapshot) {
+    await ensureP0DirectAuditTables(this.db);
+    const valueJson = JSON.stringify(snapshot);
+    const result = await this.db.prepare(
+      "INSERT OR IGNORE INTO p0_direct_audit_snapshots(snapshot_id, audit_id, audit_version, owner_key, account_key, client_id, capability_snapshot_id, capability_fingerprint, value_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).bind(
+      snapshot.snapshot_id,
+      snapshot.audit_id,
+      snapshot.audit_version,
+      snapshot.owner_key,
+      snapshot.account,
+      snapshot.client_id,
+      snapshot.capability_snapshot_id,
+      snapshot.capability_fingerprint,
+      valueJson,
+      snapshot.completed_at,
+    ).run();
+    if (Number(result.meta.changes) !== 1) {
+      const current = await this.db.prepare(
+        "SELECT value_json FROM p0_direct_audit_snapshots WHERE snapshot_id = ?",
+      ).bind(snapshot.snapshot_id).first<SnapshotRow>();
+      if (!current || current.value_json !== valueJson) {
+        throw new Error("Durable Direct audit snapshot identity drift detected.");
+      }
+    }
+    return structuredClone(snapshot);
+  }
+
+  async getSnapshot(snapshotId: string) {
+    await ensureP0DirectAuditTables(this.db);
+    const row = await this.db.prepare(
+      "SELECT value_json FROM p0_direct_audit_snapshots WHERE snapshot_id = ?",
+    ).bind(snapshotId).first<SnapshotRow>();
+    return row ? JSON.parse(row.value_json) as DirectAuditSnapshot : null;
   }
 }

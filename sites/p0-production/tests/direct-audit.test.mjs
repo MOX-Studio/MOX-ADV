@@ -3,7 +3,7 @@ import test from "node:test";
 
 import {
   buildDirectAuditReportDefinitions,
-  DirectAccountAuditor,
+  DirectAccountAuditor as RuntimeDirectAccountAuditor,
   DirectAuditProviderError,
   sanitizeDirectAuditContract,
   sanitizeDirectAuditSummary,
@@ -14,6 +14,7 @@ class MemoryDirectAuditStore {
   constructor() {
     this.current = new Map();
     this.artifacts = new Map();
+    this.snapshots = new Map();
   }
 
   key(ownerKey, account) {
@@ -54,9 +55,38 @@ class MemoryDirectAuditStore {
     const artifact = this.artifacts.get(artifactId);
     return artifact ? structuredClone(artifact.value) : null;
   }
+
+  async putSnapshot(snapshot) {
+    const current = this.snapshots.get(snapshot.snapshot_id);
+    if (current && JSON.stringify(current) !== JSON.stringify(snapshot)) {
+      throw new Error("snapshot identity drift");
+    }
+    this.snapshots.set(snapshot.snapshot_id, structuredClone(snapshot));
+    return structuredClone(snapshot);
+  }
+
+  async getSnapshot(snapshotId) {
+    const snapshot = this.snapshots.get(snapshotId);
+    return snapshot ? structuredClone(snapshot) : null;
+  }
 }
 
 const NOW = "2026-08-22T17:40:00.000Z";
+const CAPABILITY_FINGERPRINT = `sha256:${"a".repeat(64)}`;
+
+function capability(snapshotId = "direct-capability:fixture", fingerprint = CAPABILITY_FINGERPRINT) {
+  return { snapshot_id: snapshotId, fingerprint };
+}
+
+class DirectAccountAuditor extends RuntimeDirectAccountAuditor {
+  constructor(input) {
+    super({
+      ...input,
+      binding: { capability: capability(), ...input.binding },
+    });
+  }
+}
+
 const LONG_CAMPAIGN_ID = "9007199254740993123";
 const SECOND_LONG_CAMPAIGN_ID = "9007199254740993124";
 
@@ -324,11 +354,12 @@ test("concurrent safe readers converge on one durable audit instead of losing ch
   assert.equal((await store.loadCurrent("owner", "advertiser-login")).status, "COMPLETE");
 });
 
-test("completed Direct audit expires into a fresh exact-account read instead of becoming stale authority", async () => {
+test("completed Direct audit reuses its exact snapshot until material capability lineage changes", async () => {
   const store = new MemoryDirectAuditStore();
   let currentTime = "2026-08-22T17:40:00.000Z";
   let nextAudit = 1;
   let campaignReads = 0;
+  let capabilityLineage = capability("direct-capability:observation-1");
   const provider = {
     async getPage(input) {
       if (input.collection === "campaigns") campaignReads += 1;
@@ -346,6 +377,7 @@ test("completed Direct audit expires into a fresh exact-account read instead of 
       client_id: "client-4242",
       matched: true,
       restrictions: [],
+      capability: capabilityLineage,
       observed_at: currentTime,
     },
     provider,
@@ -358,17 +390,24 @@ test("completed Direct audit expires into a fresh exact-account read instead of 
 
   const first = await makeAuditor().run();
   assert.equal(first.audit_id, "direct-audit-fresh-1");
+  assert.equal(first.snapshot.snapshot_id, "direct-audit-snapshot:direct-audit-fresh-1");
   assert.equal(campaignReads, 1);
+  assert.equal(store.snapshots.size, 1);
 
-  currentTime = "2026-08-22T17:44:59.000Z";
+  currentTime = "2026-08-22T18:40:00.000Z";
+  capabilityLineage = capability("direct-capability:observation-2");
   const reused = await makeAuditor().run();
   assert.equal(reused.audit_id, "direct-audit-fresh-1");
-  assert.equal(campaignReads, 1);
+  assert.equal(reused.snapshot.capability_snapshot_id, "direct-capability:observation-1");
+  assert.equal(campaignReads, 1, "fresh provider observations cannot silently replace the immutable audit snapshot");
+  assert.equal(store.snapshots.size, 1);
 
-  currentTime = "2026-08-22T17:45:01.000Z";
+  capabilityLineage = capability("direct-capability:material-change", `sha256:${"b".repeat(64)}`);
   const refreshed = await makeAuditor().run();
   assert.equal(refreshed.audit_id, "direct-audit-fresh-2");
+  assert.equal(refreshed.snapshot.capability_snapshot_id, "direct-capability:material-change");
   assert.equal(campaignReads, 2);
+  assert.equal(store.snapshots.size, 2, "both exact lineage snapshots remain immutable and addressable");
 });
 
 test("Direct audit builds exact bounded campaign and offline search-query report requests", () => {
