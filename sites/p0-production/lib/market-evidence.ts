@@ -13,6 +13,44 @@ export const WORDSTAT_ENDPOINTS = {
 
 const WORDSTAT_METHODS = ["top_requests", "dynamics", "regions"] as const;
 const WORDSTAT_DEVICES = new Set(["all", "desktop", "phone", "tablet"]);
+const WORDSTAT_MAXIMUM_SEEDS = 8;
+const WORDSTAT_MAXIMUM_PROVIDER_CALLS = 24;
+
+export const WORDSTAT_SCOPE_ENDPOINT = `https://${WORDSTAT_API_HOST}/v1/getRegionsTree`;
+
+export class WordstatScopeError extends Error {
+  readonly code: "WORDSTAT_SCOPE_INVALID" | "WORDSTAT_BATCH_LIMIT_EXCEEDED";
+
+  constructor(code: "WORDSTAT_SCOPE_INVALID" | "WORDSTAT_BATCH_LIMIT_EXCEEDED", message: string) {
+    super(message);
+    this.name = "WordstatScopeError";
+    this.code = code;
+  }
+}
+
+export function validateWordstatProviderScope(input: {
+  regionIds: unknown[];
+  regionNames: unknown[];
+  device: unknown;
+}) {
+  if (!WORDSTAT_DEVICES.has(String(input.device))) {
+    throw new WordstatScopeError("WORDSTAT_SCOPE_INVALID", "Wordstat device scope is invalid.");
+  }
+  const regionIds = input.regionIds.map(Number);
+  const regionNames = input.regionNames.map(normalizedText);
+  if (!regionIds.length
+    || regionNames.length !== regionIds.length
+    || regionIds.some((item) => !Number.isSafeInteger(item) || item <= 0)
+    || new Set(regionIds).size !== regionIds.length
+    || regionNames.some((item) => !item)) {
+    throw new WordstatScopeError("WORDSTAT_SCOPE_INVALID", "Wordstat regions require unique positive IDs with exact non-empty names.");
+  }
+  return {
+    regionIds,
+    regionNames,
+    device: String(input.device) as WordstatSeed["device"],
+  };
+}
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type WordstatMethod = typeof WORDSTAT_METHODS[number];
@@ -166,11 +204,11 @@ export async function buildDemandCostResearchPlan(input: {
   minimumClickSample?: number;
 }): Promise<DemandCostResearchPlan> {
   if (!Number.isFinite(Date.parse(input.generatedAt))) throw new Error("Demand research plan requires a generated timestamp.");
-  if (input.regionNames.length !== input.regionIds.length
-    || input.regionIds.some((item) => !Number.isSafeInteger(item) || item <= 0)
-    || !WORDSTAT_DEVICES.has(input.device)) {
-    throw new Error("Demand research plan requires an explicit valid region and device scope.");
-  }
+  const providerScope = validateWordstatProviderScope({
+    regionIds: input.regionIds,
+    regionNames: input.regionNames,
+    device: input.device,
+  });
   if (!Number.isFinite(Date.parse(input.dynamicsFromDate))
     || !Number.isFinite(Date.parse(input.dynamicsToDate))
     || input.dynamicsFromDate > input.dynamicsToDate) {
@@ -209,9 +247,9 @@ export async function buildDemandCostResearchPlan(input: {
       dynamics_from_date: input.dynamicsFromDate,
       dynamics_to_date: input.dynamicsToDate,
       operator_profile: "BROAD_CONTAINING" as const,
-      region_ids: [...input.regionIds],
-      region_names: input.regionNames.map(normalizedText),
-      device: input.device,
+      region_ids: [...providerScope.regionIds],
+      region_names: [...providerScope.regionNames],
+      device: providerScope.device,
     };
   });
   const dimensions = (["OFFER_LANGUAGE", "CUSTOMER_PROBLEM", "HIGH_INTENT_ACTION", "BRAND", "NON_BRAND"] as DemandSeedDimension[])
@@ -231,11 +269,11 @@ export async function buildDemandCostResearchPlan(input: {
       maximum_seed_formulations: 8 as const,
       maximum_provider_calls: 24 as const,
       planned_seed_formulations: seeds.length,
-      planned_provider_calls: input.regionIds.length ? seeds.length * WORDSTAT_METHODS.length : 0,
+      planned_provider_calls: providerScope.regionIds.length ? seeds.length * WORDSTAT_METHODS.length : 0,
     },
     scope: {
-      regions: input.regionIds.map((id, index) => ({ id, name: normalizedText(input.regionNames[index]) })),
-      devices: [input.device],
+      regions: providerScope.regionIds.map((id, index) => ({ id, name: providerScope.regionNames[index] })),
+      devices: [providerScope.device],
       seasonality: {
         business_context: normalizedText(input.seasonality) || null,
         method: "MONTHLY_DYNAMICS_SAME_PERIOD" as const,
@@ -313,26 +351,29 @@ function requestFor(method: WordstatMethod, seed: WordstatSeed) {
 
 function validateSeed(seed: WordstatSeed) {
   if (!normalizedText(seed.seed_id) || !normalizedText(seed.cluster_id) || !normalizedText(seed.phrase)) {
-    throw new Error("Wordstat seed identity and phrase are required.");
+    throw new WordstatScopeError("WORDSTAT_SCOPE_INVALID", "Wordstat seed identity and phrase are required.");
   }
-  if (!WORDSTAT_DEVICES.has(seed.device)) throw new Error("Wordstat device scope is invalid.");
-  if (!seed.region_ids.length || seed.region_ids.some((item) => !Number.isSafeInteger(item) || item <= 0)) {
-    throw new Error("Wordstat region scope must use explicit positive region IDs.");
-  }
-  if (seed.region_names.length !== seed.region_ids.length) throw new Error("Wordstat region names must map exactly to region IDs.");
+  validateWordstatProviderScope({ regionIds: seed.region_ids, regionNames: seed.region_names, device: seed.device });
   if (!normalizedText(seed.dynamics_phrase) || /[!"[\]()|]/u.test(seed.dynamics_phrase)) {
-    throw new Error("Wordstat dynamics supports only the + operator profile.");
+    throw new WordstatScopeError("WORDSTAT_SCOPE_INVALID", "Wordstat dynamics supports only the + operator profile.");
   }
   if (!Number.isFinite(Date.parse(seed.dynamics_from_date)) || !Number.isFinite(Date.parse(seed.dynamics_to_date))) {
-    throw new Error("Wordstat dynamics requires an explicit valid date range.");
+    throw new WordstatScopeError("WORDSTAT_SCOPE_INVALID", "Wordstat dynamics requires an explicit valid date range.");
   }
 }
 
-function failureGap(status: number, retryAfter: string | null) {
-  const retry = finiteNonNegative(retryAfter);
+type WordstatGap = WordstatCall["gaps"][number];
+
+function failureGap(status: number, retryAfter: string | null): WordstatGap {
+  const retry = retryAfter === null || !normalizedText(retryAfter) ? null : finiteNonNegative(retryAfter);
+  if (status === 401 || status === 403) return { code: "WORDSTAT_ACCESS_DENIED", detail: "Wordstat server-side authority was rejected.", retry_after_seconds: null };
   if (status === 429) return { code: "WORDSTAT_QUOTA_EXHAUSTED", detail: "Personal Wordstat quota exhausted.", retry_after_seconds: retry };
-  if (status === 503) return { code: "WORDSTAT_PROVIDER_UNAVAILABLE", detail: "Wordstat service quota or provider is unavailable.", retry_after_seconds: retry };
+  if (status === 503) return { code: "WORDSTAT_QUEUE_UNAVAILABLE", detail: "Wordstat service queue is unavailable.", retry_after_seconds: retry };
   return { code: "WORDSTAT_PROVIDER_ERROR", detail: `Wordstat API returned HTTP ${status}.`, retry_after_seconds: retry };
+}
+
+function terminalWordstatGap(gap: WordstatGap) {
+  return ["WORDSTAT_AUTHORITY_UNAVAILABLE", "WORDSTAT_ACCESS_DENIED", "WORDSTAT_QUOTA_EXHAUSTED", "WORDSTAT_QUEUE_UNAVAILABLE"].includes(gap.code);
 }
 
 export async function collectOfficialWordstatBatch(
@@ -342,9 +383,18 @@ export async function collectOfficialWordstatBatch(
 ): Promise<WordstatObservationBatch> {
   const started = now();
   const seeds = [...input.seeds].sort((left, right) => left.seed_id.localeCompare(right.seed_id));
+  if (!seeds.length || seeds.length > WORDSTAT_MAXIMUM_SEEDS || seeds.length * WORDSTAT_METHODS.length > WORDSTAT_MAXIMUM_PROVIDER_CALLS) {
+    throw new WordstatScopeError("WORDSTAT_BATCH_LIMIT_EXCEEDED", "Wordstat batch exceeds the bounded 8-seed/24-call quota.");
+  }
+  if (new Set(seeds.map((seed) => seed.seed_id)).size !== seeds.length) {
+    throw new WordstatScopeError("WORDSTAT_SCOPE_INVALID", "Wordstat seed IDs must be unique within a batch.");
+  }
   seeds.forEach(validateSeed);
   const batchId = await sha256({ source: "YANDEX_WORDSTAT_V1", batch_started_at: started, seeds });
   const calls: WordstatCall[] = [];
+  let blockedGap: WordstatGap | null = !normalizedText(input.token) || !normalizedText(input.clientId)
+    ? { code: "WORDSTAT_AUTHORITY_UNAVAILABLE", detail: "Wordstat server-side authority and registered client binding are not configured.", retry_after_seconds: null }
+    : null;
   for (const seed of seeds) {
     for (const method of WORDSTAT_METHODS) {
       const endpoint = WORDSTAT_ENDPOINTS[method];
@@ -372,8 +422,8 @@ export async function collectOfficialWordstatBatch(
         },
         request_fingerprint: await sha256({ endpoint, request, operator_profile: operatorProfile }),
       };
-      if (!normalizedText(input.token) || !normalizedText(input.clientId)) {
-        calls.push({ ...base, status: "UNAVAILABLE", rows: [], gaps: [{ code: "WORDSTAT_AUTHORITY_UNAVAILABLE", detail: "Wordstat server-side authority is not configured.", retry_after_seconds: null }] });
+      if (blockedGap) {
+        calls.push({ ...base, status: "UNAVAILABLE", rows: [], gaps: [blockedGap] });
         continue;
       }
       try {
@@ -389,7 +439,9 @@ export async function collectOfficialWordstatBatch(
           body: JSON.stringify(request),
         });
         if (!response.ok) {
-          calls.push({ ...base, status: "UNAVAILABLE", rows: [], gaps: [failureGap(response.status, response.headers.get("retry-after"))] });
+          const gap = failureGap(response.status, response.headers.get("retry-after"));
+          if (terminalWordstatGap(gap)) blockedGap = gap;
+          calls.push({ ...base, status: "UNAVAILABLE", rows: [], gaps: [gap] });
           continue;
         }
         const payload = await response.json() as Record<string, unknown>;
@@ -1483,7 +1535,8 @@ function containsSensitiveMarketInput(value: unknown): boolean {
   if (Array.isArray(value)) return value.some(containsSensitiveMarketInput);
   if (!value || typeof value !== "object") return false;
   return Object.entries(value as Record<string, unknown>).some(([key, item]) =>
-    /(?:^|_)(?:authorization|cookie|credential|oauth|access_token|oauth_token|password|passwd|secret|api_key)(?:$|_)/iu.test(key)
+    (/(?:^|_)(?:authorization|cookie|credential|oauth|access_token|oauth_token|password|passwd|secret|api_key)(?:$|_)/iu.test(key)
+      || /wordstat.*client.*id/iu.test(key))
     || containsSensitiveMarketInput(item));
 }
 
@@ -1528,7 +1581,11 @@ export async function buildMarketEvidence(input: MarketEvidenceInput) {
   };
 }
 
-export async function unavailableWordstatBatch(reason: string, generatedAt: string): Promise<WordstatObservationBatch> {
+export async function unavailableWordstatBatch(
+  reason: string,
+  generatedAt: string,
+  code = "WORDSTAT_AUTHORITY_UNAVAILABLE",
+): Promise<WordstatObservationBatch> {
   const batchId = await sha256({ source: "YANDEX_WORDSTAT_V1", generated_at: generatedAt, unavailable: normalizedText(reason) });
   return {
     schema_version: WORDSTAT_BATCH_SCHEMA,
@@ -1555,7 +1612,7 @@ export async function unavailableWordstatBatch(reason: string, generatedAt: stri
       scope: { region_ids: [], region_names: [], device: "all", region_filter_applied: true },
       request_fingerprint: await sha256({ endpoint: WORDSTAT_ENDPOINTS.top_requests, unavailable: true }),
       rows: [],
-      gaps: [{ code: "WORDSTAT_AUTHORITY_UNAVAILABLE", detail: normalizedText(reason) || "Wordstat evidence unavailable.", retry_after_seconds: null }],
+      gaps: [{ code, detail: normalizedText(reason) || "Wordstat evidence unavailable.", retry_after_seconds: null }],
     }],
   };
 }

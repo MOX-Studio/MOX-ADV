@@ -72,9 +72,9 @@ import {
   collectOfficialWordstatBatch,
   qualifyDirectComparableCandidates,
   unavailableWordstatBatch,
+  validateWordstatProviderScope,
   type CostObservation,
   type MarketEvidenceInput,
-  type WordstatSeed,
 } from "./market-evidence.ts";
 import {
   verifyDirectAccountBinding,
@@ -496,15 +496,28 @@ async function readMarketEvidence({
   const runtime = runtimeEnv();
   const regionIds = String(runtime.YANDEX_WORDSTAT_REGION_IDS ?? "")
     .split(",")
-    .map((item) => Number(item.trim()))
-    .filter((item) => Number.isSafeInteger(item) && item > 0);
+    .filter((item) => item.trim().length > 0)
+    .map((item) => Number(item.trim()));
   const regionNames = String(runtime.YANDEX_WORDSTAT_REGION_NAMES ?? "")
     .split(",")
-    .map((item) => cleanText(item, 100))
-    .filter(Boolean);
+    .filter((item) => item.trim().length > 0)
+    .map((item) => cleanText(item, 100));
   const requestedDevice = String(runtime.YANDEX_WORDSTAT_DEVICE ?? "all");
-  const configuredDevice = (["all", "desktop", "phone", "tablet"].includes(requestedDevice) ? requestedDevice : "all") as WordstatSeed["device"];
-  const deviceConfigurationInvalid = requestedDevice !== configuredDevice;
+  let providerScope;
+  try {
+    providerScope = validateWordstatProviderScope({ regionIds, regionNames, device: requestedDevice });
+  } catch (error) {
+    return {
+      wordstat_batch: await unavailableWordstatBatch(
+        errorMessage(error),
+        generatedAt,
+        "WORDSTAT_SCOPE_INVALID",
+      ),
+      demand_clusters: [],
+      cost_observations: [],
+    };
+  }
+  const configuredDevice = providerScope.device;
   const observedDate = new Date(generatedAt);
   const dynamicsTo = new Date(Date.UTC(observedDate.getUTCFullYear(), observedDate.getUTCMonth(), 0));
   const dynamicsFrom = new Date(Date.UTC(dynamicsTo.getUTCFullYear() - 3, dynamicsTo.getUTCMonth(), 1));
@@ -518,8 +531,8 @@ async function readMarketEvidence({
       .flatMap((item) => String(item ?? "").split(/[;,\n]/u))
       .map((item) => cleanText(item, 200))
       .filter(Boolean),
-    regionIds,
-    regionNames,
+    regionIds: providerScope.regionIds,
+    regionNames: providerScope.regionNames,
     device: configuredDevice,
     seasonality: cleanText(String(model.seasonality ?? ""), 500),
     dynamicsFromDate: dynamicsFrom.toISOString().slice(0, 10),
@@ -542,9 +555,7 @@ async function readMarketEvidence({
   const configurationMissing = context.access_profile?.evidence_scope?.wordstat !== "AVAILABLE"
     || !runtime.YANDEX_WORDSTAT_OAUTH_TOKEN
     || !runtime.YANDEX_WORDSTAT_CLIENT_ID
-    || regionIds.length === 0
-    || regionNames.length !== regionIds.length
-    || deviceConfigurationInvalid;
+    || providerScope.regionIds.length === 0;
   const wordstatBatch = configurationMissing
     ? await unavailableWordstatBatch(
         "Scoped Wordstat authority is unavailable for this bounded research plan.",
@@ -575,8 +586,8 @@ async function readMarketEvidence({
     audit,
     artifacts,
     targetPhrases: researchPlan.seeds.map((seed) => seed.phrase),
-    targetRegionIds: regionIds,
-    targetRegionNames: regionNames,
+    targetRegionIds: providerScope.regionIds,
+    targetRegionNames: providerScope.regionNames,
     targetPlacement: researchPlan.comparable_cost_scope.placement,
     targetStrategy: researchPlan.comparable_cost_scope.strategy,
     observedAt: generatedAt,
@@ -916,6 +927,14 @@ export class D1AccessReadinessStore implements AccessReadinessStore {
 
 function accessConfiguration() {
   const runtime = runtimeEnv();
+  const wordstatRegionIds = String(runtime.YANDEX_WORDSTAT_REGION_IDS ?? "")
+    .split(",")
+    .filter((item) => item.trim().length > 0)
+    .map((item) => Number(item.trim()));
+  const wordstatRegionNames = String(runtime.YANDEX_WORDSTAT_REGION_NAMES ?? "")
+    .split(",")
+    .filter((item) => item.trim().length > 0)
+    .map((item) => cleanText(item, 100));
   return {
     directToken: runtime.YANDEX_DIRECT_OAUTH_TOKEN ?? "",
     directExpectedAccount: runtime.YANDEX_DIRECT_CLIENT_LOGIN ?? "",
@@ -926,6 +945,9 @@ function accessConfiguration() {
     metrikaGoalId: runtime.YANDEX_METRICA_GOAL_ID ?? "",
     wordstatToken: runtime.YANDEX_WORDSTAT_OAUTH_TOKEN ?? "",
     wordstatClientId: runtime.YANDEX_WORDSTAT_CLIENT_ID ?? "",
+    wordstatRegionIds,
+    wordstatRegionNames,
+    wordstatDevice: runtime.YANDEX_WORDSTAT_DEVICE ?? "all",
   };
 }
 

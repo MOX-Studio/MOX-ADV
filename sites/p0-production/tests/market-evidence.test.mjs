@@ -178,14 +178,19 @@ test("qualifies comparable Direct candidates only from one complete audit before
 
 test("market evidence rejects credential-bearing input before snapshot persistence", async () => {
   const wordstatBatch = await unavailableWordstatBatch("fixture unavailable", "2026-08-21T10:00:00.000Z");
-  await assert.rejects(
-    buildMarketEvidence({
-      wordstat_batch: wordstatBatch,
-      demand_clusters: [],
-      cost_observations: [{ scope: { oauth_token: "must-not-persist" } }],
-    }),
-    /credential-bearing/iu,
-  );
+  for (const costObservations of [
+    [{ scope: { oauth_token: "must-not-persist" } }],
+    [{ scope: { wordstat_client_id: "must-stay-server-only" } }],
+  ]) {
+    await assert.rejects(
+      buildMarketEvidence({
+        wordstat_batch: wordstatBatch,
+        demand_clusters: [],
+        cost_observations: costObservations,
+      }),
+      /credential-bearing/iu,
+    );
+  }
 });
 
 test("official Wordstat adapter preserves method, operator, region, device and one snapshot batch without credentials", async () => {
@@ -204,6 +209,8 @@ test("official Wordstat adapter preserves method, operator, region, device and o
 
   assert.deepEqual(requests.map((item) => item.url), Object.values(WORDSTAT_ENDPOINTS));
   assert.ok(requests.every((item) => item.init.method === "POST" && item.init.redirect === "error"));
+  assert.ok(requests.every((item) => item.init.headers.Authorization === "Bearer fixture-secret"));
+  assert.ok(requests.every((item) => !Object.keys(item.init.headers).some((key) => /client.?id/iu.test(key))));
   assert.deepEqual(requests[0].body, { phrase: seed.phrase, regions: [213], devices: ["desktop"] });
   assert.deepEqual(requests[1].body, { phrase: seed.dynamics_phrase, period: "monthly", fromDate: "2024-01-01", toDate: "2026-07-31", regions: [213], devices: ["desktop"] });
   assert.deepEqual(requests[2].body, { phrase: seed.phrase, devices: ["desktop"] });
@@ -504,12 +511,46 @@ test("a partial multi-seed response keeps the available lower bound and names th
   assert.ok(frequency.gaps.some((gap) => gap.code === "WORDSTAT_QUOTA_EXHAUSTED"));
 });
 
-test("missing rows, quota exhaustion, partial responses and provider errors never become zero demand", async (t) => {
+test("validates Wordstat scope and batch quota before any provider request", async () => {
+  for (const invalid of [
+    { ...seed, region_ids: [], region_names: [] },
+    { ...seed, region_ids: [213, 213], region_names: ["Москва", "Москва"] },
+    { ...seed, region_names: [""] },
+    { ...seed, device: "smart-tv" },
+  ]) {
+    let requests = 0;
+    await assert.rejects(
+      collectOfficialWordstatBatch({ token: "fixture-secret", clientId: "fixture-client", seeds: [invalid] }, async () => {
+        requests += 1;
+        return response({});
+      }, () => "2026-08-21T10:00:00.000Z"),
+      (error) => error?.code === "WORDSTAT_SCOPE_INVALID",
+    );
+    assert.equal(requests, 0);
+  }
+
+  let quotaRequests = 0;
+  await assert.rejects(
+    collectOfficialWordstatBatch({
+      token: "fixture-secret",
+      clientId: "fixture-client",
+      seeds: Array.from({ length: 9 }, (_, index) => ({ ...seed, seed_id: `seed-${index}` })),
+    }, async () => {
+      quotaRequests += 1;
+      return response({});
+    }, () => "2026-08-21T10:00:00.000Z"),
+    (error) => error?.code === "WORDSTAT_BATCH_LIMIT_EXCEEDED",
+  );
+  assert.equal(quotaRequests, 0);
+});
+
+test("access, quota, queue, partial responses and provider errors never become zero demand", async (t) => {
   const cases = [
+    { name: "access", status: 403, expected: "WORDSTAT_ACCESS_DENIED" },
     { name: "missing rows", top: {}, expected: "WORDSTAT_RESPONSE_PARTIAL" },
     { name: "empty rows", top: { topRequests: [] }, expected: "WORDSTAT_RESPONSE_PARTIAL" },
     { name: "quota", status: 429, expected: "WORDSTAT_QUOTA_EXHAUSTED" },
-    { name: "provider", status: 503, expected: "WORDSTAT_PROVIDER_UNAVAILABLE" },
+    { name: "queue", status: 503, expected: "WORDSTAT_QUEUE_UNAVAILABLE" },
     { name: "network", throws: true, expected: "WORDSTAT_PROVIDER_ERROR" },
   ];
   for (const item of cases) await t.test(item.name, async () => {
@@ -527,4 +568,29 @@ test("missing rows, quota exhaustion, partial responses and provider errors neve
     assert.equal(frequency.observed_unique_count.value, null);
     assert.ok(frequency.gaps.some((gap) => gap.code === item.expected));
   });
+});
+
+test("stops dispatching a batch after an access, quota, or provider queue failure", async () => {
+  for (const terminal of [
+    { status: 403, code: "WORDSTAT_ACCESS_DENIED", retry: null },
+    { status: 429, code: "WORDSTAT_QUOTA_EXHAUSTED", retry: 60 },
+    { status: 503, code: "WORDSTAT_QUEUE_UNAVAILABLE", retry: 60 },
+  ]) {
+    let requests = 0;
+    let tick = 0;
+    const batch = await collectOfficialWordstatBatch({
+      token: "fixture-secret",
+      clientId: "fixture-client",
+      seeds: [seed, { ...seed, seed_id: "seed-second" }],
+    }, async () => {
+      requests += 1;
+      return response({}, terminal.status, { "retry-after": "60" });
+    }, () => `2026-08-21T10:04:${String(tick++).padStart(2, "0")}.000Z`);
+
+    assert.equal(requests, 1);
+    assert.equal(batch.calls.length, 6);
+    assert.ok(batch.calls.every((call) => call.status === "UNAVAILABLE"));
+    assert.ok(batch.calls.every((call) => call.gaps[0].code === terminal.code));
+    assert.ok(batch.calls.every((call) => call.gaps[0].retry_after_seconds === terminal.retry));
+  }
 });

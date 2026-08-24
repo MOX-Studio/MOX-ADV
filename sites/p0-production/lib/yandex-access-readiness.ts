@@ -5,6 +5,10 @@ import type {
 } from "./access-readiness.ts";
 import { cleanText } from "./text.ts";
 import {
+  WORDSTAT_SCOPE_ENDPOINT,
+  validateWordstatProviderScope,
+} from "./market-evidence.ts";
+import {
   verifyDirectAccountBinding,
   verifyMetrikaCounterBinding,
 } from "./yandex-context.ts";
@@ -21,6 +25,9 @@ type YandexAccessConfiguration = {
   metrikaGoalId: string;
   wordstatToken: string;
   wordstatClientId: string;
+  wordstatRegionIds: unknown[];
+  wordstatRegionNames: unknown[];
+  wordstatDevice: unknown;
 };
 
 async function jsonResponse(response: Response, label: string) {
@@ -205,14 +212,41 @@ export class YandexAccessReadinessAdapter implements AccessReadinessAdapter {
 
   private async verifyWordstatScope() {
     if (!this.configuration.wordstatToken || !this.configuration.wordstatClientId) {
-      throw new Error("Wordstat server credential is unavailable.");
+      throw new Error("Wordstat server credential or registered client binding is unavailable.");
     }
-    await jsonResponse(await this.fetcher("https://api.wordstat.yandex.net/v1/regions", {
+    const scope = validateWordstatProviderScope({
+      regionIds: this.configuration.wordstatRegionIds,
+      regionNames: this.configuration.wordstatRegionNames,
+      device: this.configuration.wordstatDevice,
+    });
+    const payload = await jsonResponse(await this.fetcher(WORDSTAT_SCOPE_ENDPOINT, {
+      method: "POST",
+      redirect: "error",
       headers: {
         Authorization: `Bearer ${this.configuration.wordstatToken}`,
-        "Client-Id": this.configuration.wordstatClientId,
         Accept: "application/json",
+        "Content-Type": "application/json",
       },
+      body: JSON.stringify({}),
     }), "Wordstat");
+    const supported = new Map<number, string>();
+    const visit = (value: unknown) => {
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+        return;
+      }
+      if (!value || typeof value !== "object") return;
+      const item = record(value);
+      const id = Number(item.id ?? item.regionId);
+      const name = cleanText(String(item.name ?? item.regionName ?? ""), 255);
+      if (Number.isSafeInteger(id) && id > 0 && name) supported.set(id, name);
+      for (const child of Object.values(item)) {
+        if (child && typeof child === "object") visit(child);
+      }
+    };
+    visit(payload.regions ?? payload);
+    const exact = scope.regionIds.every((id, index) =>
+      cleanText(supported.get(id) ?? "", 255).toLocaleLowerCase("ru-RU") === scope.regionNames[index].toLocaleLowerCase("ru-RU"));
+    if (!exact) throw new Error("Configured Wordstat region IDs and names do not match the official region tree.");
   }
 }

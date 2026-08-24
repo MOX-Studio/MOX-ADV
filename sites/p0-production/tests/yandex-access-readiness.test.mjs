@@ -39,7 +39,9 @@ function fetcher(requests, { wrongCounter = false, directProUnavailable = false,
     if (url.endsWith("/management/v1/counter/1717/goals")) {
       return Response.json({ goals: [{ id: 77 }] });
     }
-    if (url === "https://api.wordstat.yandex.net/v1/regions") return Response.json({ regions: [] });
+    if (url === "https://api.wordstat.yandex.net/v1/getRegionsTree") {
+      return Response.json({ regions: [{ id: 213, name: "Москва", children: [] }] });
+    }
     throw new Error(`Unexpected request: ${url}`);
   };
 }
@@ -54,6 +56,9 @@ function adapter(requests, options) {
     metrikaGoalId: "77",
     wordstatToken: "server-wordstat-secret",
     wordstatClientId: "server-wordstat-client",
+    wordstatRegionIds: [213],
+    wordstatRegionNames: ["Москва"],
+    wordstatDevice: "desktop",
   }, fetcher(requests, options), () => "2026-08-24T10:00:00.000Z");
 }
 
@@ -69,7 +74,13 @@ test("discovers understandable account/counter choices only through official API
   assert.equal(discovery.counters[0].label, "Основной сайт");
   assert.ok(requests.every((request) => /^https:\/\/(?:api\.direct\.yandex\.com|api-metrika\.yandex\.net|api\.wordstat\.yandex\.net)\//u.test(request.url)));
   assert.ok(requests.every((request) => !/direct\.yandex\.(?:ru|com)\/loggedin|metrika\.yandex\.(?:ru|com)/iu.test(request.url)));
-  assert.doesNotMatch(JSON.stringify(discovery), /server-(?:direct|metrika|wordstat)-secret/u);
+  const wordstatRequest = requests.find((request) => request.url.includes("api.wordstat.yandex.net"));
+  assert.equal(wordstatRequest.init.method, "POST");
+  assert.equal(wordstatRequest.init.redirect, "error");
+  assert.deepEqual(JSON.parse(String(wordstatRequest.init.body)), {});
+  assert.equal(wordstatRequest.init.headers.Authorization, "Bearer server-wordstat-secret");
+  assert.ok(!Object.keys(wordstatRequest.init.headers).some((key) => /client.?id/iu.test(key)));
+  assert.doesNotMatch(JSON.stringify(discovery), /server-(?:direct|metrika|wordstat)-secret|server-wordstat-client/u);
 });
 
 test("falls back to exact configured Campaigns.get read proof when Clients.get requires Direct Pro", async () => {
@@ -102,6 +113,42 @@ test("falls back to exact configured Campaigns.get read proof when Clients.get r
   const missing = await adapter([], { directProUnavailable: true, campaignMissing: true }).discover();
   assert.equal(missing.scopes.direct.granted, false);
   assert.deepEqual(missing.accounts, []);
+});
+
+test("validates configured Wordstat region and device scope before evidence collection", async () => {
+  const unsupportedRegionRequests = [];
+  const unsupportedRegion = new YandexAccessReadinessAdapter({
+    directToken: "server-direct-secret",
+    directExpectedAccount: "client-4242",
+    directCampaignId: "818181",
+    metrikaToken: "server-metrika-secret",
+    metrikaGoalId: "77",
+    wordstatToken: "server-wordstat-secret",
+    wordstatClientId: "server-wordstat-client",
+    wordstatRegionIds: [2],
+    wordstatRegionNames: ["Санкт-Петербург"],
+    wordstatDevice: "desktop",
+  }, fetcher(unsupportedRegionRequests));
+  const unsupportedDiscovery = await unsupportedRegion.discover();
+  assert.equal(unsupportedDiscovery.scopes.wordstat.granted, false);
+  assert.equal(unsupportedRegionRequests.filter((request) => request.url.includes("api.wordstat.yandex.net")).length, 1);
+
+  const invalidDeviceRequests = [];
+  const invalidDevice = new YandexAccessReadinessAdapter({
+    directToken: "server-direct-secret",
+    directExpectedAccount: "client-4242",
+    directCampaignId: "818181",
+    metrikaToken: "server-metrika-secret",
+    metrikaGoalId: "77",
+    wordstatToken: "server-wordstat-secret",
+    wordstatClientId: "server-wordstat-client",
+    wordstatRegionIds: [213],
+    wordstatRegionNames: ["Москва"],
+    wordstatDevice: "smart-tv",
+  }, fetcher(invalidDeviceRequests));
+  const invalidDiscovery = await invalidDevice.discover();
+  assert.equal(invalidDiscovery.scopes.wordstat.granted, false);
+  assert.equal(invalidDeviceRequests.some((request) => request.url.includes("api.wordstat.yandex.net")), false);
 });
 
 test("exact binding and scope are rechecked by official APIs and wrong counter fails closed", async () => {
