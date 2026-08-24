@@ -44,6 +44,49 @@ export type DirectAuditArtifact = {
   value: unknown;
 };
 
+export type DirectAuditObservationAvailability = "COMPLETE" | "PARTIAL" | "UNSUPPORTED" | "UNAVAILABLE";
+
+export type DirectAuditObservationSource = {
+  provider: "YANDEX_DIRECT";
+  channel: "OFFICIAL_API" | "OFFICIAL_API_CONTRACT";
+  method: string;
+};
+
+export type DirectAuditObservation = {
+  data_set: DirectAuditCollection | "campaign_results" | "search_queries";
+  availability: DirectAuditObservationAvailability;
+  account: string;
+  source: DirectAuditObservationSource;
+  observed_at: string;
+  freshness: {
+    status: "FRESH" | "UNKNOWN";
+    max_age_ms: number;
+    fresh_until: string | null;
+  };
+  data: {
+    object_count: number;
+    artifact_count: number;
+    artifact_references: DirectAuditArtifactReference[];
+  } | null;
+  limitations: string[];
+  retry_at: string | null;
+};
+
+export type DirectAuditContract = {
+  schema_version: "direct-full-audit-contract-v1";
+  audit_id: string;
+  status: "COMPLETE" | "PARTIAL" | "BLOCKED";
+  account: string;
+  observed_at: string;
+  freshness: DirectAuditObservation["freshness"];
+  observations: DirectAuditObservation[];
+  blocking_reasons: Array<{
+    code: string;
+    message: string;
+    retry_at: string | null;
+  }>;
+};
+
 export type DirectAuditBinding = {
   expected_account: string;
   api_account: string;
@@ -135,6 +178,8 @@ export function buildDirectAuditReportDefinitions(input: {
 }
 
 export interface DirectAuditReadProvider {
+  readonly account?: string;
+  readonly source?: Omit<DirectAuditObservationSource, "method">;
   getPage(input: DirectAuditGetPageInput): Promise<DirectAuditGetPageResult>;
   requestReport(definition: DirectAuditReportDefinition): Promise<DirectAuditReportResult>;
 }
@@ -349,6 +394,17 @@ const COLLECTION_CONFIG: Record<DirectAuditCollection, {
 
 const PAGE_LIMIT = 1_000;
 const MAX_SUMMARY_ARTIFACT_REFERENCES = 48;
+const CONTRACT_SCHEMA = "direct-full-audit-contract-v1" as const;
+const CONTRACT_REPORTS = [
+  {
+    dataSet: "campaign_results",
+    reportType: "CAMPAIGN_PERFORMANCE_REPORT",
+  },
+  {
+    dataSet: "search_queries",
+    reportType: "SEARCH_QUERY_PERFORMANCE_REPORT",
+  },
+] as const;
 
 function text(value: unknown, maximum = 2_000) {
   return String(value ?? "").trim().slice(0, maximum);
@@ -434,6 +490,81 @@ export function sanitizeDirectAuditSummary(value: unknown): DirectAuditSummary {
     || JSON.stringify(summary).length > 60_000;
   if (invalid) throw new Error("Direct audit summary violates the bounded read-only safety contract.");
   return structuredClone(summary);
+}
+
+export function sanitizeDirectAuditContract(value: unknown): DirectAuditContract {
+  const contract = value && typeof value === "object" && !Array.isArray(value)
+    ? value as DirectAuditContract
+    : null;
+  const expectedDataSets = [...COLLECTION_ORDER, ...CONTRACT_REPORTS.map((item) => item.dataSet)];
+  const invalid = !contract
+    || !exactKeys(contract, [
+      "schema_version", "audit_id", "status", "account", "observed_at", "freshness", "observations", "blocking_reasons",
+    ])
+    || contract.schema_version !== CONTRACT_SCHEMA
+    || !text(contract.audit_id, 255)
+    || !["COMPLETE", "PARTIAL", "BLOCKED"].includes(contract.status)
+    || !text(contract.account, 255)
+    || !Number.isFinite(Date.parse(contract.observed_at))
+    || !exactKeys(contract.freshness, ["status", "max_age_ms", "fresh_until"])
+    || !["FRESH", "UNKNOWN"].includes(contract.freshness.status)
+    || !Number.isSafeInteger(contract.freshness.max_age_ms)
+    || contract.freshness.max_age_ms <= 0
+    || (contract.freshness.fresh_until !== null && !Number.isFinite(Date.parse(contract.freshness.fresh_until)))
+    || (contract.freshness.status === "FRESH" ? contract.freshness.fresh_until === null : contract.freshness.fresh_until !== null)
+    || !Array.isArray(contract.observations)
+    || contract.observations.length !== expectedDataSets.length
+    || JSON.stringify(contract.observations.map((item) => item.data_set)) !== JSON.stringify(expectedDataSets)
+    || contract.observations.some((observation) => {
+      const data = observation.data;
+      return !exactKeys(observation, [
+        "data_set", "availability", "account", "source", "observed_at", "freshness", "data", "limitations", "retry_at",
+      ])
+        || !expectedDataSets.includes(observation.data_set)
+        || !["COMPLETE", "PARTIAL", "UNSUPPORTED", "UNAVAILABLE"].includes(observation.availability)
+        || observation.account !== contract.account
+        || !exactKeys(observation.source, ["provider", "channel", "method"])
+        || observation.source.provider !== "YANDEX_DIRECT"
+        || !["OFFICIAL_API", "OFFICIAL_API_CONTRACT"].includes(observation.source.channel)
+        || (observation.availability === "UNSUPPORTED"
+          ? observation.source.channel !== "OFFICIAL_API_CONTRACT"
+          : observation.source.channel !== "OFFICIAL_API")
+        || !text(observation.source.method, 255)
+        || !Number.isFinite(Date.parse(observation.observed_at))
+        || !exactKeys(observation.freshness, ["status", "max_age_ms", "fresh_until"])
+        || !["FRESH", "UNKNOWN"].includes(observation.freshness.status)
+        || !Number.isSafeInteger(observation.freshness.max_age_ms)
+        || observation.freshness.max_age_ms <= 0
+        || (observation.freshness.fresh_until !== null && !Number.isFinite(Date.parse(observation.freshness.fresh_until)))
+        || (observation.freshness.status === "FRESH"
+          ? observation.freshness.fresh_until === null
+          : observation.freshness.fresh_until !== null)
+        || !Array.isArray(observation.limitations)
+        || observation.limitations.length > 100
+        || observation.limitations.some((item) => typeof item !== "string" || item.length > 1_000)
+        || (observation.retry_at !== null && !Number.isFinite(Date.parse(observation.retry_at)))
+        || (["UNSUPPORTED", "UNAVAILABLE"].includes(observation.availability) && data !== null)
+        || (["COMPLETE", "PARTIAL"].includes(observation.availability) && (!data
+          || !exactKeys(data, ["object_count", "artifact_count", "artifact_references"])
+          || !Number.isSafeInteger(data.object_count)
+          || data.object_count < 0
+          || !Number.isSafeInteger(data.artifact_count)
+          || data.artifact_count < 0
+          || !Array.isArray(data.artifact_references)
+          || data.artifact_references.length > MAX_SUMMARY_ARTIFACT_REFERENCES
+          || data.artifact_references.length > data.artifact_count
+          || data.artifact_references.some((reference) => !validArtifactReference(reference, contract.audit_id))));
+    })
+    || !Array.isArray(contract.blocking_reasons)
+    || contract.blocking_reasons.length > 20
+    || contract.blocking_reasons.some((reason) => !exactKeys(reason, ["code", "message", "retry_at"])
+      || !text(reason.code, 100)
+      || !text(reason.message, 1_000)
+      || (reason.retry_at !== null && !Number.isFinite(Date.parse(reason.retry_at))))
+    || (contract.status === "BLOCKED" ? contract.blocking_reasons.length === 0 : contract.blocking_reasons.length !== 0)
+    || JSON.stringify(contract).length > 80_000;
+  if (invalid) throw new Error("Direct audit contract violates the bounded provider-observation contract.");
+  return structuredClone(contract);
 }
 
 function redactArtifactText(value: string) {
@@ -642,6 +773,155 @@ async function criterionCoverageGaps(state: DirectAuditCheckpoint, store: Direct
   return { methods, limitations };
 }
 
+function observationTime(references: DirectAuditArtifactReference[], fallback: string) {
+  return references.map((reference) => reference.observed_at).sort().at(-1) ?? fallback;
+}
+
+function observationFreshness(
+  availability: DirectAuditObservationAvailability,
+  observedAt: string,
+  maxAgeMs: number,
+): DirectAuditObservation["freshness"] {
+  if (availability === "UNAVAILABLE") {
+    return { status: "UNKNOWN", max_age_ms: maxAgeMs, fresh_until: null };
+  }
+  return { status: "FRESH", max_age_ms: maxAgeMs, fresh_until: isoAfter(observedAt, maxAgeMs) };
+}
+
+function observationLimitations(input: {
+  warnings: Array<{ code: string; message: string }>;
+  limitation: string | null;
+}) {
+  return unique([
+    ...(input.limitation ? [text(input.limitation, 1_000)] : []),
+    ...input.warnings.map((warning) => `${text(warning.code, 100) || "DIRECT_WARNING"}: ${text(warning.message, 500) || "Direct provider warning"}`),
+  ]).slice(0, 100);
+}
+
+function boundedObservationData(input: {
+  availability: DirectAuditObservationAvailability;
+  objectCount: number;
+  references: DirectAuditArtifactReference[];
+}): DirectAuditObservation["data"] {
+  if (!["COMPLETE", "PARTIAL"].includes(input.availability)) return null;
+  return {
+    object_count: input.objectCount,
+    artifact_count: input.references.length,
+    artifact_references: input.references.slice(0, MAX_SUMMARY_ARTIFACT_REFERENCES),
+  };
+}
+
+function directAuditContract(input: {
+  state: DirectAuditCheckpoint;
+  summary: DirectAuditSummary;
+  maxAgeMs: number;
+  providerSource: Omit<DirectAuditObservationSource, "method">;
+}): DirectAuditContract {
+  const collectionObservations: DirectAuditObservation[] = COLLECTION_ORDER.map((collection) => {
+    const checkpoint = input.state.collections[collection];
+    const config = COLLECTION_CONFIG[collection];
+    const availability: DirectAuditObservationAvailability = config.documentedRead === false
+      ? "UNSUPPORTED"
+      : checkpoint.status === "UNAVAILABLE"
+        ? "UNAVAILABLE"
+        : checkpoint.status === "PENDING"
+          ? checkpoint.artifact_references.length ? "PARTIAL" : "UNAVAILABLE"
+          : checkpoint.warnings.length ? "PARTIAL" : "COMPLETE";
+    const observedAt = observationTime(checkpoint.artifact_references, input.state.updated_at);
+    return {
+      data_set: collection,
+      availability,
+      account: input.state.account,
+      source: {
+        provider: input.providerSource.provider,
+        channel: availability === "UNSUPPORTED" ? "OFFICIAL_API_CONTRACT" : input.providerSource.channel,
+        method: config.method,
+      },
+      observed_at: observedAt,
+      freshness: observationFreshness(availability, observedAt, input.maxAgeMs),
+      data: boundedObservationData({
+        availability,
+        objectCount: checkpoint.object_count,
+        references: checkpoint.artifact_references,
+      }),
+      limitations: observationLimitations({
+        warnings: checkpoint.warnings,
+        limitation: availability === "UNSUPPORTED"
+          ? config.unavailableReason ?? `${config.method} is unsupported by the current provider contract.`
+          : checkpoint.limitation,
+      }),
+      retry_at: checkpoint.next_retry_at,
+    };
+  });
+  const reportObservations: DirectAuditObservation[] = CONTRACT_REPORTS.map((contractReport) => {
+    const checkpoint = input.state.reports.find((item) => item.report_type === contractReport.reportType);
+    const references = checkpoint?.artifact_reference ? [checkpoint.artifact_reference] : [];
+    const availability: DirectAuditObservationAvailability = checkpoint?.status === "COMPLETE"
+      ? checkpoint.warnings.length ? "PARTIAL" : "COMPLETE"
+      : checkpoint?.status === "UNAVAILABLE"
+        ? "UNAVAILABLE"
+        : references.length ? "PARTIAL" : "UNAVAILABLE";
+    const observedAt = observationTime(references, input.state.updated_at);
+    const method = `Reports.${contractReport.reportType}`;
+    return {
+      data_set: contractReport.dataSet,
+      availability,
+      account: input.state.account,
+      source: { ...input.providerSource, method },
+      observed_at: observedAt,
+      freshness: observationFreshness(availability, observedAt, input.maxAgeMs),
+      data: boundedObservationData({
+        availability,
+        objectCount: checkpoint?.artifact_reference?.object_count ?? 0,
+        references,
+      }),
+      limitations: checkpoint
+        ? observationLimitations({ warnings: checkpoint.warnings, limitation: checkpoint.limitation })
+        : ["DIRECT_AUDIT_REPORT_NOT_CONFIGURED: this provider result was not requested by the current audit definition."],
+      retry_at: checkpoint?.next_retry_at ?? null,
+    };
+  });
+  const observations = [...collectionObservations, ...reportObservations];
+  const status: DirectAuditContract["status"] = input.summary.status === "PENDING"
+    ? "BLOCKED"
+    : input.summary.status === "PARTIAL"
+      || observations.some((observation) => ["PARTIAL", "UNAVAILABLE"].includes(observation.availability))
+      ? "PARTIAL"
+      : "COMPLETE";
+  const pendingReasons = observations
+    .filter((observation) => observation.availability === "UNAVAILABLE"
+      && (observation.retry_at || observation.limitations.some((item) => !item.startsWith("DIRECT_AUDIT_REPORT_NOT_CONFIGURED:"))))
+    .flatMap((observation) => observation.limitations
+      .filter((item) => !item.startsWith("DIRECT_AUDIT_REPORT_NOT_CONFIGURED:"))
+      .slice(0, 1)
+      .map((limitation) => {
+      const [rawCode] = limitation.split(":", 1);
+      return {
+        code: text(rawCode, 100) || "DIRECT_AUDIT_PENDING",
+        message: limitation,
+        retry_at: observation.retry_at,
+      };
+    }));
+  const blockingReasons = status === "BLOCKED"
+    ? (pendingReasons.length ? pendingReasons : [{
+        code: "DIRECT_AUDIT_PENDING",
+        message: "Direct audit is waiting for a safe provider read to complete.",
+        retry_at: input.summary.next_retry_at,
+      }]).slice(0, 20)
+    : [];
+  const contract: DirectAuditContract = {
+    schema_version: CONTRACT_SCHEMA,
+    audit_id: input.state.audit_id,
+    status,
+    account: input.state.account,
+    observed_at: input.summary.observed_at,
+    freshness: observationFreshness(status === "BLOCKED" ? "UNAVAILABLE" : status, input.summary.observed_at, input.maxAgeMs),
+    observations,
+    blocking_reasons: blockingReasons,
+  };
+  return sanitizeDirectAuditContract(contract);
+}
+
 class DirectAuditCheckpointConflict extends Error {
   constructor() {
     super("Direct audit checkpoint changed concurrently.");
@@ -682,8 +962,14 @@ export class DirectAccountAuditor {
     if (!this.binding.matched
       || !this.binding.expected_account
       || this.binding.expected_account !== this.binding.api_account
-      || !this.binding.client_id) {
-      throw new Error("Direct audit requires an exact advertiser/account binding.");
+      || !this.binding.client_id
+      || (this.provider.account !== undefined && this.provider.account !== this.binding.api_account)) {
+      throw new DirectAuditProviderError({
+        code: "DIRECT_ACCOUNT_MISMATCH",
+        message: "Direct audit requires the exact configured advertiser account binding.",
+        disposition: "UNAVAILABLE",
+        retry_at: null,
+      });
     }
   }
 
@@ -766,6 +1052,7 @@ export class DirectAccountAuditor {
             if (!error.retry_at || !Number.isFinite(Date.parse(error.retry_at))) {
               throw new Error(`${error.code} did not provide valid retry timing.`);
             }
+            checkpoint.limitation = `${error.code}: ${text(error.message, 500)}`;
             checkpoint.next_retry_at = error.retry_at;
             state.status = "PENDING";
             await this.save(state);
@@ -777,6 +1064,7 @@ export class DirectAccountAuditor {
           await this.save(state);
           break;
         }
+        checkpoint.limitation = null;
         checkpoint.next_retry_at = null;
         const warnings = boundedWarnings(page.warnings ?? []);
         const pageValue = {
@@ -856,6 +1144,7 @@ export class DirectAccountAuditor {
             throw new Error(`${error.code} did not provide valid retry timing.`);
           }
           checkpoint.status = "QUEUED";
+          checkpoint.limitation = `${error.code}: ${text(error.message, 500)}`;
           checkpoint.next_retry_at = error.retry_at;
           state.status = "PENDING";
           await this.save(state);
@@ -874,6 +1163,7 @@ export class DirectAccountAuditor {
           throw new Error(`${checkpoint.report_type} did not return a valid retryIn interval.`);
         }
         checkpoint.status = "QUEUED";
+        checkpoint.limitation = "DIRECT_REPORT_QUEUED: the provider accepted the report and requires a timed retry.";
         checkpoint.next_retry_at = isoAfter(timestamp, Number(result.retry_in_ms));
         state.status = "PENDING";
         await this.save(state);
@@ -910,6 +1200,7 @@ export class DirectAccountAuditor {
         value: artifactValue,
       });
       checkpoint.status = "COMPLETE";
+      checkpoint.limitation = null;
       checkpoint.next_retry_at = null;
       await this.save(state);
     }
@@ -1034,5 +1325,19 @@ export class DirectAccountAuditor {
       }
     }
     throw new Error("Direct audit could not converge after concurrent safe-read checkpoints.");
+  }
+
+  async runContract(): Promise<DirectAuditContract> {
+    const summary = await this.run();
+    const state = await this.store.loadCurrent(this.ownerKey, this.binding.api_account);
+    if (!state || state.audit_id !== summary.audit_id) {
+      throw new Error("Direct audit contract requires the exact durable provider observation state.");
+    }
+    return directAuditContract({
+      state,
+      summary,
+      maxAgeMs: this.maxAgeMs,
+      providerSource: this.provider.source ?? { provider: "YANDEX_DIRECT", channel: "OFFICIAL_API" },
+    });
   }
 }

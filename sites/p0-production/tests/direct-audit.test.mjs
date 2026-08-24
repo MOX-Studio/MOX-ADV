@@ -5,6 +5,7 @@ import {
   buildDirectAuditReportDefinitions,
   DirectAccountAuditor,
   DirectAuditProviderError,
+  sanitizeDirectAuditContract,
   sanitizeDirectAuditSummary,
 } from "../lib/direct-audit.ts";
 import { YandexDirectReadApi } from "../lib/yandex-direct-audit.ts";
@@ -212,6 +213,62 @@ test("Direct audit follows LimitedBy through the complete relevant graph and kee
   assert.throws(
     () => sanitizeDirectAuditSummary({ ...summary, provider_write_methods_reachable: true }),
     /read-only safety contract/u,
+  );
+});
+
+test("Direct audit contract distinguishes complete, partial, unsupported and unavailable provider observations", async () => {
+  const store = new MemoryDirectAuditStore();
+  const contract = await new DirectAccountAuditor({
+    ownerKey: "owner",
+    binding: {
+      expected_account: "advertiser-login",
+      api_account: "advertiser-login",
+      client_id: "client-4242",
+      matched: true,
+      restrictions: [],
+      observed_at: NOW,
+    },
+    provider: graphProvider(),
+    store,
+    now: () => NOW,
+    auditId: () => "direct-audit-contract",
+    reportDefinitions: [],
+  }).runContract();
+
+  assert.equal(contract.schema_version, "direct-full-audit-contract-v1");
+  assert.equal(contract.status, "PARTIAL");
+  assert.equal(contract.account, "advertiser-login");
+  assert.deepEqual(contract.blocking_reasons, []);
+  assert.deepEqual(contract.observations.map((observation) => observation.data_set), [
+    "campaigns", "adgroups", "audiencetargets", "keywords", "ads", "sitelinks", "adimages", "vcards", "creatives", "adextensions",
+    "campaign_results", "search_queries",
+  ]);
+
+  const observations = Object.fromEntries(contract.observations.map((observation) => [observation.data_set, observation]));
+  assert.equal(observations.campaigns.availability, "PARTIAL", "provider warnings keep otherwise complete data explicitly partial");
+  assert.equal(observations.campaigns.data.object_count, 2);
+  assert.equal(observations.adgroups.availability, "COMPLETE");
+  assert.equal(observations.adgroups.data.object_count, 2);
+  assert.equal(observations.vcards.availability, "UNSUPPORTED");
+  assert.equal(observations.vcards.data, null);
+  assert.equal(observations.vcards.source.channel, "OFFICIAL_API_CONTRACT");
+  assert.equal(observations.campaign_results.availability, "UNAVAILABLE");
+  assert.equal(observations.campaign_results.data, null);
+  assert.equal(observations.search_queries.availability, "UNAVAILABLE");
+  assert.equal(observations.search_queries.data, null);
+  assert.ok(contract.observations.every((observation) => observation.account === "advertiser-login"));
+  assert.ok(contract.observations.every((observation) => observation.source.provider === "YANDEX_DIRECT"));
+  assert.ok(contract.observations.every((observation) => Number.isFinite(Date.parse(observation.observed_at))));
+  assert.ok(contract.observations.every((observation) => ["FRESH", "UNKNOWN"].includes(observation.freshness.status)));
+  assert.deepEqual(sanitizeDirectAuditContract(contract), contract);
+  assert.throws(
+    () => sanitizeDirectAuditContract({
+      ...contract,
+      observations: contract.observations.map((observation) => observation.data_set === "adgroups"
+        ? { ...observation, data: null }
+        : observation),
+    }),
+    /provider-observation contract/u,
   );
 });
 
@@ -520,8 +577,14 @@ test("Direct audit durably retries rate limits and preserves partial-permission 
   assert.equal(limited.next_retry_at, "2026-08-22T18:00:10.000Z");
   assert.equal(providerCalls, 1);
 
-  await makeAuditor().run();
-  assert.equal(providerCalls, 1, "restart before the persisted rate-limit time performs no read");
+  const blocked = await makeAuditor().runContract();
+  assert.equal(providerCalls, 1, "contract read before the persisted rate-limit time performs no provider request");
+  assert.equal(blocked.status, "BLOCKED");
+  assert.ok(blocked.blocking_reasons.some((reason) => reason.code === "DIRECT_RATE_LIMITED"));
+  const blockedCampaigns = blocked.observations.find((observation) => observation.data_set === "campaigns");
+  assert.equal(blockedCampaigns.availability, "UNAVAILABLE");
+  assert.equal(blockedCampaigns.data, null, "quota exhaustion never becomes an invented zero observation");
+  assert.equal(blockedCampaigns.freshness.status, "UNKNOWN");
 
   currentTime = "2026-08-22T18:00:10.000Z";
   const partial = await makeAuditor().run();
@@ -533,6 +596,73 @@ test("Direct audit durably retries rate limits and preserves partial-permission 
   assert.deepEqual(partial.provider_restrictions, [{ element: "API_POINTS", value: 5 }]);
   assert.ok(partial.limitations.some((item) => item.includes("DIRECT_PARTIAL_PERMISSION")));
   assert.ok(partial.limitations.some((item) => item.includes("DIRECT_UNITS_LOW")));
+
+  const partialContract = await makeAuditor().runContract();
+  const partialObservations = Object.fromEntries(partialContract.observations.map((observation) => [observation.data_set, observation]));
+  assert.equal(partialContract.status, "PARTIAL");
+  assert.equal(partialObservations.campaigns.availability, "PARTIAL");
+  assert.equal(partialObservations.campaigns.data.object_count, 1);
+  assert.equal(partialObservations.adgroups.availability, "UNAVAILABLE");
+  assert.equal(partialObservations.adgroups.data, null, "missing permission never becomes a zero group observation");
+});
+
+test("Direct audit blocks an account mismatch and provider network failure without fabricated observations", async () => {
+  let fetchCalls = 0;
+  const api = new YandexDirectReadApi({
+    token: "server-only-token",
+    account: "advertiser-login",
+    fetcher: async () => {
+      fetchCalls += 1;
+      throw new Error("network down");
+    },
+    now: () => "2026-08-22T19:00:00.000Z",
+  });
+  const binding = {
+    expected_account: "advertiser-login",
+    api_account: "advertiser-login",
+    client_id: "client-4242",
+    matched: true,
+    restrictions: [],
+    observed_at: "2026-08-22T19:00:00.000Z",
+  };
+
+  assert.throws(
+    () => new DirectAccountAuditor({
+      ownerKey: "owner",
+      binding: { ...binding, expected_account: "other-login", api_account: "other-login" },
+      provider: api,
+      store: new MemoryDirectAuditStore(),
+      now: () => "2026-08-22T19:00:00.000Z",
+      reportDefinitions: [],
+    }),
+    (error) => {
+      assert.equal(error.code, "DIRECT_ACCOUNT_MISMATCH");
+      assert.equal(error.disposition, "UNAVAILABLE");
+      return true;
+    },
+  );
+  assert.equal(fetchCalls, 0, "wrong account is blocked before any provider request");
+
+  const blocked = await new DirectAccountAuditor({
+    ownerKey: "owner",
+    binding,
+    provider: api,
+    store: new MemoryDirectAuditStore(),
+    now: () => "2026-08-22T19:00:00.000Z",
+    auditId: () => "direct-audit-network-failure",
+    reportDefinitions: [],
+  }).runContract();
+  assert.equal(fetchCalls, 1);
+  assert.equal(blocked.status, "BLOCKED");
+  assert.ok(blocked.blocking_reasons.some((reason) => reason.code === "DIRECT_TEMPORARY_FAILURE"));
+  const campaigns = blocked.observations.find((observation) => observation.data_set === "campaigns");
+  assert.equal(campaigns.account, "advertiser-login");
+  assert.equal(campaigns.source.channel, "OFFICIAL_API");
+  assert.equal(campaigns.availability, "UNAVAILABLE");
+  assert.equal(campaigns.data, null);
+  assert.equal(campaigns.retry_at, "2026-08-22T19:00:05.000Z");
+  assert.ok(!JSON.stringify(blocked).includes('"Impressions":0'));
+  assert.ok(!JSON.stringify(blocked).includes('"Conversions":0'));
 });
 
 test("Direct audit preserves current provider limitations for legacy dynamic and smart criteria", async () => {

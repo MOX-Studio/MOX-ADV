@@ -152,8 +152,9 @@ function classifyHttp(response: Response, nowValue: string): never {
 }
 
 export class YandexDirectReadApi implements DirectAuditReadProvider {
+  readonly source = { provider: "YANDEX_DIRECT", channel: "OFFICIAL_API" } as const;
+  readonly account: string;
   private readonly token: string;
-  private readonly account: string;
   private readonly fetcher: FetchLike;
   private readonly now: () => string;
 
