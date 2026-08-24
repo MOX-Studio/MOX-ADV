@@ -693,7 +693,8 @@ export async function buildAnalyticsEvidence({
   const ownerObservedAts = Object.values(fieldEvidence).map((item) => isoTimestamp(record(item).owner_confirmed_at));
   const rawMarketInput = record(context.market_evidence_input);
   const marketBatchObservedAt = isoTimestamp(record(rawMarketInput.wordstat_batch).batch_finished_at);
-  const asOf = latestTimestamp([siteObservedAt, directObservedAt, metrikaObservedAt, marketBatchObservedAt, ...competitorObservedAts, ...ownerObservedAts])
+  const marketCostObservedAts = list(rawMarketInput.cost_observations).map((item) => isoTimestamp(record(item).as_of));
+  const asOf = latestTimestamp([siteObservedAt, directObservedAt, metrikaObservedAt, marketBatchObservedAt, ...marketCostObservedAts, ...competitorObservedAts, ...ownerObservedAts])
     ?? "1970-01-01T00:00:00.000Z";
   const generated = isoTimestamp(generatedAt) ?? asOf;
   const marketInput = rawMarketInput.wordstat_batch
@@ -1412,7 +1413,7 @@ export async function buildAnalyticsEvidence({
     }));
   }
 
-  if (marketEvidence.cost.status !== "UNAVAILABLE") {
+  if (marketEvidence.cost.status === "AVAILABLE") {
     const normalizedCost = marketEvidence.cost;
     const boundedCost = safeValue(normalizedCost);
     const identity = await contentHash({
@@ -1440,6 +1441,7 @@ export async function buildAnalyticsEvidence({
         browser_cabinet_allowed: false,
         source_precedence: ["LEGACY_LIVE4_SCENARIO", "KEYWORDBIDS_V5_CURRENT_PROXY", "DIRECT_HISTORY_OWN_EMPIRICAL"],
         averaging_allowed: false,
+        maximum_age_days: normalizedCost.maximum_age_days,
       },
       extraction: {
         method: "qualified_source_selection",
@@ -1451,7 +1453,11 @@ export async function buildAnalyticsEvidence({
       normalized: normalizedCost,
       limitations: ["The selected range is a scenario or empirical range, not a performance guarantee."],
       qualityFlags: ["FIRST_QUALIFIED_SOURCE_NO_AVERAGING"],
-      providerMetadata: { precedence: normalizedCost.aggregation },
+      providerMetadata: {
+        precedence: normalizedCost.aggregation,
+        selected_observation_id: normalizedCost.selected_observation_id,
+        candidate_dispositions: normalizedCost.candidate_dispositions,
+      },
       asOf,
     });
     evidence.push(costRecord);

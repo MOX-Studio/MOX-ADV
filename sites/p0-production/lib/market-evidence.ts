@@ -809,8 +809,13 @@ export type DirectComparableCandidate = {
   candidate_key: string;
   keyword_id: string;
   phrase: string;
+  source: "YANDEX_DIRECT_REPORTS_API";
+  currency: string;
+  vat_treatment: "INCLUDED";
+  observed_at: string;
   owner_scope: {
     phrase: "Точное совпадение";
+    phrase_value: string;
     geography: string;
     placement: "Результаты поиска";
     strategy: "Максимум кликов";
@@ -888,21 +893,41 @@ export async function qualifyDirectComparableCandidates(input: {
   targetStrategy: "WB_MAXIMUM_CLICKS";
   observedAt: string;
   minimumClicks: number;
+  currency: string;
+  maximumAuditAgeMs?: number;
 }) {
   const methodsNotRead = Array.isArray(input.audit.methods_not_read) ? input.audit.methods_not_read : [];
-  const complete = input.audit.status === "COMPLETE"
-    && input.audit.graph_complete === true
-    && methodsNotRead.length === 0
-    && Number.isFinite(Date.parse(input.observedAt));
-  if (!complete) {
+  const evaluatedAt = Date.parse(input.observedAt);
+  const auditObservedAt = Date.parse(String(input.audit.observed_at ?? ""));
+  const maximumAuditAgeMs = input.maximumAuditAgeMs ?? 5 * 60_000;
+  const auditStale = Number.isFinite(evaluatedAt)
+    && Number.isFinite(auditObservedAt)
+    && (auditObservedAt > evaluatedAt || evaluatedAt - auditObservedAt > maximumAuditAgeMs);
+  const auditFailure = auditStale
+    ? "DIRECT_AUDIT_STALE" as const
+    : input.audit.status !== "COMPLETE"
+      || input.audit.graph_complete !== true
+      || methodsNotRead.length > 0
+      || !Number.isFinite(evaluatedAt)
+      || !Number.isFinite(auditObservedAt)
+      ? "COMPLETE_DIRECT_AUDIT_REQUIRED" as const
+      : !normalizedText(input.currency)
+        ? "DIRECT_CURRENCY_UNAVAILABLE" as const
+        : null;
+  if (auditFailure) {
     return {
       status: "UNAVAILABLE" as const,
       qualified: [] as DirectComparableCandidate[],
       rejected_count: 0,
-      reason: "COMPLETE_DIRECT_AUDIT_REQUIRED" as const,
+      reason: auditFailure,
+      rejection_reasons: [{ code: auditFailure, count: 1 }],
       owner_summary: {
         source: "Собственная история Яндекс Директа",
-        conclusion: "Сопоставимая стоимость недоступна: полный аудит аккаунта не завершён.",
+        conclusion: auditFailure === "DIRECT_AUDIT_STALE"
+          ? "Сопоставимая стоимость недоступна: полный аудит аккаунта устарел."
+          : auditFailure === "DIRECT_CURRENCY_UNAVAILABLE"
+            ? "Сопоставимая стоимость недоступна: валюта рекламного аккаунта не подтверждена."
+            : "Сопоставимая стоимость недоступна: полный аудит аккаунта не завершён.",
       },
     };
   }
@@ -927,6 +952,7 @@ export async function qualifyDirectComparableCandidates(input: {
       qualified: [] as DirectComparableCandidate[],
       rejected_count: keywords.length,
       reason: "COMPLETE_DIRECT_COMPARISON_ARTIFACTS_REQUIRED" as const,
+      rejection_reasons: [{ code: "COMPLETE_DIRECT_COMPARISON_ARTIFACTS_REQUIRED" as const, count: Math.max(1, keywords.length) }],
       owner_summary: {
         source: "Собственная история Яндекс Директа",
         conclusion: "Сопоставимая стоимость недоступна: в полном аудите нет всех объектов и выборки для квалификации.",
@@ -936,6 +962,8 @@ export async function qualifyDirectComparableCandidates(input: {
   const targetPhrases = new Set(input.targetPhrases.map(normalizedPhrase).filter(Boolean));
   const reportRows = reportArtifacts.flatMap((artifact) => parseTsv(artifact.tsv));
   const qualified: DirectComparableCandidate[] = [];
+  const rejectionCounts = new Map<string, number>();
+  const reject = (code: string) => rejectionCounts.set(code, (rejectionCounts.get(code) ?? 0) + 1);
   for (const keyword of keywords) {
     const keywordId = String(keyword.Id ?? "");
     const campaignId = String(keyword.CampaignId ?? "");
@@ -943,9 +971,22 @@ export async function qualifyDirectComparableCandidates(input: {
     const phrase = normalizedText(keyword.Keyword);
     const campaign = campaigns.get(campaignId);
     const adGroup = adGroups.get(adGroupId);
-    if (!keywordId || !campaign || !adGroup || !targetPhrases.has(normalizedPhrase(phrase))) continue;
-    if (keyword.State !== "ON" || !["ACCEPTED", "DRAFT"].includes(String(keyword.Status ?? ""))) continue;
-    if (!exactSet(Array.isArray(adGroup.RegionIds) ? adGroup.RegionIds : [], input.targetRegionIds)) continue;
+    if (!keywordId || !campaign || !adGroup) {
+      reject("DIRECT_GRAPH_SCOPE_MISSING");
+      continue;
+    }
+    if (!targetPhrases.has(normalizedPhrase(phrase))) {
+      reject("PHRASE_INCOMPARABLE");
+      continue;
+    }
+    if (keyword.State !== "ON" || !["ACCEPTED", "DRAFT"].includes(String(keyword.Status ?? ""))) {
+      reject("KEYWORD_NOT_ACTIVE");
+      continue;
+    }
+    if (!exactSet(Array.isArray(adGroup.RegionIds) ? adGroup.RegionIds : [], input.targetRegionIds)) {
+      reject("GEOGRAPHY_INCOMPARABLE");
+      continue;
+    }
     const bidding = nestedRecord(campaign, "UnifiedCampaign", "BiddingStrategy");
     const search = objectRecord(bidding.Search);
     const placements = objectRecord(search.PlacementTypes);
@@ -953,21 +994,34 @@ export async function qualifyDirectComparableCandidates(input: {
       && placements.SearchResults === "YES"
       && placements.ProductGallery !== "YES"
       && objectRecord(bidding.Network).BiddingStrategyType === "SERVING_OFF";
-    if (!placementSame || search.BiddingStrategyType !== input.targetStrategy) continue;
+    if (!placementSame) {
+      reject("PLACEMENT_INCOMPARABLE");
+      continue;
+    }
+    if (search.BiddingStrategyType !== input.targetStrategy) {
+      reject("STRATEGY_INCOMPARABLE");
+      continue;
+    }
     const rows = reportRows.filter((row) => String(row.CriteriaId ?? "") === keywordId
       && String(row.CampaignId ?? "") === campaignId
       && String(row.AdGroupId ?? "") === adGroupId
       && normalizedPhrase(row.MatchedKeyword) === normalizedPhrase(phrase)
       && currentAuditSeason(String(row.Date ?? ""), input.observedAt));
     const clicks = rows.reduce((sum, row) => sum + (finiteNonNegative(row.Clicks) ?? 0), 0);
-    if (clicks < Math.max(1, input.minimumClicks)) continue;
+    if (clicks < Math.max(1, input.minimumClicks)) {
+      reject(rows.length ? "SAMPLE_INSUFFICIENT" : "CURRENT_SEASON_SAMPLE_UNAVAILABLE");
+      continue;
+    }
     const daily = Map.groupBy(rows, (row) => String(row.Date ?? ""));
     const dailyCpc = [...daily.values()].map((dayRows) => {
       const dayClicks = dayRows.reduce((sum, row) => sum + (finiteNonNegative(row.Clicks) ?? 0), 0);
       const dayCost = dayRows.reduce((sum, row) => sum + (finiteNonNegative(row.Cost) ?? 0), 0);
       return dayClicks > 0 ? Math.round((dayCost / dayClicks) * 100) / 100 : null;
     }).filter((value): value is number => value !== null);
-    if (!dailyCpc.length) continue;
+    if (!dailyCpc.length) {
+      reject("CPC_SAMPLE_UNAVAILABLE");
+      continue;
+    }
     const period = rows.map((row) => String(row.Date ?? "")).filter(Boolean).sort();
     const candidateKey = await sha256({
       audit_observed_at: input.audit.observed_at ?? input.observedAt,
@@ -983,8 +1037,13 @@ export async function qualifyDirectComparableCandidates(input: {
       candidate_key: candidateKey,
       keyword_id: keywordId,
       phrase,
+      source: "YANDEX_DIRECT_REPORTS_API",
+      currency: normalizedText(input.currency),
+      vat_treatment: "INCLUDED",
+      observed_at: new Date(auditObservedAt).toISOString(),
       owner_scope: {
         phrase: "Точное совпадение",
+        phrase_value: phrase,
         geography: input.targetRegionNames.map(normalizedText).join(", "),
         placement: "Результаты поиска",
         strategy: "Максимум кликов",
@@ -1009,11 +1068,15 @@ export async function qualifyDirectComparableCandidates(input: {
     });
   }
   qualified.sort((left, right) => right.sample.clicks - left.sample.clicks || left.candidate_key.localeCompare(right.candidate_key));
+  const rejectionReasons = [...rejectionCounts.entries()]
+    .map(([code, count]) => ({ code, count }))
+    .sort((left, right) => left.code.localeCompare(right.code));
   return {
     status: qualified.length ? "AVAILABLE" as const : "UNAVAILABLE" as const,
     qualified,
     rejected_count: Math.max(0, keywords.length - qualified.length),
     reason: qualified.length ? null : "NO_FULLY_QUALIFIED_COMPARABLE_CANDIDATE" as const,
+    rejection_reasons: rejectionReasons,
     owner_summary: {
       source: "Собственная история Яндекс Директа",
       conclusion: qualified.length
@@ -1104,7 +1167,7 @@ function commonCostQualification(observation: CostObservation) {
     && Object.keys(observation.scope ?? {}).length > 0
     && Number.isFinite(Date.parse(observation.as_of))
     && Boolean(normalizedText(observation.currency))
-    && ["INCLUDED", "EXCLUDED", "NOT_APPLICABLE", "UNKNOWN"].includes(observation.vat_treatment)
+    && ["INCLUDED", "EXCLUDED", "NOT_APPLICABLE"].includes(observation.vat_treatment)
     && Number.isFinite(observation.sample_size?.value)
     && observation.sample_size.value > 0
     && Boolean(normalizedText(observation.sample_size?.unit))
@@ -1115,8 +1178,12 @@ function commonCostQualification(observation: CostObservation) {
     && Number(range?.high) >= Number(range?.low);
 }
 
-function qualifiedCost(observation: CostObservation) {
-  if (!commonCostQualification(observation)) return false;
+type CostSelectionOptions = {
+  evaluatedAt?: string;
+  maximumAgeDays?: number;
+};
+
+function sourceQualification(observation: CostObservation) {
   if (observation.source === "LEGACY_LIVE4_SCENARIO") {
     return observation.qualification.account_specific === true
       && observation.qualification.capability_status === "AVAILABLE"
@@ -1143,35 +1210,91 @@ function qualifiedCost(observation: CostObservation) {
     && observation.scope.season === "SAME";
 }
 
-function costReason(observation: CostObservation) {
-  if (observation.unavailable_reason) return normalizedText(observation.unavailable_reason);
-  return `${observation.source}_NOT_QUALIFIED:${normalizedText(observation.observation_id) || "unknown"}`;
+function costQualificationReasons(observation: CostObservation, options: CostSelectionOptions) {
+  const reasons: string[] = [];
+  if (!commonCostQualification(observation)) {
+    reasons.push(observation.vat_treatment === "UNKNOWN" ? "VAT_TREATMENT_UNKNOWN" : "COST_EVIDENCE_CONTRACT_INCOMPLETE");
+  } else if (!sourceQualification(observation)) reasons.push("COST_SCOPE_INCOMPARABLE");
+  if (options.evaluatedAt !== undefined) {
+    const evaluatedAt = Date.parse(options.evaluatedAt);
+    const observedAt = Date.parse(observation.as_of);
+    const maximumAgeDays = options.maximumAgeDays ?? 93;
+    if (!Number.isFinite(evaluatedAt) || !Number.isFinite(observedAt)) reasons.push("COST_OBSERVATION_DATE_INVALID");
+    else if (observedAt > evaluatedAt) reasons.push("FUTURE_COST_OBSERVATION");
+    else if (evaluatedAt - observedAt > maximumAgeDays * 24 * 60 * 60 * 1_000) reasons.push("STALE_COST_OBSERVATION");
+  }
+  return [...new Set(reasons)].sort();
 }
 
-export function selectCostEvidence(rawObservations: CostObservation[]) {
+function costReason(observation: CostObservation, reasons: string[]) {
+  if (observation.unavailable_reason) return normalizedText(observation.unavailable_reason);
+  const identity = normalizedText(observation.observation_id) || "unknown";
+  if (reasons.includes("STALE_COST_OBSERVATION")) return `STALE_COST_OBSERVATION:${identity}`;
+  if (reasons.includes("FUTURE_COST_OBSERVATION")) return `FUTURE_COST_OBSERVATION:${identity}`;
+  return `${observation.source}_NOT_QUALIFIED:${identity}`;
+}
+
+function comparableCostScope(observation: CostObservation) {
+  const scope = observation.scope;
+  const comparison = objectRecord(scope.comparison);
+  const dimensions = ["phrase", "geography", "placement", "strategy", "season"] as const;
+  if (dimensions.some((dimension) => !normalizedText(scope[dimension]))) return null;
+  return JSON.stringify({
+    ...Object.fromEntries(dimensions.map((dimension) => [dimension, normalizedText(scope[dimension])])),
+    phrase_value: normalizedPhrase(comparison.phrase_value),
+    comparison_geography: normalizedText(comparison.geography),
+    comparison_placement: normalizedText(comparison.placement),
+    comparison_strategy: normalizedText(comparison.strategy),
+    comparison_season: normalizedText(comparison.season),
+  });
+}
+
+export function selectCostEvidence(rawObservations: CostObservation[], options: CostSelectionOptions = {}) {
   const observations = [...rawObservations].sort((left, right) => left.source.localeCompare(right.source)
     || right.as_of.localeCompare(left.as_of)
     || left.observation_id.localeCompare(right.observation_id));
+  const evaluations = new Map(observations.map((observation) => [observation.observation_id, costQualificationReasons(observation, options)]));
+  const qualified = observations.filter((observation) => evaluations.get(observation.observation_id)?.length === 0);
   let selected: CostObservation | null = null;
   for (const source of COST_PRECEDENCE) {
-    selected = observations
-      .filter((observation) => observation.source === source && qualifiedCost(observation))
+    selected = qualified
+      .filter((observation) => observation.source === source)
       .sort((left, right) => right.as_of.localeCompare(left.as_of) || left.observation_id.localeCompare(right.observation_id))[0] ?? null;
     if (selected) break;
   }
-  const missingReasons = observations.filter((observation) => !qualifiedCost(observation)).map(costReason);
-  const qualified = observations.filter(qualifiedCost);
+  const missingReasons = observations
+    .filter((observation) => (evaluations.get(observation.observation_id)?.length ?? 0) > 0)
+    .map((observation) => costReason(observation, evaluations.get(observation.observation_id) ?? []));
+  const selectedScope = selected ? comparableCostScope(selected) : null;
   const conflicting = selected ? qualified.some((observation) => observation.observation_id !== selected?.observation_id
+    && selectedScope !== null
+    && comparableCostScope(observation) === selectedScope
     && observation.currency === selected?.currency
     && observation.vat_treatment === selected?.vat_treatment
     && Boolean(observation.range && selected?.range)
     && (Number(observation.range?.high) < Number(selected?.range?.low) || Number(selected?.range?.high) < Number(observation.range?.low))) : false;
   if (conflicting) missingReasons.push("CONFLICTING_COST_EVIDENCE");
-  if (!selected) {
+  const candidateDispositions = observations.map((observation) => {
+    const reasonCodes = evaluations.get(observation.observation_id) ?? [];
+    return {
+      observation_id: observation.observation_id,
+      source: observation.source,
+      disposition: reasonCodes.length
+        ? "REJECTED" as const
+        : conflicting && comparableCostScope(observation) === selectedScope
+          ? "CONFLICTING" as const
+          : observation.observation_id === selected?.observation_id
+            ? "SELECTED" as const
+            : "QUALIFIED_NOT_SELECTED" as const,
+      reason_codes: reasonCodes.length ? reasonCodes : conflicting && comparableCostScope(observation) === selectedScope ? ["CONFLICTING_COST_EVIDENCE"] : [],
+    };
+  });
+  if (!selected || conflicting) {
     if (!observations.length) missingReasons.push("NO_QUALIFIED_PRELAUNCH_COST_SOURCE");
     return {
       status: "UNAVAILABLE" as const,
       compact_source: null,
+      selected_observation_id: null,
       scenario: null,
       scope: null,
       as_of: null,
@@ -1180,13 +1303,17 @@ export function selectCostEvidence(rawObservations: CostObservation[]) {
       sample_size: null,
       range: null,
       aggregation: "FIRST_QUALIFIED_SOURCE_NO_AVERAGING" as const,
+      evaluated_at: options.evaluatedAt ?? null,
+      maximum_age_days: options.evaluatedAt === undefined ? null : options.maximumAgeDays ?? 93,
       observations,
+      candidate_dispositions: candidateDispositions,
       missing_or_conflict_reasons: [...new Set(missingReasons)],
     };
   }
   return {
-    status: conflicting ? "CONFLICTING" as const : "AVAILABLE" as const,
+    status: "AVAILABLE" as const,
     compact_source: selected.source,
+    selected_observation_id: selected.observation_id,
     scenario: selected.scenario,
     scope: selected.scope,
     as_of: selected.as_of,
@@ -1195,7 +1322,10 @@ export function selectCostEvidence(rawObservations: CostObservation[]) {
     sample_size: selected.sample_size,
     range: selected.range,
     aggregation: "FIRST_QUALIFIED_SOURCE_NO_AVERAGING" as const,
+    evaluated_at: options.evaluatedAt ?? null,
+    maximum_age_days: options.evaluatedAt === undefined ? null : options.maximumAgeDays ?? 93,
     observations,
+    candidate_dispositions: candidateDispositions,
     missing_or_conflict_reasons: [...new Set(missingReasons)],
   };
 }
@@ -1543,7 +1673,11 @@ function containsSensitiveMarketInput(value: unknown): boolean {
 export async function buildMarketEvidence(input: MarketEvidenceInput) {
   if (containsSensitiveMarketInput(input)) throw new Error("Market evidence contains credential-bearing input and cannot be persisted.");
   const frequency = await buildScopedDemandEvidence(input.wordstat_batch, input.demand_clusters);
-  const cost = selectCostEvidence(input.cost_observations ?? []);
+  const costEvaluationAt = [
+    input.wordstat_batch.batch_finished_at,
+    ...(input.cost_observations ?? []).map((observation) => observation.as_of),
+  ].filter((value) => Number.isFinite(Date.parse(value))).sort().at(-1) ?? input.wordstat_batch.batch_finished_at;
+  const cost = selectCostEvidence(input.cost_observations ?? [], { evaluatedAt: costEvaluationAt, maximumAgeDays: 93 });
   const relationshipAssessments = input.relationship_observations?.length
     ? input.relationship_observations
     : input.demand_clusters.map((cluster) => ({

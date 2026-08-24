@@ -363,8 +363,14 @@ test("persists official scoped demand and qualified cost inside the content-addr
   assert.equal(snapshot.market_evidence.frequency.status, "AVAILABLE");
   assert.deepEqual(snapshot.market_evidence.frequency.observed_unique_count, { value: 67, semantics: "LOWER_BOUND_OBSERVED_TOP_ROWS" });
   assert.equal(snapshot.market_evidence.cost.compact_source, "DIRECT_HISTORY_OWN_EMPIRICAL");
+  assert.equal(snapshot.market_evidence.cost.selected_observation_id, "history-1");
+  assert.equal(snapshot.market_evidence.cost.candidate_dispositions[0].disposition, "SELECTED");
+  assert.equal(snapshot.prelaunch_cost.selected_observation_id, "history-1");
   assert.equal(snapshot.sources.find((source) => source.source_id === "wordstat")?.status, "VERIFIED");
   assert.ok(snapshot.evidence.some((record) => record.source_kind === "wordstat_api"));
+  const costRecord = snapshot.evidence.find((record) => record.source_kind === "direct_cost_evidence");
+  assert.equal(costRecord?.provider_metadata.selected_observation_id, "history-1");
+  assert.equal(costRecord?.provider_metadata.candidate_dispositions[0].disposition, "SELECTED");
   assert.match(snapshot.hashes.market_evidence_sha256, /^sha256:[a-f0-9]{64}$/);
   assert.equal(await verifyAnalyticsEvidenceSnapshot(snapshot), true);
 
@@ -372,6 +378,16 @@ test("persists official scoped demand and qualified cost inside the content-addr
   corrupted.market_evidence.frequency.observed_unique_count.value = 999999;
   assert.equal(await verifyAnalyticsEvidenceSnapshot(corrupted), false);
   assert.doesNotMatch(JSON.stringify(snapshot), /fixture-only|fixture-client/iu);
+
+  const staleInput = structuredClone(input);
+  staleInput.context.market_evidence_input.cost_observations[0].as_of = "2026-01-01T00:00:00.000Z";
+  const staleSnapshot = await buildAnalyticsEvidence(staleInput);
+  assert.equal(staleSnapshot.market_evidence.cost.status, "UNAVAILABLE");
+  assert.equal(staleSnapshot.market_evidence.cost.range, null);
+  assert.equal(staleSnapshot.claims.some((claim) => claim.predicate === "qualified_cost_range"), false);
+  assert.ok(staleSnapshot.gaps.some((gap) => gap.code === "PRELAUNCH_COST_UNAVAILABLE"
+    && gap.limitations.includes("STALE_COST_OBSERVATION:history-1")));
+  assert.equal(await verifyAnalyticsEvidenceSnapshot(staleSnapshot), true);
 });
 
 test("keeps first-party public and owner-confirmed provenance in separate source manifests and Evidence Records", async () => {

@@ -250,7 +250,11 @@ function goalTriggerSignature(goal: Record<string, unknown>) {
   return [...conditions, ...steps].join("|");
 }
 
-function measurementChecks(context: Record<string, unknown>, qualifiedResult: string, nowValue: string) {
+function measurementChecks(
+  context: Record<string, unknown>,
+  qualifiedResult: string,
+  nowValue: string,
+): MeasurementDestinationReadiness["measurement"] {
   const metrika = record(context.metrika);
   const binding = record(metrika.binding);
   const goalBinding = record(metrika.goal_binding);

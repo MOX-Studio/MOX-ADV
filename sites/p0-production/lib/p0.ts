@@ -582,6 +582,8 @@ async function readMarketEvidence({
     : Array.isArray(audit.artifact_references) ? audit.artifact_references.map(record) : [];
   const artifacts = (await Promise.all(references.map((reference) => artifactStore.getArtifact(String(reference.artifact_id ?? "")))))
     .filter((artifact): artifact is NonNullable<typeof artifact> => artifact !== null);
+  const capability = record(direct.capability_snapshot);
+  const currency = cleanText(String(capability.currency ?? runtime.YANDEX_DIRECT_CURRENCY ?? "RUB"), 10);
   const comparable = await qualifyDirectComparableCandidates({
     audit,
     artifacts,
@@ -592,9 +594,8 @@ async function readMarketEvidence({
     targetStrategy: researchPlan.comparable_cost_scope.strategy,
     observedAt: generatedAt,
     minimumClicks: researchPlan.comparable_cost_scope.minimum_click_sample,
+    currency,
   });
-  const capability = record(direct.capability_snapshot);
-  const currency = cleanText(String(capability.currency ?? runtime.YANDEX_DIRECT_CURRENCY ?? "RUB"), 10);
   const trafficVolumes = String(runtime.P0_COMPARABLE_TRAFFIC_VOLUMES ?? "")
     .split(",")
     .map(Number)

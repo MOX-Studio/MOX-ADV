@@ -117,11 +117,17 @@ test("qualifies comparable Direct candidates only from one complete audit before
     targetStrategy: "WB_MAXIMUM_CLICKS",
     observedAt: "2026-08-21T10:00:00.000Z",
     minimumClicks: 3,
+    currency: "RUB",
   });
 
   assert.equal(candidates.status, "AVAILABLE");
   assert.equal(candidates.qualified.length, 1);
   assert.equal(candidates.qualified[0].keyword_id, "keyword-technical-id");
+  assert.equal(candidates.qualified[0].source, "YANDEX_DIRECT_REPORTS_API");
+  assert.equal(candidates.qualified[0].currency, "RUB");
+  assert.equal(candidates.qualified[0].vat_treatment, "INCLUDED");
+  assert.equal(candidates.qualified[0].observed_at, "2026-08-21T10:00:00.000Z");
+  assert.equal(candidates.qualified[0].owner_scope.phrase_value, "участие в выставке");
   assert.deepEqual(candidates.qualified[0].qualification, {
     complete_direct_audit: true,
     phrase: "SAME",
@@ -154,6 +160,7 @@ test("qualifies comparable Direct candidates only from one complete audit before
     targetStrategy: "WB_MAXIMUM_CLICKS",
     observedAt: "2026-08-21T10:00:00.000Z",
     minimumClicks: 3,
+    currency: "RUB",
   });
   assert.equal(partial.status, "UNAVAILABLE");
   assert.equal(partial.qualified.length, 0);
@@ -171,9 +178,41 @@ test("qualifies comparable Direct candidates only from one complete audit before
     targetStrategy: "WB_MAXIMUM_CLICKS",
     observedAt: "2026-08-21T10:00:00.000Z",
     minimumClicks: 3,
+    currency: "RUB",
   });
   assert.equal(rejectedHistory.status, "UNAVAILABLE");
   assert.equal(rejectedHistory.reason, "COMPLETE_DIRECT_COMPARISON_ARTIFACTS_REQUIRED");
+
+  const stale = await qualifyDirectComparableCandidates({
+    audit: { ...completeAudit, observed_at: "2026-08-20T09:59:59.000Z" },
+    artifacts,
+    targetPhrases: ["участие в выставке"],
+    targetRegionIds: [213],
+    targetRegionNames: ["Москва"],
+    targetPlacement: "SEARCH_RESULTS",
+    targetStrategy: "WB_MAXIMUM_CLICKS",
+    observedAt: "2026-08-21T10:00:00.000Z",
+    minimumClicks: 3,
+    currency: "RUB",
+  });
+  assert.equal(stale.status, "UNAVAILABLE");
+  assert.equal(stale.reason, "DIRECT_AUDIT_STALE");
+  assert.deepEqual(stale.rejection_reasons, [{ code: "DIRECT_AUDIT_STALE", count: 1 }]);
+
+  const wrongGeography = await qualifyDirectComparableCandidates({
+    audit: completeAudit,
+    artifacts,
+    targetPhrases: ["участие в выставке"],
+    targetRegionIds: [2],
+    targetRegionNames: ["Санкт-Петербург"],
+    targetPlacement: "SEARCH_RESULTS",
+    targetStrategy: "WB_MAXIMUM_CLICKS",
+    observedAt: "2026-08-21T10:00:00.000Z",
+    minimumClicks: 3,
+    currency: "RUB",
+  });
+  assert.equal(wrongGeography.status, "UNAVAILABLE");
+  assert.deepEqual(wrongGeography.rejection_reasons, [{ code: "GEOGRAPHY_INCOMPARABLE", count: 1 }]);
 });
 
 test("market evidence rejects credential-bearing input before snapshot persistence", async () => {
@@ -320,6 +359,10 @@ test("official Direct adapter qualifies a current comparable existing keyword au
   assert.deepEqual(observation.range, { low: 120, high: 180, kind: "SCENARIO" });
   assert.equal(observation.qualification.complete_direct_audit, true);
   assert.equal(observation.qualification.sample, "QUALIFIED");
+  assert.equal(observation.currency, "RUB");
+  assert.equal(observation.vat_treatment, "EXCLUDED");
+  assert.equal(observation.as_of, "2026-08-21T10:00:00.000Z");
+  assert.deepEqual(observation.sample_size, { unit: "auction_scenarios", value: 2 });
   assert.doesNotMatch(JSON.stringify(observation), /fixture-direct-secret|9007199254740993|keyword_id|campaign_id|ad_group_id/iu);
 });
 
@@ -378,11 +421,13 @@ test("cost evidence stops at the first qualified source and never averages sourc
   const conflictingAuction = structuredClone(observations[1]);
   conflictingAuction.vat_treatment = "INCLUDED";
   conflictingAuction.range = { low: 300, high: 400, kind: "SCENARIO" };
-  const conflicting = selectCostEvidence([observations[2], conflictingAuction]);
-  assert.equal(conflicting.status, "CONFLICTING");
-  assert.equal(conflicting.compact_source, "LEGACY_LIVE4_SCENARIO");
-  assert.deepEqual(conflicting.range, { low: 105, high: 165, kind: "SCENARIO" });
-  assert.ok(conflicting.missing_or_conflict_reasons.includes("CONFLICTING_COST_EVIDENCE"));
+  const incompatible = selectCostEvidence([observations[2], conflictingAuction], { evaluatedAt: "2026-08-21T10:00:00.000Z" });
+  assert.equal(incompatible.status, "AVAILABLE");
+  assert.equal(incompatible.compact_source, "LEGACY_LIVE4_SCENARIO");
+  assert.deepEqual(incompatible.range, { low: 105, high: 165, kind: "SCENARIO" });
+  assert.equal(incompatible.aggregation, "FIRST_QUALIFIED_SOURCE_NO_AVERAGING");
+  assert.equal(incompatible.candidate_dispositions.filter((item) => item.disposition === "SELECTED").length, 1);
+  assert.ok(incompatible.candidate_dispositions.some((item) => item.disposition === "QUALIFIED_NOT_SELECTED"));
 });
 
 test("cost precedence falls through only when a source is unqualified and returns explicit unavailable without bounds", () => {
@@ -443,6 +488,22 @@ test("cost precedence falls through only when a source is unqualified and return
   assert.equal(unavailable.currency, null);
   assert.ok(unavailable.missing_or_conflict_reasons.includes("LIVE4_CAPABILITY_UNAVAILABLE"));
   assert.ok(unavailable.missing_or_conflict_reasons.some((reason) => reason.includes("KEYWORDBIDS_V5_CURRENT_PROXY")));
+
+  const staleHistory = structuredClone(history);
+  staleHistory.as_of = "2026-01-01T00:00:00.000Z";
+  const stale = selectCostEvidence([staleHistory], {
+    evaluatedAt: "2026-08-21T10:00:00.000Z",
+    maximumAgeDays: 93,
+  });
+  assert.equal(stale.status, "UNAVAILABLE");
+  assert.equal(stale.range, null);
+  assert.ok(stale.missing_or_conflict_reasons.includes("STALE_COST_OBSERVATION:history-fallback"));
+  assert.deepEqual(stale.candidate_dispositions, [{
+    observation_id: "history-fallback",
+    source: "DIRECT_HISTORY_OWN_EMPIRICAL",
+    disposition: "REJECTED",
+    reason_codes: ["STALE_COST_OBSERVATION"],
+  }]);
 });
 
 test("overlap taxonomy keeps duplicates, coverage, risk, observed cannibalization and unknown distinct", () => {
