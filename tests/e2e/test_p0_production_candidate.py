@@ -321,6 +321,40 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 self.assertIn("НДС включён", demand_cost.inner_text())
                 self.assertIn("42 clicks", demand_cost.inner_text())
                 self.assertNotIn("keyword_id", demand_cost.inner_text())
+                direct_report = page.get_by_role(
+                    "region", name="Отчёт о текущем продвижении", exact=True
+                )
+                self.assertTrue(direct_report.is_visible())
+                self.assertEqual("filled", direct_report.get_attribute("data-report-state"))
+                self.assertTrue(
+                    direct_report.get_by_text("Данные получены", exact=True).is_visible()
+                )
+                self.assertEqual(
+                    ["КАМПАНИИ\n1\nТекущие кампании в выбранном рекламном аккаунте", "ГРУППЫ ОБЪЯВЛЕНИЙ\n2\nСвязанные группы в том же снимке", "ОБЪЯВЛЕНИЯ\n3\nОбъявления без внутренних идентификаторов", "УСЛОВИЯ ПОКАЗА\n6\nКлючевые фразы и автотаргетинги вместе"],
+                    direct_report.locator(".owner-direct-inventory article").all_inner_texts(),
+                )
+                self.assertTrue(
+                    direct_report.get_by_text(
+                        "Поиск · участие в выставке", exact=True
+                    ).is_visible()
+                )
+                self.assertTrue(
+                    direct_report.get_by_text("6 строк за период", exact=True).is_visible()
+                )
+                self.assertTrue(
+                    direct_report.get_by_text("4 достижения цели", exact=True).is_visible()
+                )
+                self.assertIn("30 визитов", direct_report.inner_text())
+                self.assertIn("не доказывает причинную эффективность", direct_report.inner_text())
+                for hidden_detail in [
+                    "9007199254740993123",
+                    "UNIFIED_CAMPAIGN",
+                    "direct-audit",
+                    "schema_version",
+                    "Campaigns.get",
+                    "SEARCH_QUERY_PERFORMANCE_REPORT",
+                ]:
+                    self.assertNotIn(hidden_detail, direct_report.inner_text())
                 competitor_matrix = page.locator(".owner-competitor-matrix")
                 self.assertTrue(
                     competitor_matrix.get_by_role(

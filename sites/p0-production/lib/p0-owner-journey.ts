@@ -52,6 +52,20 @@ export type OwnerJourneyProjection = {
     headline: string;
     rationale: string;
   } | null;
+  directReport: {
+    state: "filled" | "empty" | "partial" | "unavailable";
+    status: "Данные получены" | "Пустой срез" | "Данные частичные" | "Данные недоступны";
+    headline: string;
+    summary: string;
+    observedAt: string;
+    freshness: string;
+    inventory: Array<{ label: string; value: string; detail: string }>;
+    campaigns: Array<{ name: string; delivery: string; review: string }>;
+    queries: { status: "Доступно" | "Частично" | "Недоступно"; value: string; detail: string };
+    results: { status: "Доступно" | "Частично" | "Недоступно"; value: string; detail: string };
+    limitations: string[];
+    nextActions: string[];
+  } | null;
   competitorMatrix: {
     status: "Доступно" | "Частично" | "Недоступно";
     competitorSetRule: string;
@@ -302,6 +316,191 @@ export function ownerPublicBrandName(value: unknown, fallback = "Не указа
   for (const pattern of FORBIDDEN_TECHNICAL_TEXT) text = text.replace(pattern, "техническая деталь");
   text = text.replace(/\s+·\s*$/u, "").replace(/\s+/gu, " ").slice(0, maximum).trim();
   return text || fallback;
+}
+
+function ownerCount(value: unknown) {
+  const count = Number(value);
+  return Number.isSafeInteger(count) && count >= 0 ? count : null;
+}
+
+function ownerCountLabel(value: number | null) {
+  return value === null ? "Недоступно" : value.toLocaleString("ru-RU");
+}
+
+function ownerCountPhrase(value: unknown, one: string, few: string, many: string) {
+  const count = ownerCount(value);
+  if (count === null) return `${ownerText(value, "Недоступно", 40)} ${many}`;
+  const lastTwo = count % 100;
+  const last = count % 10;
+  const noun = lastTwo >= 11 && lastTwo <= 14 ? many : last === 1 ? one : last >= 2 && last <= 4 ? few : many;
+  return `${ownerCountLabel(count)} ${noun}`;
+}
+
+function ownerObservedAt(value: unknown) {
+  const date = new Date(String(value ?? ""));
+  if (!Number.isFinite(date.getTime())) return "Время наблюдения недоступно";
+  return `${new Intl.DateTimeFormat("ru-RU", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "UTC",
+  }).format(date)} UTC`;
+}
+
+const CAMPAIGN_DELIVERY_LABELS: Record<string, string> = {
+  ON: "Показы включены",
+  OFF: "Показы выключены",
+  SUSPENDED: "Остановлена",
+  ARCHIVED: "В архиве",
+};
+
+const CAMPAIGN_REVIEW_LABELS: Record<string, string> = {
+  ACCEPTED: "Принята рекламной системой",
+  DRAFT: "Черновик",
+  MODERATION: "На проверке рекламной системой",
+  REJECTED: "Отклонена рекламной системой",
+};
+
+function reportRowCount(report: Record<string, unknown>) {
+  return ownerCount(record(report.artifact_reference).object_count);
+}
+
+export function projectDirectAuditForOwner(snapshot: unknown): OwnerJourneyProjection["directReport"] {
+  const root = record(snapshot);
+  if (!Object.keys(root).length) return null;
+  const sources = list(root.sources).map(record);
+  const claims = list(root.claims).map(record);
+  const directSource = sources.find((source) => source.source_id === "direct");
+  const directClaim = claims.find((claim) => ["complete_account_audit", "campaign_inventory"].includes(String(claim.predicate)));
+  const directValue = record(directClaim?.value);
+  const audit = record(directValue.complete_read_audit);
+  const objectCounts = record(audit.object_counts);
+  const reports = list(audit.report_summaries).map(record);
+  const searchReport = reports.find((report) => String(report.report_key).includes("search-query") || String(report.report_type).includes("SEARCH_QUERY"));
+  const campaignReport = reports.find((report) => String(report.report_key).includes("campaign-performance") || String(report.report_type).includes("CAMPAIGN_PERFORMANCE"));
+  const metricClaim = claims.find((claim) => claim.predicate === "observed_performance");
+  const metricValue = record(metricClaim?.value);
+  const metricPeriod = record(metricValue.report);
+  const visitsCount = ownerCount(metricValue.visits);
+  const goalVisitsCount = ownerCount(metricValue.goal_visits);
+  const metricAvailable = visitsCount !== null || goalVisitsCount !== null;
+  const metricComplete = visitsCount !== null && goalVisitsCount !== null;
+  const sourceStatus = String(directSource?.status ?? "UNAVAILABLE");
+  const campaignCount = ownerCount(objectCounts.campaigns ?? directValue.campaigns_total);
+  const groupCount = ownerCount(objectCounts.adgroups);
+  const adCount = ownerCount(objectCounts.ads);
+  const keywordCount = ownerCount(objectCounts.keywords);
+  const autotargetingCount = ownerCount(objectCounts.autotargetings);
+  const targetingCount = keywordCount === null && autotargetingCount === null
+    ? null
+    : (keywordCount ?? 0) + (autotargetingCount ?? 0);
+  const searchRows = searchReport?.status === "COMPLETE" ? reportRowCount(searchReport) : null;
+  const campaignRows = campaignReport?.status === "COMPLETE" ? reportRowCount(campaignReport) : null;
+  const hasDirectClaim = Boolean(directClaim && Object.keys(directValue).length);
+  const auditStatus = String(audit.status ?? "");
+  const partial = hasDirectClaim && (sourceStatus === "PARTIAL" || auditStatus === "PARTIAL" || !Object.keys(audit).length);
+  const unavailable = sourceStatus === "UNAVAILABLE" || !hasDirectClaim;
+  const empty = !unavailable && !partial
+    && [campaignCount, groupCount, adCount, targetingCount, searchRows, campaignRows]
+      .every((count) => count === 0);
+  const state: NonNullable<OwnerJourneyProjection["directReport"]>["state"] = unavailable
+    ? "unavailable"
+    : partial ? "partial" : empty ? "empty" : "filled";
+  const stateCopy = {
+    filled: {
+      status: "Данные получены" as const,
+      headline: "Виден состав продвижения и наблюдаемые результаты",
+      summary: "Снимок связывает текущие кампании, объявления, условия показа и доступные отчёты. Это наблюдение, а не доказательство эффективности.",
+    },
+    empty: {
+      status: "Пустой срез" as const,
+      headline: "В проверенном срезе нет объектов продвижения",
+      summary: "Нулевые значения подтверждены доступным чтением. Они описывают этот аккаунт и момент наблюдения, но не историю бизнеса за пределами среза.",
+    },
+    partial: {
+      status: "Данные частичные" as const,
+      headline: "Часть продвижения видна, часть остаётся неизвестной",
+      summary: "Доступные объекты и отчёты показаны отдельно от пробелов. Недоступное не считается нулевым и не поддерживает вывод об эффективности.",
+    },
+    unavailable: {
+      status: "Данные недоступны" as const,
+      headline: "Текущую картину продвижения подтвердить нельзя",
+      summary: "Проверенного среза рекламного аккаунта нет. Активность неизвестна и не подменяется нулевыми значениями или предположениями.",
+    },
+  }[state];
+  const confidence = record(directClaim?.confidence);
+  const freshnessStatus = String(confidence.freshness ?? "unknown");
+  const freshness = ["fresh", "current"].includes(freshnessStatus)
+    ? "Актуально на момент снимка"
+    : freshnessStatus === "aging"
+      ? "Свежесть снижается"
+      : freshnessStatus === "stale" ? "Снимок требует обновления" : "Свежесть не подтверждена";
+  const queryAvailable = searchReport?.status === "COMPLETE" && searchRows !== null;
+  const queryPartial = Boolean(searchReport) && !queryAvailable;
+  const resultAvailable = campaignRows !== null || metricAvailable;
+  const campaigns = list(directValue.campaign_summaries).map(record).slice(0, 12).map((campaign) => ({
+    name: ownerText(campaign.name, "Кампания без названия", 160),
+    delivery: CAMPAIGN_DELIVERY_LABELS[String(campaign.state)] ?? "Состояние показов не подтверждено",
+    review: CAMPAIGN_REVIEW_LABELS[String(campaign.status)] ?? "Статус проверки не подтверждён",
+  }));
+  const limitations = [
+    "Снимок показывает наблюдаемое состояние и не доказывает причинную эффективность, прибыль или будущий результат.",
+    ...(state === "partial" ? ["Часть объектов или отчётов недоступна; недоступное нельзя считать нулевым, а решения допустимы только в пределах явно показанных данных."] : []),
+    ...(state === "unavailable" ? ["Текущая активность неизвестна и не должна трактоваться как отсутствие рекламы."] : []),
+    ...(queryAvailable || resultAvailable ? ["Статистика за последние три дня может уточняться рекламной системой."] : []),
+    ...(!metricComplete ? ["Наблюдение бизнес-результата за сопоставимый период неполно или недоступно."] : []),
+  ];
+  const nextActions = state === "filled"
+    ? [
+        "Сопоставить состав кампаний и объявлений с достижениями цели, не выдавая связь за причинный эффект.",
+        queryAvailable
+          ? "Использовать доступный срез поисковых запросов для отдельного анализа и исключений."
+          : "Сначала получить проверенный срез поисковых запросов, затем уточнять исключения.",
+      ]
+    : state === "empty"
+      ? [
+          "Если продвижение ожидалось, проверить выбранный бизнес-аккаунт и момент наблюдения.",
+          "Не создавать вывод об эффективности из отсутствия объектов в одном подтверждённом срезе.",
+        ]
+      : state === "partial"
+        ? [
+            "Опираться только на отмеченные доступные части; пробелы не считать нулевыми значениями.",
+            "Восстановить недоступный объём чтения до решений, зависящих от полной картины.",
+          ]
+        : [
+            "Восстановить подтверждённый доступ к выбранному рекламному аккаунту.",
+            "Не принимать решений о текущей активности до нового проверенного снимка.",
+          ];
+  return {
+    state,
+    ...stateCopy,
+    observedAt: ownerObservedAt(directSource?.observed_at),
+    freshness,
+    inventory: [
+      { label: "Кампании", value: ownerCountLabel(campaignCount), detail: "Текущие кампании в выбранном рекламном аккаунте" },
+      { label: "Группы объявлений", value: ownerCountLabel(groupCount), detail: "Связанные группы в том же снимке" },
+      { label: "Объявления", value: ownerCountLabel(adCount), detail: "Объявления без внутренних идентификаторов" },
+      { label: "Условия показа", value: ownerCountLabel(targetingCount), detail: "Ключевые фразы и автотаргетинги вместе" },
+    ],
+    campaigns,
+    queries: {
+      status: queryAvailable ? "Доступно" : queryPartial ? "Частично" : "Недоступно",
+      value: queryAvailable ? `${ownerCountPhrase(searchRows, "строка", "строки", "строк")} за период` : "Нет проверенного отчёта",
+      detail: queryAvailable
+        ? "Показано проверенное количество строк; сами формулировки остаются в защищённом исходном отчёте."
+        : "Поисковые запросы неизвестны и не считаются пустыми.",
+    },
+    results: {
+      status: resultAvailable ? metricComplete && campaignRows !== null ? "Доступно" : "Частично" : "Недоступно",
+      value: goalVisitsCount !== null
+        ? `${ownerCountPhrase(goalVisitsCount, "достижение", "достижения", "достижений")} цели`
+        : campaignRows !== null ? `${ownerCountPhrase(campaignRows, "строка", "строки", "строк")} результата` : "Достижения цели недоступны",
+      detail: metricAvailable
+        ? `${visitsCount === null ? "Визиты недоступны" : ownerCountPhrase(visitsCount, "визит", "визита", "визитов")} за ${ownerText(metricPeriod.period_start, "начало периода не указано", 40)} — ${ownerText(metricPeriod.period_end, "конец периода не указан", 40)}. ${goalVisitsCount === null ? "Достижения цели не подтверждены. " : ""}Это наблюдение Метрики, не оценка прибыли.`
+        : "Нет сопоставимого наблюдения бизнес-результата; эффективность не оценивается.",
+    },
+    limitations,
+    nextActions,
+  };
 }
 
 function answerValue(state: InternalState, fieldId: string): unknown {
@@ -1377,6 +1576,7 @@ async function project(
     } : {}),
     businessOutcome: outcome(view, stage, unknowns),
     currentRecommendation: recommendation(view, stage),
+    directReport: projectDirectAuditForOwner(view.state.analytics_evidence_snapshot),
     competitorMatrix: competitorMatrixProjection(view.state),
     demandCostResearch: projectDemandCostResearchForOwner(view.state.analytics_evidence_snapshot),
     businessModel: businessModelProjection(view.state),
@@ -1504,6 +1704,7 @@ async function projectAccessOnly(
       headline: state.path === "NEW_ADVERTISER" ? "Продолжить с cold-start профилем" : "Использовать только подтверждённый доступ",
       rationale: access.history.explanation,
     },
+    directReport: null,
     competitorMatrix: null,
     demandCostResearch: null,
     businessModel: null,

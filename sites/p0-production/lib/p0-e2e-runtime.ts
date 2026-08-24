@@ -21,6 +21,57 @@ const applications = new Map<string, {
   advanceClock(milliseconds: number): void;
 }>();
 
+function fixtureDirectAudit(observedAt: string) {
+  const auditId = "direct-audit-e2e-owner-account";
+  const campaignReport = {
+    artifact_id: `${auditId}:campaign-results`,
+    audit_id: auditId,
+    kind: "DIRECT_REPORT_TSV",
+    digest: `sha256:${"c".repeat(64)}`,
+    byte_length: 640,
+    object_count: 1,
+    observed_at: observedAt,
+  } as const;
+  const searchReport = {
+    artifact_id: `${auditId}:search-queries`,
+    audit_id: auditId,
+    kind: "DIRECT_REPORT_TSV",
+    digest: `sha256:${"d".repeat(64)}`,
+    byte_length: 1_280,
+    object_count: 6,
+    observed_at: observedAt,
+  } as const;
+  return {
+    schema_version: "direct-read-audit-summary-v1" as const,
+    audit_id: auditId,
+    snapshot: {
+      snapshot_id: `direct-audit-snapshot:${auditId}`,
+      audit_version: 7,
+      capability_snapshot_id: "direct-capability:e2e-owner-account",
+      capability_fingerprint: `sha256:${"a".repeat(64)}`,
+    },
+    status: "COMPLETE" as const,
+    graph_complete: true,
+    observed_at: observedAt,
+    completed_at: observedAt,
+    account_binding: { expected_account: "owner-account", api_account: "owner-account", client_id: "client-4242", matched: true as const },
+    provider_restrictions: [{ element: "CAMPAIGNS_TOTAL_PER_CLIENT", value: 3_000 }],
+    object_counts: { campaigns: 1, adgroups: 2, audiencetargets: 1, keywords: 5, ads: 3, sitelinks: 2, adimages: 2, vcards: 0, creatives: 1, adextensions: 1, autotargetings: 1 },
+    campaign_summaries: [{ campaign_id: "9007199254740993123", name: "Поиск · участие в выставке", type: "UNIFIED_CAMPAIGN", state: "ON", status: "ACCEPTED" }],
+    report_summaries: [
+      { report_key: "campaign-performance", report_type: "CAMPAIGN_PERFORMANCE_REPORT", status: "COMPLETE", next_retry_at: null, artifact_reference: campaignReport },
+      { report_key: "search-query-performance", report_type: "SEARCH_QUERY_PERFORMANCE_REPORT", status: "COMPLETE", next_retry_at: null, artifact_reference: searchReport },
+    ],
+    methods_read: ["Campaigns.get", "AdGroups.get", "AudienceTargets.get", "Keywords.get", "Ads.get", "Sitelinks.get", "AdImages.get", "Creatives.get", "AdExtensions.get", "Reports.CAMPAIGN_PERFORMANCE_REPORT", "Reports.SEARCH_QUERY_PERFORMANCE_REPORT"],
+    methods_not_read: [],
+    limitations: [],
+    next_retry_at: null,
+    artifact_references: [campaignReport, searchReport],
+    browser_cabinet_used: false as const,
+    provider_write_methods_reachable: false as const,
+  };
+}
+
 function fixtureContext(observedAt = "2026-08-21T10:00:00.000Z"): P0Context {
   return {
     environment: "PRODUCTION",
@@ -63,10 +114,12 @@ function fixtureContext(observedAt = "2026-08-21T10:00:00.000Z"): P0Context {
       read_limitations: {
         inventory_complete: true,
         limited_by: null,
-        methods_read: ["Campaigns.get"],
-        methods_not_read: ["AdGroups.get", "Keywords.get", "Ads.get", "SEARCH_QUERY_PERFORMANCE_REPORT"],
+        methods_read: ["Campaigns.get", "AdGroups.get", "AudienceTargets.get", "Keywords.get", "Ads.get", "Sitelinks.get", "AdImages.get", "Creatives.get", "AdExtensions.get", "Reports.CAMPAIGN_PERFORMANCE_REPORT", "Reports.SEARCH_QUERY_PERFORMANCE_REPORT"],
+        methods_not_read: [],
+        provider_limitations: [],
         statistics_provisional_days: 3,
       },
+      audit: fixtureDirectAudit(observedAt),
     },
     metrika: {
       ready: true,
@@ -96,7 +149,10 @@ function fixtureContext(observedAt = "2026-08-21T10:00:00.000Z"): P0Context {
       offline_conversion: { relevant: false, status: "NOT_APPLICABLE" },
       observed_at: observedAt,
     },
-    campaign_catalog: { total: 1, active: [] },
+    campaign_catalog: {
+      total: 1,
+      active: [{ campaign_id: "9007199254740993123", name: "Поиск · участие в выставке", type: "UNIFIED_CAMPAIGN", state: "ON", status: "ACCEPTED" }],
+    },
     competitor_candidate_set: {
       schema_version: "p0-bounded-competitor-research-v1",
       competitor_set_rule: "Два прямых поставщика участия в промышленной выставке в Москве из ограниченного публичного поискового среза.",

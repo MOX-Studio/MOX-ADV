@@ -105,6 +105,18 @@ export default function P0Client() {
             <span>Текущая рекомендация</span><h3>{projection.currentRecommendation.headline}</h3><p>{projection.currentRecommendation.rationale}</p>
           </section>}
 
+          {projection.directReport && <section className="owner-direct-report" data-report-state={projection.directReport.state} aria-labelledby="owner-direct-report-title">
+            <header><div><p className="owner-eyebrow">ТЕКУЩЕЕ ПРОДВИЖЕНИЕ В ЯНДЕКС ДИРЕКТЕ</p><h2 id="owner-direct-report-title">Отчёт о текущем продвижении</h2></div><strong>{projection.directReport.status}</strong></header>
+            <div className="owner-direct-lead"><div><h3>{projection.directReport.headline}</h3><p>{projection.directReport.summary}</p></div><dl><div><dt>Наблюдение</dt><dd>{projection.directReport.observedAt}</dd></div><div><dt>Свежесть</dt><dd>{projection.directReport.freshness}</dd></div></dl></div>
+            <div className="owner-direct-inventory" aria-label="Состав продвижения">{projection.directReport.inventory.map((item) => <article key={item.label}><span>{item.label}</span><strong>{item.value}</strong><small>{item.detail}</small></article>)}</div>
+            <section className="owner-direct-campaign-list" aria-labelledby="owner-direct-campaigns-title"><h3 id="owner-direct-campaigns-title">Кампании в снимке</h3>{projection.directReport.campaigns.length > 0 ? <div>{projection.directReport.campaigns.map((campaign) => <article key={`${campaign.name}-${campaign.delivery}-${campaign.review}`}><strong>{campaign.name}</strong><span>{campaign.delivery}</span><small>{campaign.review}</small></article>)}</div> : <p>{projection.directReport.state === "empty" ? "Проверенный срез не содержит кампаний." : "Список кампаний недоступен; это не означает, что кампаний нет."}</p>}</section>
+            <div className="owner-direct-details">
+              <article><header><span>Поисковые запросы</span><b>{projection.directReport.queries.status}</b></header><h3>{projection.directReport.queries.value}</h3><p>{projection.directReport.queries.detail}</p></article>
+              <article><header><span>Наблюдаемые результаты</span><b>{projection.directReport.results.status}</b></header><h3>{projection.directReport.results.value}</h3><p>{projection.directReport.results.detail}</p></article>
+            </div>
+            <div className="owner-direct-guidance"><section><h3>Ограничения</h3><ul>{projection.directReport.limitations.map((item) => <li key={item}>{item}</li>)}</ul></section><section><h3>Что делать дальше</h3><ol>{projection.directReport.nextActions.map((item) => <li key={item}>{item}</li>)}</ol></section></div>
+          </section>}
+
           {projection.businessModel && <section className="owner-business-model" aria-labelledby="owner-business-model-title">
             <header><div><p className="owner-eyebrow">МОДЕЛЬ БИЗНЕСА</p><h2 id="owner-business-model-title">Проверяемое понимание бизнеса</h2></div><strong>{projection.businessModel.economics.status}</strong></header>
             <div className="owner-model-economics"><span>Целевая стоимость результата</span><b>{projection.businessModel.economics.targetResultCost}</b><p>{projection.businessModel.economics.explanation}</p></div>
