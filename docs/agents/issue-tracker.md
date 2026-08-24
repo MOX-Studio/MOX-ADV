@@ -47,7 +47,7 @@ For every Feature:
 4. Put the exact source requirement, current gap, target outcome, and a Markdown checklist linking every Task and the Checkpoint in the Feature body.
 5. Link the hierarchy with native sub-issues: Module → Features; Feature → Tasks and Checkpoint.
 6. Express cross-Feature ordering with native dependencies on the prerequisite Feature's Checkpoint. Downstream Tasks must carry the same blocker when needed so `/ready` cannot expose work before its prerequisite human verdict.
-7. Close the Feature only after its Checkpoint receives an explicit human acceptance verdict.
+7. Close the Feature only after its Checkpoint receives an explicit human acceptance verdict. The `close-feature-after-checkpoint` workflow enforces this transition: a closed native `type:checkpoint` child closes its open `type:feature` parent only when the latest trusted verdict is `ACCEPTED` and every native child is closed.
 
 Before publishing, verify exhaustive one-to-one traceability from every incomplete/partial source requirement to exactly one Feature. Record why each Task is an independent slice and verify that the resulting per-Feature Task counts come from those seams rather than a uniform template. A missing requirement, a cosmetic Task split, a Feature without all child links, or a Feature without its personal Checkpoint means the backlog is not ready.
 

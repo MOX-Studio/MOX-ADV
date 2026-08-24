@@ -1,0 +1,37 @@
+name: Close accepted Feature
+
+on:
+  issues:
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      checkpoint_number:
+        description: "Номер уже закрытой контрольной точки для повторной проверки"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: close-feature-${{ github.repository }}-${{ inputs.checkpoint_number || github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  close-parent-feature:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.issue.labels.*.name, 'type:checkpoint')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Получить репозиторий
+        uses: actions/checkout@v4
+      - name: Закрыть принятую родительскую Feature
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECKPOINT_NUMBER: ${{ inputs.checkpoint_number || github.event.issue.number }}
+        run: >-
+          python scripts/close_feature_after_checkpoint.py
+          "$CHECKPOINT_NUMBER"
+          --repository "${{ github.repository }}"
