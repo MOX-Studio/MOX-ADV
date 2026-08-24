@@ -16,6 +16,7 @@ import {
   containsCompetitorPromptInjection,
   containsHiddenCompetitorPerformance,
   createBoundedCompetitorCandidateSet,
+  type CompetitorCandidateSet,
   type CompetitorMatrix,
   type CompetitorMatrixRowInput,
 } from "./competitor-research.ts";
@@ -556,31 +557,60 @@ function containsForbiddenCompetitorPerformance(value: unknown) {
   return containsHiddenCompetitorPerformance(value);
 }
 
-function assertCompetitorObservation(observation: Record<string, unknown>, requireExactDestination = false) {
+function assertCompetitorObservation(observation: Record<string, unknown>, candidateSet: CompetitorCandidateSet | null) {
   const locator = record(observation.locator);
   const policy = record(observation.policy);
   const scope = record(observation.scope);
   const claim = record(observation.claim);
+  const matrixRow = record(observation.matrix_row);
   let url: URL;
+  let sourceUrl: URL;
+  let matrixLanding: URL | null = null;
   try {
     url = normalizePublicHttpsUrl(text(locator.url) || text(observation.source_url));
+    sourceUrl = normalizePublicHttpsUrl(text(observation.source_url));
+    matrixLanding = Object.keys(matrixRow).length ? normalizePublicHttpsUrl(text(matrixRow.exact_landing)) : null;
   } catch {
     fail("PUBLIC_LOCATOR_UNSAFE", "Public competitor locator должен быть безопасным HTTPS URL.");
   }
-  const allowedHosts = list(policy.allowed_hosts).map(text).map((item) => item.toLowerCase()).filter(Boolean);
-  const allowedDestinations = list(policy.allowed_destinations).map((item) => {
+  if (sourceUrl.toString() !== url.toString() || (matrixLanding && matrixLanding.toString() !== url.toString())) {
+    fail("COMPETITOR_SOURCE_LANDING_MISMATCH", "Competitor source locator, source URL и exact landing должны совпадать.");
+  }
+  if (!isoTimestamp(observation.observed_at)) {
+    fail("COMPETITOR_OBSERVATION_DATE_INVALID", "Public competitor observation требует точную ISO date.");
+  }
+  const allowedHosts = [...new Set(list(policy.allowed_hosts).map(text).map((item) => item.toLowerCase()).filter(Boolean))].sort(compareText);
+  const allowedDestinations = [...new Set(list(policy.allowed_destinations).map((item) => {
     try { return normalizePublicHttpsUrl(text(item)).toString(); } catch { return ""; }
-  }).filter(Boolean);
+  }).filter(Boolean))].sort(compareText);
   if (!allowedHosts.includes(url.hostname.toLowerCase()) || text(scope.host).toLowerCase() !== url.hostname.toLowerCase()) {
     fail("PUBLIC_HOST_NOT_ALLOWLISTED", "Public competitor host отсутствует в exact allowlist observation policy.");
   }
-  if (requireExactDestination && !allowedDestinations.length) {
+  if (candidateSet && !allowedDestinations.length) {
     fail("PUBLIC_DESTINATION_ALLOWLIST_REQUIRED", "Detailed competitor matrix требует exact destination allowlist.");
   }
   if (allowedDestinations.length && !allowedDestinations.includes(url.toString())) {
     fail("PUBLIC_DESTINATION_NOT_ALLOWLISTED", "Public competitor locator отсутствует в exact destination allowlist.");
   }
-  if (observation.collected_via !== "PUBLIC_RESEARCH_EGRESS_V1" || policy.access !== "PUBLIC_NO_AUTH") {
+  if (candidateSet) {
+    const competitor = text(matrixRow.competitor).toLocaleLowerCase("ru-RU");
+    const candidate = candidateSet.candidates.find((item) => item.competitor.toLocaleLowerCase("ru-RU") === competitor);
+    const approvedDestinations = [...(candidate?.exact_destinations ?? [])].sort(compareText);
+    const approvedHosts = [...new Set(approvedDestinations.map((destination) => new URL(destination).hostname.toLowerCase()))].sort(compareText);
+    if (!candidate || canonicalizeEvidence(allowedDestinations) !== canonicalizeEvidence(approvedDestinations)
+      || canonicalizeEvidence(allowedHosts) !== canonicalizeEvidence(approvedHosts)) {
+      fail("PUBLIC_POLICY_AUTHORITY_WIDENED", "Observation policy не может расширять approved competitor destinations или hosts.");
+    }
+  }
+  let policyUrl: URL;
+  try {
+    policyUrl = normalizePublicHttpsUrl(text(policy.policy_url));
+  } catch {
+    fail("PUBLIC_COLLECTION_POLICY_INVALID", "Competitor observation policy URL должен быть безопасным публичным HTTPS URL.");
+  }
+  if (!allowedHosts.includes(policyUrl.hostname.toLowerCase())
+    || observation.collected_via !== "PUBLIC_RESEARCH_EGRESS_V1"
+    || policy.access !== "PUBLIC_NO_AUTH") {
     fail("PUBLIC_COLLECTION_POLICY_INVALID", "Competitor observation должен проходить credential-free public research egress.");
   }
   const predicate = text(claim.predicate);
@@ -591,7 +621,17 @@ function assertCompetitorObservation(observation: Record<string, unknown>, requi
   ) {
     fail("COMPETITOR_HIDDEN_CLAIM_FORBIDDEN", "Скрытые performance/strategy claims конкурентов запрещены.");
   }
-  if (containsCompetitorPromptInjection(claim.value) || containsCompetitorPromptInjection(observation.raw_quote)) {
+  const untrustedMetadata = [
+    claim.subject,
+    claim.predicate,
+    claim.value,
+    observation.raw_quote,
+    locator.selector,
+    policy.policy_id,
+    policy.version,
+    scope.observation_scope,
+  ];
+  if (untrustedMetadata.some(containsCompetitorPromptInjection)) {
     fail("COMPETITOR_PROMPT_INJECTION_REJECTED", "Prompt injection из public competitor evidence отклонён.");
   }
   if (!predicate || !text(claim.subject)) {
@@ -1266,7 +1306,7 @@ export async function buildAnalyticsEvidence({
   }
 
   for (const observation of competitorInputs) {
-    const checked = assertCompetitorObservation(observation, Boolean(competitorCandidateSet));
+    const checked = assertCompetitorObservation(observation, competitorCandidateSet);
     const normalizedClaim = safeValue(checked.claim.value);
     const identity = await contentHash({
       subject: text(checked.claim.subject),

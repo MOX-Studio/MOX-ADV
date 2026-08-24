@@ -1,4 +1,5 @@
 import {
+  assertSafeCompetitorObservationText,
   createBoundedCompetitorCandidateSet,
   type CompetitorCandidateSet,
 } from "./competitor-research.ts";
@@ -132,7 +133,7 @@ export function parseProductionCompetitorResearchConfig(raw: string): Configured
         changedFamily: changedFamily as "QUALIFIED_ACTION" | "AUDIENCE_SPECIFICITY" | "MESSAGE_OFFER",
       };
     })();
-    return {
+    const configuredCandidate = {
       competitor: requiredText(candidate.competitor, "Competitor", 200),
       rationale: requiredText(candidate.rationale, "Competitor rationale", 1_000),
       exactDestinations: stringList(candidate.exactDestinations, "Competitor exact destinations", 3, 2_000),
@@ -143,6 +144,17 @@ export function parseProductionCompetitorResearchConfig(raw: string): Configured
       adVisibilitySample,
       campaignAnalysis,
     } satisfies ConfiguredCandidate;
+    [
+      configuredCandidate.competitor,
+      configuredCandidate.rationale,
+      ...configuredCandidate.productsServices,
+      configuredCandidate.observedOfferMessage,
+      configuredCandidate.evidenceQuote,
+      configuredCandidate.adVisibilitySample?.query,
+      configuredCandidate.adVisibilitySample?.source,
+      ...Object.values(configuredCandidate.campaignAnalysis ?? {}),
+    ].forEach(assertSafeCompetitorObservationText);
+    return configuredCandidate;
   }) : [];
   const result = {
     rule: requiredText(input.rule, "Competitor set rule", 1_000),

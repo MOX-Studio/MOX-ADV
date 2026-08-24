@@ -155,19 +155,19 @@ export function createBoundedCompetitorCandidateSet(input: {
   candidates: Array<{ competitor: string; rationale: string; exactDestinations: string[] }>;
 }): CompetitorCandidateSet {
   const rule = requiredText(input.rule, "COMPETITOR_SET_RULE_REQUIRED", 1_000);
-  assertSafeObservationText(rule);
+  assertSafeCompetitorObservationText(rule);
   if (!Array.isArray(input.candidates) || input.candidates.length < 1 || input.candidates.length > MAXIMUM_CANDIDATES) {
     fail("COMPETITOR_CANDIDATE_SET_UNBOUNDED", `Candidate set должен содержать от 1 до ${MAXIMUM_CANDIDATES} конкурентов.`);
   }
   const seenCompetitors = new Set<string>();
   const candidates = input.candidates.map((candidate) => {
     const competitor = requiredText(candidate.competitor, "COMPETITOR_NAME_REQUIRED", 200);
-    assertSafeObservationText(competitor);
+    assertSafeCompetitorObservationText(competitor);
     const identity = competitor.toLocaleLowerCase("ru-RU");
     if (seenCompetitors.has(identity)) fail("COMPETITOR_CANDIDATE_DUPLICATE", "Competitor candidate должен быть уникальным.");
     seenCompetitors.add(identity);
     const rationale = requiredText(candidate.rationale, "COMPETITOR_CANDIDATE_RATIONALE_REQUIRED", 1_000);
-    assertSafeObservationText(rationale);
+    assertSafeCompetitorObservationText(rationale);
     if (!Array.isArray(candidate.exactDestinations)
       || candidate.exactDestinations.length < 1
       || candidate.exactDestinations.length > MAXIMUM_DESTINATIONS_PER_CANDIDATE) {
@@ -186,7 +186,7 @@ export function createBoundedCompetitorCandidateSet(input: {
   };
 }
 
-function assertSafeObservationText(value: unknown) {
+export function assertSafeCompetitorObservationText(value: unknown) {
   if (containsCompetitorPromptInjection(value)) {
     fail("COMPETITOR_PROMPT_INJECTION_REJECTED", "Инструкция из публичного контента отклонена и не может управлять агентом.");
   }
@@ -280,11 +280,11 @@ export function buildCompetitorMatrix(input: {
         improvement_hypothesis: requiredText(rawAnalysis.improvementHypothesis, "COMPETITOR_CAMPAIGN_HYPOTHESIS_REQUIRED", 1_000),
         changed_family: rawAnalysis.changedFamily,
       };
-      Object.values(analysis).forEach(assertSafeObservationText);
+      Object.values(analysis).forEach(assertSafeCompetitorObservationText);
       return analysis;
     })() : null;
     [productsServices, observedOfferMessage, priceValue, sourceLabel, geography, device, query, adSource, adGeography, adDevice]
-      .forEach(assertSafeObservationText);
+      .forEach(assertSafeCompetitorObservationText);
     return {
       competitor: candidate.competitor,
       products_services: productsServices,
