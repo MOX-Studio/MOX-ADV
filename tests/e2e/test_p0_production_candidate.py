@@ -29,7 +29,7 @@ def _available_port() -> int:
         return int(listener.getsockname()[1])
 
 
-def _copy_candidate(target: Path) -> None:
+def _copy_candidate(target: Path, scenario: str) -> None:
     ignored = shutil.ignore_patterns(
         "node_modules",
         "dist",
@@ -43,7 +43,7 @@ def _copy_candidate(target: Path) -> None:
     shutil.copytree(SOURCE, target, ignore=ignored)
     (target / "node_modules").symlink_to(SOURCE / "node_modules", target_is_directory=True)
     (target / ".env.local").write_text(
-        "P0_E2E_FIXTURE_SCENARIO=mixed-correction\n",
+        f"P0_E2E_FIXTURE_SCENARIO={scenario}\n",
         encoding="utf-8",
     )
 
@@ -64,10 +64,10 @@ def _wait_until_ready(base_url: str, process: subprocess.Popen[str]) -> None:
 
 
 @contextmanager
-def production_candidate_server():
+def production_candidate_server(scenario: str = "mixed-correction"):
     with tempfile.TemporaryDirectory(prefix="mox-p0-e2e-") as temporary:
         target = Path(temporary) / "candidate"
-        _copy_candidate(target)
+        _copy_candidate(target, scenario)
         port = _available_port()
         base_url = f"http://localhost:{port}"
         environment = {
@@ -75,7 +75,7 @@ def production_candidate_server():
             for key, value in os.environ.items()
             if not key.startswith("YANDEX_")
         }
-        environment["P0_E2E_FIXTURE_SCENARIO"] = "mixed-correction"
+        environment["P0_E2E_FIXTURE_SCENARIO"] = scenario
         process = subprocess.Popen(
             ["npm", "run", "dev", "--", "--port", str(port)],
             cwd=target,
@@ -188,7 +188,64 @@ def assert_owner_accessibility_and_hierarchy(
         test.assertNotIn(forbidden.lower(), visible_copy)
 
 
+def advance_owner_to_findings(page: Page, base_url: str) -> None:
+    page.goto(base_url, wait_until="networkidle")
+    page.get_by_label("Исходная ситуация").select_option("existing")
+    page.get_by_role("button", name="Продолжить", exact=True).click()
+    page.get_by_role("button", name="Предоставить доступ на чтение", exact=True).click()
+    page.get_by_label("Рекламируемый бизнес").select_option(index=1)
+    page.get_by_label("Сайт и аналитика").select_option(index=1)
+    page.get_by_role("button", name="Подтвердить выбранный бизнес", exact=True).click()
+    page.get_by_role("button", name="Подтвердить готовность доступа", exact=True).click()
+    page.get_by_label("Сайт или адрес компании").fill("https://owner.example/")
+    page.get_by_role("button", name="Исследовать бизнес и предложить цель", exact=True).click()
+    page.get_by_role("heading", name="Бизнес-цель подготовлена", exact=True).wait_for()
+    page.get_by_role("button", name="Подтвердить цель и продолжить", exact=True).click()
+    page.get_by_role("heading", name="Агент собрал понимание бизнеса", exact=True).wait_for()
+
+
 class P0ProductionCandidateE2ETests(unittest.TestCase):
+    def test_wordstat_partial_quota_and_unavailable_are_visible_without_zero_demand(self) -> None:
+        scenarios = [
+            (
+                "mixed-correction-wordstat-partial",
+                "Частично",
+                "Ответ Wordstat для части формулировок неполон.",
+                "Повторить только недоступные формулировки",
+            ),
+            (
+                "mixed-correction-wordstat-quota-exhausted",
+                "Недоступно",
+                "Квота Wordstat исчерпана.",
+                "Повторить сбор после восстановления квоты",
+            ),
+            (
+                "mixed-correction-wordstat-unavailable",
+                "Недоступно",
+                "Доступ к Wordstat недоступен.",
+                "Восстановить доступ к Wordstat",
+            ),
+        ]
+        for scenario, expected_status, expected_gap, expected_action in scenarios:
+            with self.subTest(scenario=scenario):
+                with production_candidate_server(scenario) as base_url:
+                    with sync_playwright() as playwright:
+                        browser = playwright.chromium.launch(headless=True)
+                        page = browser.new_page(viewport=VIEWPORT)
+                        advance_owner_to_findings(page, base_url)
+                        demand_cost = page.locator(".owner-demand-cost")
+                        self.assertTrue(demand_cost.is_visible())
+                        self.assertEqual(expected_status, demand_cost.locator(":scope > header > strong").inner_text())
+                        text = demand_cost.inner_text()
+                        self.assertIn(expected_gap, text)
+                        self.assertIn(expected_action, text)
+                        self.assertIn("Частота недоступна", text)
+                        self.assertNotRegex(text, r"(?:^|\s)0 запрос")
+                        self.assertNotIn("WORDSTAT_", text)
+                        self.assertNotIn("seed_id", text)
+                        assert_no_horizontal_overflow(self, page)
+                        browser.close()
+
     def test_owner_completes_the_typed_five_stage_journey_through_the_ui(self) -> None:
         with production_candidate_server() as base_url:
             with sync_playwright() as playwright:
@@ -312,11 +369,20 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                         "heading", name="Исследование нескольких формулировок", exact=True
                     ).is_visible()
                 )
+                frequency_rows = demand_cost.locator(".owner-demand-formulations article")
+                self.assertGreaterEqual(frequency_rows.count(), 3)
                 self.assertGreaterEqual(
-                    demand_cost.locator(".owner-demand-formulations article").count(), 5
+                    demand_cost.locator('.owner-demand-formulations article[data-frequency-state="available"]').count(), 3
                 )
-                self.assertIn("Яндекс Wordstat", demand_cost.inner_text())
-                self.assertIn("нижняя граница", demand_cost.inner_text().lower())
+                frequency_text = demand_cost.inner_text()
+                self.assertIn("Яндекс Wordstat", frequency_text)
+                self.assertIn("нижняя граница", frequency_text.lower())
+                self.assertIn("Популярные запросы Wordstat · /v1/topRequests", frequency_text)
+                self.assertIn("Широкая формулировка", frequency_text)
+                self.assertIn("Москва · все устройства", frequency_text)
+                self.assertIn("Яндекс Wordstat · официальное API", frequency_text)
+                self.assertRegex(frequency_text, r"\d+ запрос(?:ов|а)?")
+                self.assertIn("Сравнить формулировки", frequency_text)
                 self.assertIn("110–170 RUB", demand_cost.inner_text())
                 self.assertIn("НДС включён", demand_cost.inner_text())
                 self.assertIn("42 clicks", demand_cost.inner_text())

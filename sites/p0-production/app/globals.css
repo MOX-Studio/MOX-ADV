@@ -257,6 +257,18 @@ body::before {
 .market-evidence-grid span { color: var(--muted); font-size: 7px; }
 .market-evidence-grid strong { margin-top: 5px; font-size: 12px; }
 .market-evidence-grid small { margin-top: 4px; color: var(--muted); font-size: 6px; line-height: 1.45; }
+.market-frequency-formulations { margin-top: 9px; }
+.market-frequency-formulations > header { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+.market-frequency-formulations h5 { margin: 0; font-size: 9px; }
+.market-frequency-formulations > header span { color: var(--muted); font-size: 6px; }
+.market-frequency-formulations > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 6px; }
+.market-frequency-formulations article { display: grid; gap: 3px; min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: white; }
+.market-frequency-formulations article[data-frequency-state="unavailable"] { border-color: #dfc7a7; background: #fffcf6; }
+.market-frequency-formulations article span, .market-frequency-formulations article strong, .market-frequency-formulations article small { overflow-wrap: anywhere; }
+.market-frequency-formulations article span { font-size: 7px; font-weight: 750; }
+.market-frequency-formulations article strong { color: var(--green-dark); font-size: 10px; }
+.market-frequency-formulations article small, .market-frequency-formulations > p, .market-frequency-formulations li { color: var(--muted); font-size: 6px; line-height: 1.45; }
+.market-frequency-formulations > p { margin: 6px 0 0; }
 .market-evidence > details { min-width: 0; margin-top: 7px; border-top: 1px solid var(--line); padding-top: 7px; }
 .market-evidence > details > summary { cursor: pointer; font-size: 7px; font-weight: 750; }
 .market-evidence-detail { min-width: 0; padding: 6px 2px 2px; color: var(--muted); font-size: 7px; line-height: 1.5; }

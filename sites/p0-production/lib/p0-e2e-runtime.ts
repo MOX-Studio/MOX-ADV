@@ -1,6 +1,9 @@
 import { AccessReadinessService } from "./access-readiness.ts";
 import { sealCuratedPlaybookRelease } from "./campaign-playbook.ts";
-import { P0_E2E_FIXTURE_SCENARIO } from "./p0-e2e-boundary.ts";
+import {
+  P0_E2E_WORDSTAT_SCENARIOS,
+  type P0E2EFixtureScenario,
+} from "./p0-e2e-boundary.ts";
 import type { LandingAdvisoryAdapter } from "./landing-advisory.ts";
 import { buildDemandCostResearchPlan, collectOfficialWordstatBatch, type MarketEvidenceInput } from "./market-evidence.ts";
 import {
@@ -226,7 +229,7 @@ function fixtureContext(observedAt = "2026-08-21T10:00:00.000Z"): P0Context {
   };
 }
 
-async function fixtureMarketEvidence(): Promise<MarketEvidenceInput> {
+async function fixtureMarketEvidence(scenario: P0E2EFixtureScenario): Promise<MarketEvidenceInput> {
   let tick = 0;
   const researchPlan = await buildDemandCostResearchPlan({
     generatedAt: "2026-08-21T10:00:00.000Z",
@@ -243,14 +246,20 @@ async function fixtureMarketEvidence(): Promise<MarketEvidenceInput> {
     dynamicsToDate: "2026-07-31",
   });
   const wordstatBatch = await collectOfficialWordstatBatch({
-    token: "e2e-fixture-token",
+    token: scenario.endsWith("wordstat-unavailable") ? "" : "e2e-fixture-token",
     clientId: "e2e-fixture-client",
     seeds: researchPlan.seeds,
-  }, async (input) => {
+  }, async (input, init) => {
     const path = new URL(String(input)).pathname;
+    const request = JSON.parse(String(init?.body ?? "{}")) as { phrase?: string };
+    const exactPhrase = String(request.phrase ?? "").replace(/\+/gu, "").replace(/\s+/gu, " ").trim();
+    if (scenario.endsWith("wordstat-quota-exhausted")) {
+      return new Response("{}", { status: 429, headers: { "retry-after": "60" } });
+    }
+    const partialSeed = scenario.endsWith("wordstat-partial") && exactPhrase.includes("оптовых покупателей");
     const value = path.endsWith("topRequests")
       ? {
-        topRequests: [
+        topRequests: partialSeed ? [] : [
           { phrase: "Стенд на выставке", count: 41 },
           { phrase: "участие в выставке", count: 19 },
           { phrase: "заявка на выставку", count: 7 },
@@ -449,7 +458,7 @@ type FixtureProviderCall = {
 
 type FixtureAcceptanceEvidence = {
   schema_version: "p0-production-candidate-fixture-evidence-v1";
-  scenario: typeof P0_E2E_FIXTURE_SCENARIO;
+  scenario: P0E2EFixtureScenario;
   official_api_shape: true;
   external_network_requests: 0;
   production_credentials_loaded: false;
@@ -653,7 +662,7 @@ function officialCorrectionFetcher(
   };
 }
 
-function fixtureAdapters(): {
+function fixtureAdapters(scenario: P0E2EFixtureScenario): {
   adapters: P0ApplicationAdapters;
   evidence: FixtureAcceptanceEvidence;
   advanceClock(milliseconds: number): void;
@@ -663,7 +672,7 @@ function fixtureAdapters(): {
   const playbookRelease = fixturePlaybookRelease();
   const evidence: FixtureAcceptanceEvidence = {
     schema_version: "p0-production-candidate-fixture-evidence-v1",
-    scenario: P0_E2E_FIXTURE_SCENARIO,
+    scenario,
     official_api_shape: true,
     external_network_requests: 0,
     production_credentials_loaded: false,
@@ -738,7 +747,7 @@ function fixtureAdapters(): {
       return { minimum_weekly_budget_rub: 300 };
     },
     async readMarketEvidence() {
-      return fixtureMarketEvidence();
+      return fixtureMarketEvidence(scenario);
     },
     landingAdvisory: fixtureLandingAdvisory,
     async readPlaybookReleases() {
@@ -835,13 +844,13 @@ function fixtureAdapters(): {
 }
 
 function fixtureApplication(scenario: string, key: string) {
-  if (scenario !== P0_E2E_FIXTURE_SCENARIO) {
+  if (!P0_E2E_WORDSTAT_SCENARIOS.includes(scenario as P0E2EFixtureScenario)) {
     throw new Error(`Unknown P0 E2E fixture scenario: ${scenario}`);
   }
   const applicationKey = `${scenario}:${key}`;
   let entry = applications.get(applicationKey);
   if (!entry) {
-    const fixture = fixtureAdapters();
+    const fixture = fixtureAdapters(scenario as P0E2EFixtureScenario);
     const application = new P0Application({
       store: new D1P0ApplicationStore(),
       adapters: fixture.adapters,

@@ -6,7 +6,7 @@ import {
   localP0E2EFixtureScenario,
 } from "../lib/p0-e2e-boundary.ts";
 
-test("deterministic provider fixture is available only for the exact localhost scenario", () => {
+test("deterministic provider fixtures are available only for allowlisted localhost scenarios", () => {
   assert.equal(
     localP0E2EFixtureScenario(
       "http://localhost:4173/api/p0",

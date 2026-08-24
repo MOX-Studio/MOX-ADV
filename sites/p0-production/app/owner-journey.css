@@ -99,9 +99,20 @@
 .owner-demand-cost-grid article > p { margin: 9px 0 0; color: var(--owner-muted); font-size: 7px; line-height: 1.45; }
 .owner-demand-formulations { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 10px; }
 .owner-demand-formulations h3 { grid-column: 1 / -1; margin: 0 0 2px; font-size: 10px; }
-.owner-demand-formulations article { display: grid; grid-template-columns: 92px 1fr auto; gap: 7px; align-items: center; min-width: 0; padding: 8px 9px; border: 1px solid var(--owner-line); border-radius: 7px; background: white; }
+.owner-demand-formulations article { display: grid; gap: 6px; min-width: 0; padding: 9px; border: 1px solid var(--owner-line); border-radius: 7px; background: white; }
+.owner-demand-formulations article[data-frequency-state="unavailable"] { border-color: #dfc7a7; background: #fffcf6; }
+.owner-demand-formulations article > header { display: grid; grid-template-columns: 92px minmax(0, 1fr) auto; gap: 7px; align-items: center; }
 .owner-demand-formulations span, .owner-demand-formulations small { color: var(--owner-muted); font-size: 6px; }
-.owner-demand-formulations strong { min-width: 0; font-size: 7px; overflow-wrap: anywhere; }
+.owner-demand-formulations strong, .owner-demand-formulations b { min-width: 0; font-size: 7px; overflow-wrap: anywhere; }
+.owner-demand-formulations b { color: var(--owner-green-dark); text-align: right; }
+.owner-demand-formulations dl { display: grid; gap: 3px; margin: 0; }
+.owner-demand-formulations dl div { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 5px; padding-top: 3px; border-top: 1px solid #edf1ee; }
+.owner-demand-formulations dt, .owner-demand-formulations dd { margin: 0; color: var(--owner-muted); font-size: 6px; overflow-wrap: anywhere; }
+.owner-demand-gaps { margin-top: 8px; padding: 9px 11px; border-radius: 7px; color: #74450e; background: var(--owner-amber); font-size: 7px; }
+.owner-demand-gaps ul { margin: 5px 0 0; padding-left: 16px; }
+.owner-demand-next-action { display: grid; gap: 3px; margin-top: 8px; padding: 10px 12px; border-radius: 7px; background: var(--owner-soft); }
+.owner-demand-next-action span { color: var(--owner-green-dark); font-size: 6px; font-weight: 850; text-transform: uppercase; }
+.owner-demand-next-action strong { font-size: 8px; line-height: 1.45; }
 .owner-competitor-matrix { min-width: 0; margin-top: 18px; padding: 18px; border: 1px solid var(--owner-line); border-radius: 10px; background: #fbfdfb; }
 .owner-competitor-matrix > header { display: flex; gap: 16px; justify-content: space-between; align-items: flex-start; }
 .owner-competitor-matrix > header h2 { margin: 5px 0 0; font-size: 21px; }

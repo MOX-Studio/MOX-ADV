@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- revisioned evidence payloads are validated by the server contract. */
 import { deviceLabel, machineLabel } from "./ui-copy.ts";
+import { projectWordstatForPresentation } from "../lib/wordstat-presentation.ts";
 
 type MarketEvidence = Record<string, any>;
 
@@ -12,7 +13,14 @@ function scopeSummary(scope: MarketEvidence) {
   const regions = Array.isArray(scope.region_names) && scope.region_names.length
     ? scope.region_names.join(", ")
     : "регион не подтверждён";
-  return `${regions} · ${deviceLabel(scope.device)} · профиль операторов: ${scope.operator_profile || "не указан"}`;
+  const operator = scope.operator_profile === "BROAD_CONTAINING"
+    ? "широкая формулировка"
+    : scope.operator_profile === "FIXED_WORD_COUNT"
+      ? "фиксированное число слов"
+      : scope.operator_profile === "FIXED_ORDER_FORM"
+        ? "фиксированный порядок слов"
+        : "не указан";
+  return `${regions} · ${deviceLabel(scope.device)} · профиль формулировки: ${operator}`;
 }
 
 function costSummary(cost: MarketEvidence) {
@@ -32,7 +40,8 @@ export function MarketEvidenceDisclosure({ evidence, context = "model", costDeci
   const cost = evidence.cost || {};
   const scopes = Array.isArray(frequency.scopes) ? frequency.scopes : [];
   const rows = Array.isArray(frequency.unique_assigned_rows) ? frequency.unique_assigned_rows : [];
-  const gaps = Array.isArray(frequency.gaps) ? frequency.gaps : [];
+  const wordstat = projectWordstatForPresentation(frequency, evidence.research_plan, frequency.batch_finished_at || evidence.batch_finished_at);
+  const gaps = wordstat.gaps;
   const costReasons = Array.isArray(cost.missing_or_conflict_reasons) ? cost.missing_or_conflict_reasons : [];
   return <section className="market-evidence" aria-label={context === "model" ? "Спрос и стоимость до запуска" : "Доказательства черновика кампании"}>
     <header>
@@ -55,15 +64,26 @@ export function MarketEvidenceDisclosure({ evidence, context = "model", costDeci
         <small>Это стоимость перехода в аукционном scope, не стоимость бизнес-результата; диапазон не прогнозирует эффективность.</small>
       </article>
     </div>
+    {wordstat.formulations.length > 0 && <section className="market-frequency-formulations" aria-label="Частоты проверенных формулировок">
+      <header><h5>Частоты нескольких формулировок</h5><span>{wordstat.coverage_label}</span></header>
+      <div>{wordstat.formulations.map((item, index) => <article key={`${item.phrase}-${index}`} data-frequency-state={item.status.toLowerCase()}>
+        <span>{item.phrase}</span><strong>{item.frequency_label}</strong>
+        <small>{item.method_label} · {item.operator_label}</small>
+        <small>{item.scope_label} · {item.observed_at || "дата наблюдения недоступна"}</small>
+        <small>{item.source_label} · нижняя граница возвращённых строк</small>
+      </article>)}</div>
+      {gaps.length > 0 && <ul className="limitations">{gaps.map((gap) => <li key={gap}>{gap}</li>)}</ul>}
+      <p><b>Следующий шаг:</b> {wordstat.next_action}</p>
+    </section>}
     <details>
       <summary>Раскрыть охват, пакет снимка и ограничения частотности</summary>
       <div className="market-evidence-detail">
-        <p><b>Пакет снимка:</b> <code>{frequency.snapshot_batch_id || evidence.snapshot_batch_id || "не указан"}</code></p>
+        <p><b>Пакет наблюдения:</b> завершён {frequency.batch_finished_at || evidence.batch_finished_at || "дата недоступна"}; внутренние идентификаторы не показываются.</p>
         {scopes.length ? <ul>{scopes.map((scope: MarketEvidence, index: number) => <li key={`${scope.scope_fingerprint || "scope"}-${index}`}>{scopeSummary(scope)} · {scope.observed_unique_count?.value ?? "неизвестно"}+</li>)}</ul> : <p>Охват по операторам, регионам и устройствам недоступен — это не означает нулевую частотность.</p>}
-        <p><b>Окно:</b> последние 30 дней; точный конец окна API не раскрывает ({frequency.source_window_end || "не раскрыт API"}).</p>
+        <p><b>Окно:</b> последние 30 дней; точный конец окна API не раскрывает.</p>
         <p><b>Смысл:</b> нижняя граница по наблюдаемым популярным запросам; это запросы, не пользователи, клики или гарантированные показы.</p>
         <p><b>Динамика:</b> {machineLabel(frequency.seasonality?.status, "Недоступно")} · /v1/dynamics · широкий охват. <b>Регионы:</b> {machineLabel(frequency.geo_evidence?.status, "Недоступно")} · /v1/regions.</p>
-        {gaps.length > 0 && <ul className="limitations">{gaps.map((gap: MarketEvidence, index: number) => <li key={`${gap.code}-${index}`}>{gap.code}: {gap.detail}</li>)}</ul>}
+        {gaps.length > 0 && <ul className="limitations">{gaps.map((gap: string) => <li key={gap}>{gap}</li>)}</ul>}
       </div>
     </details>
     <details>

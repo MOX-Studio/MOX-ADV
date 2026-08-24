@@ -151,6 +151,7 @@ import { normalizePublicHttpsUrl } from "./site-url.ts";
 import { cleanText } from "./text.ts";
 import type { MarketEvidenceInput } from "./market-evidence.ts";
 import { buildP0P1Handoff, type P0P1Handoff } from "./p0-p1-handoff.ts";
+import { projectWordstatForPresentation } from "./wordstat-presentation.ts";
 import {
   runLandingAdvisory,
   unavailableLandingAdvisoryAdapter,
@@ -3368,6 +3369,7 @@ export class P0Application {
       const planRegions = Array.isArray(planScope.regions) ? planScope.regions : [];
       const planDevices = Array.isArray(planScope.devices) ? planScope.devices : [];
       const planSeeds = Array.isArray(plan.seeds) ? plan.seeds : [];
+      const wordstatPresentation = projectWordstatForPresentation(frequency, plan, market.batch_finished_at);
       const correctionPreparation = agentCorrectionPreparation(state);
       const competitorMatrix = state.analytics_evidence_snapshot?.competitor_matrix ?? null;
       const visibilityAggregate = competitorMatrix?.aggregate_claims.find((claim) => claim.claim === "Рекламная видимость наблюдалась");
@@ -3407,6 +3409,23 @@ export class P0Application {
               devices: planDevices.map(String),
               formulation_count: planSeeds.length,
             },
+            method: wordstatPresentation.method,
+            window: wordstatPresentation.window_label,
+            coverage: wordstatPresentation.coverage_label,
+            formulations: wordstatPresentation.formulations.map((item) => ({
+              phrase: item.phrase,
+              formulation_role: item.formulation_role,
+              frequency: item.frequency,
+              status: item.status,
+              source: item.source,
+              method: item.method,
+              operator_profile: item.operator_profile,
+              scope: { regions: item.regions, device: item.device },
+              observed_at: item.observed_at,
+              lower_bound: item.lower_bound,
+            })),
+            gaps: wordstatPresentation.gaps,
+            next_action: wordstatPresentation.next_action,
             lower_bound: true,
           },
           cost: cost.status === "AVAILABLE" ? {

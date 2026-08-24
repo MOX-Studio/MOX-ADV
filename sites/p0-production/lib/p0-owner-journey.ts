@@ -14,6 +14,7 @@ import {
   type AccessReadinessService,
   type AccessReadinessState,
 } from "./access-readiness.ts";
+import { projectWordstatForPresentation } from "./wordstat-presentation.ts";
 
 export const OWNER_JOURNEY_STAGES = [
   { id: "goal", label: "Цель" },
@@ -104,9 +105,24 @@ export type OwnerJourneyProjection = {
       source: string;
       observedAt: string;
       scope: string;
-      formulations: Array<{ category: string; phrase: string; status: "Запланировано" | "Недоступно" }>;
+      method: string;
+      window: string;
+      coverage: string;
+      formulations: Array<{
+        category: string;
+        phrase: string;
+        frequency: string;
+        status: "Частота получена" | "Частота недоступна" | "Формулировка недоступна";
+        method: string;
+        operator: string;
+        scope: string;
+        observedAt: string;
+        provenance: string;
+      }>;
       seasonality: string;
       limitation: string;
+      gaps: string[];
+      nextAction: string;
     };
     cost: {
       status: "Доступно" | "Недоступно";
@@ -1023,19 +1039,34 @@ export function projectDemandCostResearchForOwner(snapshot: unknown): OwnerJourn
   if (!Object.keys(frequency).length && !Object.keys(cost).length && !Object.keys(plan).length) return null;
   const dimensions = list(plan.dimensions).map(record);
   const seeds = list(plan.seeds).map(record);
-  const formulations: NonNullable<OwnerJourneyProjection["demandCostResearch"]>["demand"]["formulations"] = dimensions.flatMap((dimension): NonNullable<OwnerJourneyProjection["demandCostResearch"]>["demand"]["formulations"] => {
-    const matches = seeds.filter((seed) => seed.dimension === dimension.dimension);
-    if (matches.length) return matches.map((seed) => ({
-      category: ownerText(DEMAND_DIMENSION_LABELS[String(dimension.dimension)]),
-      phrase: ownerText(seed.phrase),
-      status: "Запланировано" as const,
-    }));
-    return [{
+  const wordstat = projectWordstatForPresentation(frequency, plan, market.batch_finished_at);
+  const formulations: NonNullable<OwnerJourneyProjection["demandCostResearch"]>["demand"]["formulations"] = wordstat.formulations.map((row, index) => ({
+    category: row.formulation_role === "RETURNED_TOP_ROW"
+      ? "Популярная формулировка Wordstat"
+      : ownerText(DEMAND_DIMENSION_LABELS[String(seeds[index]?.dimension)]),
+    phrase: ownerText(row.phrase),
+    frequency: row.frequency_label,
+    status: row.status === "AVAILABLE" ? "Частота получена" as const : "Частота недоступна" as const,
+    method: row.method_label,
+    operator: row.operator_label,
+    scope: row.scope_label,
+    observedAt: ownerText(row.observed_at, "Дата наблюдения недоступна", 100),
+    provenance: row.source_label,
+  }));
+  for (const dimension of dimensions) {
+    if (seeds.some((seed) => seed.dimension === dimension.dimension)) continue;
+    formulations.push({
       category: ownerText(DEMAND_DIMENSION_LABELS[String(dimension.dimension)]),
       phrase: "Формулировка недоступна из текущих подтверждённых данных",
-      status: "Недоступно" as const,
-    }];
-  });
+      frequency: "Частота недоступна",
+      status: "Формулировка недоступна",
+      method: wordstat.method_label,
+      operator: "Профиль формулировки недоступен",
+      scope: "Область наблюдения недоступна",
+      observedAt: "Дата наблюдения недоступна",
+      provenance: "Яндекс Wordstat · официальное API",
+    });
+  }
   const demandStatus = frequency.status === "AVAILABLE" ? "Доступно" as const : frequency.status === "PARTIAL" ? "Частично" as const : "Недоступно" as const;
   const observed = record(frequency.observed_unique_count).value;
   const planScope = record(plan.scope);
@@ -1056,12 +1087,17 @@ export function projectDemandCostResearchForOwner(snapshot: unknown): OwnerJourn
         : `Наблюдаемая нижняя граница: ${Number(observed).toLocaleString("ru-RU")} запросов в возвращённых верхних строках.`,
       source: "Яндекс Wordstat · официальное наблюдение",
       observedAt: ownerText(market.batch_finished_at, "Дата наблюдения недоступна", 100),
-      scope: [...regions, ...devices].join(" · ") || "Область наблюдения недоступна",
+      scope: wordstat.formulations[0]?.scope_label || [...regions, ...devices].join(" · ") || "Область наблюдения недоступна",
+      method: wordstat.method_label,
+      window: wordstat.window_label,
+      coverage: wordstat.coverage_label,
       formulations,
       seasonality: seasonality.business_context
         ? `${ownerText(seasonality.business_context)} · месячная динамика ${ownerText(seasonality.from_date, "")} — ${ownerText(seasonality.to_date, "")}`
         : "Сезонный бизнес-контекст недоступен; месячная динамика сохраняется отдельно.",
       limitation: "Это нижняя граница возвращённых строк, а не число людей, кликов, показов или прогноз бюджета.",
+      gaps: wordstat.gaps,
+      nextAction: wordstat.next_action,
     },
     cost: {
       status: costAvailable ? "Доступно" : "Недоступно",

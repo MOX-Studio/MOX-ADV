@@ -9,6 +9,7 @@ const uiSources = (await Promise.all([
   "../app/MarketEvidenceDisclosure.tsx",
   "../app/page.tsx",
   "../app/layout.tsx",
+  "../lib/wordstat-presentation.ts",
 ].map((path) => readFile(new URL(path, import.meta.url), "utf8")))).join("\n");
 
 const obsoleteVisiblePhrases = [
@@ -39,6 +40,18 @@ const obsoleteVisiblePhrases = [
 test("видимые тексты интерфейса не содержат прежнюю английскую терминологию", () => {
   for (const phrase of obsoleteVisiblePhrases) {
     assert.equal(uiSources.includes(phrase), false, `Найден непереведённый текст: ${phrase}`);
+  }
+});
+
+test("частоты Wordstat показывают русские подписи метода, ограничений и следующего шага", () => {
+  for (const phrase of [
+    "Популярные запросы Wordstat",
+    "Частота недоступна",
+    "Квота Wordstat исчерпана",
+    "Повторить только недоступные формулировки",
+    "отсутствие частоты не означает нулевой спрос",
+  ]) {
+    assert.equal(uiSources.includes(phrase), true, `Не найдена русская подпись: ${phrase}`);
   }
 });
 

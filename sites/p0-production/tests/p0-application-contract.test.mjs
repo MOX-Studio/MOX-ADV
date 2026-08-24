@@ -448,11 +448,26 @@ test("owner demand and cost projection preserves business provenance without tec
         },
         dimensions: [
           { dimension: "OFFER_LANGUAGE", status: "PLANNED" },
+          { dimension: "HIGH_INTENT_ACTION", status: "PLANNED" },
           { dimension: "BRAND", status: "UNAVAILABLE" },
         ],
-        seeds: [{ dimension: "OFFER_LANGUAGE", phrase: "участие в выставке", seed_id: "technical-seed-id" }],
+        seeds: [
+          { dimension: "OFFER_LANGUAGE", phrase: "участие в выставке", seed_id: "technical-seed-id", operator_profile: "BROAD_CONTAINING", region_names: ["Москва"], device: "all" },
+          { dimension: "HIGH_INTENT_ACTION", phrase: "подать заявку на участие", seed_id: "technical-action-id", operator_profile: "BROAD_CONTAINING", region_names: ["Москва"], device: "all" },
+        ],
       },
-      frequency: { status: "PARTIAL", observed_unique_count: { value: 67 } },
+      frequency: {
+        status: "PARTIAL",
+        method: "/v1/topRequests",
+        declared_window: "rolling_last_30_days",
+        batch_finished_at: "2026-08-21T10:00:00.000Z",
+        observed_unique_count: { value: 67 },
+        seed_matched_row_counts: [
+          { seed_id: "technical-seed-id", value: 41, status: "AVAILABLE" },
+          { seed_id: "technical-action-id", value: null, status: "UNAVAILABLE" },
+        ],
+        gaps: [{ code: "WORDSTAT_RESPONSE_PARTIAL", detail: "provider detail" }],
+      },
       cost: {
         status: "AVAILABLE",
         compact_source: "DIRECT_HISTORY_OWN_EMPIRICAL",
@@ -469,10 +484,65 @@ test("owner demand and cost projection preserves business provenance without tec
 
   assert.equal(projection.demand.status, "Частично");
   assert.match(projection.demand.conclusion, /нижняя граница: 67/iu);
+  assert.equal(projection.demand.formulations[0].frequency, "41 запрос");
+  assert.equal(projection.demand.formulations[0].method, "Популярные запросы Wordstat · /v1/topRequests");
+  assert.equal(projection.demand.formulations[0].operator, "Широкая формулировка");
+  assert.equal(projection.demand.formulations[0].scope, "Москва · все устройства");
+  assert.equal(projection.demand.formulations[1].frequency, "Частота недоступна");
+  assert.match(projection.demand.coverage, /1 из 2 формулировок/iu);
+  assert.match(projection.demand.nextAction, /повторить только недоступные/iu);
+  assert.deepEqual(projection.demand.gaps, ["Ответ Wordstat для части формулировок неполон."]);
   assert.equal(projection.cost.range, "110–170 RUB");
   assert.equal(projection.cost.vat, "НДС включён");
   assert.equal(projection.cost.sample, "42 clicks");
-  assert.doesNotMatch(JSON.stringify(projection), /technical|keyword_id|seed_id/iu);
+  assert.doesNotMatch(JSON.stringify(projection), /technical|keyword_id|seed_id|provider detail/iu);
+});
+
+test("owner demand projection keeps full, partial, quota-exhausted and unavailable responses honest", () => {
+  const base = {
+    batch_finished_at: "2026-08-21T10:00:00.000Z",
+    research_plan: {
+      scope: { regions: [{ name: "Москва" }], devices: ["desktop"], seasonality: {} },
+      dimensions: [{ dimension: "OFFER_LANGUAGE", status: "PLANNED" }, { dimension: "HIGH_INTENT_ACTION", status: "PLANNED" }],
+      seeds: [
+        { seed_id: "seed-a", dimension: "OFFER_LANGUAGE", phrase: "участие в выставке", operator_profile: "BROAD_CONTAINING", region_names: ["Москва"], device: "desktop" },
+        { seed_id: "seed-b", dimension: "HIGH_INTENT_ACTION", phrase: "подать заявку на участие", operator_profile: "BROAD_CONTAINING", region_names: ["Москва"], device: "desktop" },
+      ],
+    },
+    cost: { status: "UNAVAILABLE" },
+  };
+  const cases = [
+    {
+      name: "full",
+      frequency: { status: "AVAILABLE", method: "/v1/topRequests", declared_window: "rolling_last_30_days", seed_matched_row_counts: [{ seed_id: "seed-a", value: 41 }, { seed_id: "seed-b", value: 19 }], gaps: [] },
+      expected: ["41 запрос", "19 запросов"],
+      next: /сравнить формулировки/iu,
+    },
+    {
+      name: "partial",
+      frequency: { status: "PARTIAL", method: "/v1/topRequests", declared_window: "rolling_last_30_days", seed_matched_row_counts: [{ seed_id: "seed-a", value: 41 }, { seed_id: "seed-b", value: null }], gaps: [{ code: "WORDSTAT_RESPONSE_PARTIAL" }] },
+      expected: ["41 запрос", "Частота недоступна"],
+      next: /повторить только недоступные/iu,
+    },
+    {
+      name: "quota-exhausted",
+      frequency: { status: "UNAVAILABLE", method: "/v1/topRequests", declared_window: "rolling_last_30_days", seed_matched_row_counts: [{ seed_id: "seed-a", value: null }, { seed_id: "seed-b", value: null }], gaps: [{ code: "WORDSTAT_QUOTA_EXHAUSTED" }] },
+      expected: ["Частота недоступна", "Частота недоступна"],
+      next: /восстановления квоты/iu,
+    },
+    {
+      name: "unavailable",
+      frequency: { status: "UNAVAILABLE", method: "/v1/topRequests", declared_window: "rolling_last_30_days", seed_matched_row_counts: [], gaps: [{ code: "WORDSTAT_AUTHORITY_UNAVAILABLE" }] },
+      expected: ["Частота недоступна", "Частота недоступна"],
+      next: /восстановить доступ/iu,
+    },
+  ];
+  for (const item of cases) {
+    const projection = projectDemandCostResearchForOwner({ market_evidence: { ...base, frequency: item.frequency } });
+    assert.deepEqual(projection.demand.formulations.map((row) => row.frequency), item.expected, item.name);
+    assert.match(projection.demand.nextAction, item.next, item.name);
+    assert.doesNotMatch(JSON.stringify(projection), /seed-a|seed-b|WORDSTAT_/u, item.name);
+  }
 });
 
 async function marketEvidenceInput() {
@@ -580,6 +650,11 @@ test("authoritative application collects market evidence only for a Model revisi
   });
   assert.equal(agentRead.observation.facts.demand_cost_research.demand.source, "Яндекс Wordstat");
   assert.equal(agentRead.observation.facts.demand_cost_research.demand.observed_lower_bound, 67);
+  assert.ok(agentRead.observation.facts.demand_cost_research.demand.formulations.length >= 1);
+  assert.equal(agentRead.observation.facts.demand_cost_research.demand.formulations[0].source, "YANDEX_WORDSTAT_V1");
+  assert.equal(agentRead.observation.facts.demand_cost_research.demand.formulations[0].formulation_role, "RETURNED_TOP_ROW");
+  assert.equal(agentRead.observation.facts.demand_cost_research.demand.formulations[0].method, "/v1/topRequests");
+  assert.equal(agentRead.observation.facts.demand_cost_research.demand.formulations[0].lower_bound, true);
   assert.equal(agentRead.observation.facts.demand_cost_research.cost.status, "UNAVAILABLE");
   assert.equal(agentRead.observation.facts.demand_cost_research.cost.range, null);
   assert.doesNotMatch(JSON.stringify(agentRead.observation.facts.demand_cost_research), /keyword_id|campaign_id|ad_group_id/iu);
