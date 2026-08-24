@@ -56,6 +56,68 @@ async function officialJson(response: Response, provider: "Direct" | "Metrika") 
   }
 }
 
+function providerText(value: unknown, maximum = 1_000) {
+  return String(value ?? "").normalize("NFKC").replace(/\s+/gu, " ").trim().slice(0, maximum);
+}
+
+function providerNumber(value: unknown) {
+  if (value === null || value === undefined || value === "") return null;
+  const result = Number(value);
+  return Number.isFinite(result) ? result : null;
+}
+
+function providerBoolean(value: unknown) {
+  if (value === true || value === 1 || value === "1") return true;
+  if (value === false || value === 0 || value === "0") return false;
+  return null;
+}
+
+type RawMetrikaGoal = {
+  id?: unknown;
+  name?: unknown;
+  type?: unknown;
+  default_price?: unknown;
+  is_retargeting?: unknown;
+  conditions?: unknown;
+  steps?: unknown;
+};
+
+function normalizeGoalConditions(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 50).map((item) => {
+    const condition = item && typeof item === "object" ? item as Record<string, unknown> : {};
+    return {
+      type: providerText(condition.type, 100).toUpperCase(),
+      value: providerText(condition.url ?? condition.value, 1_000),
+    };
+  }).filter((item) => item.type || item.value);
+}
+
+function normalizeGoalSteps(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 50).map((item) => {
+    const step = item && typeof item === "object" ? item as RawMetrikaGoal : {};
+    return {
+      id: providerText(step.id, 100),
+      name: providerText(step.name, 500),
+      type: providerText(step.type, 100).toUpperCase(),
+      conditions: normalizeGoalConditions(step.conditions),
+    };
+  }).filter((item) => item.id || item.name || item.type || item.conditions.length);
+}
+
+function normalizeMetrikaGoal(value: RawMetrikaGoal) {
+  return {
+    id: providerText(value.id, 100),
+    name: providerText(value.name, 500),
+    type: providerText(value.type, 100).toUpperCase(),
+    default_price: providerNumber(value.default_price),
+    is_retargeting: providerBoolean(value.is_retargeting),
+    conditions: normalizeGoalConditions(value.conditions),
+    steps: normalizeGoalSteps(value.steps),
+  };
+}
+
 export async function verifyDirectAccountBinding(
   config: DirectBindingConfig,
   fetchImpl: FetchLike,
@@ -198,15 +260,19 @@ export async function verifyMetrikaCounterBinding(
     fail("METRIKA_API_UNAVAILABLE", "Metrika API недоступен для проверки goal binding.");
   }
   const goalsPayload = await officialJson(goalsResponse, "Metrika") as {
-    goals?: Array<{ id?: unknown }>;
+    goals?: RawMetrikaGoal[];
   };
   if (!Array.isArray(goalsPayload.goals)) {
     fail("METRIKA_API_INVALID", "Metrika goals API не подтвердил goal binding.");
   }
-  const matching = goalsPayload.goals.filter((item) => String(item.id ?? "") === expectedGoalId);
+  const normalizedGoals = goalsPayload.goals.map(normalizeMetrikaGoal).filter((item) => item.id);
+  const matching = normalizedGoals.filter((item) => item.id === expectedGoalId);
   if (matching.length !== 1) {
     fail("METRIKA_GOAL_BINDING_MISMATCH", "Metrika API не подтвердил точный goal binding.");
   }
+  const selectedGoal = matching[0];
+  const goalCatalog = normalizedGoals.slice(0, 500);
+  if (!goalCatalog.some((item) => item.id === selectedGoal.id)) goalCatalog[goalCatalog.length - 1] = selectedGoal;
   return {
     authority: "VERIFIED" as const,
     access: "YANDEX_METRIKA_MANAGEMENT_AND_REPORTS_API" as const,
@@ -220,9 +286,22 @@ export async function verifyMetrikaCounterBinding(
     },
     goal_binding: {
       expected_goal_id: expectedGoalId,
-      api_goal_id: String(matching[0].id),
+      api_goal_id: selectedGoal.id,
       matched: true as const,
     },
+    goal_definition: {
+      source: "YANDEX_METRIKA_MANAGEMENT_API" as const,
+      name: selectedGoal.name,
+      type: selectedGoal.type,
+      default_price: selectedGoal.default_price,
+      is_retargeting: selectedGoal.is_retargeting,
+      conditions: selectedGoal.conditions,
+      steps: selectedGoal.steps,
+      provider_metadata_complete: Boolean(selectedGoal.name && selectedGoal.type),
+    },
+    goal_catalog: goalCatalog,
+    goal_catalog_complete: normalizedGoals.length <= 500,
+    goal_catalog_total: normalizedGoals.length,
     observed_at: now(),
   };
 }

@@ -34,14 +34,26 @@ function context(overrides = {}) {
       binding: { expected_counter_id: "424242", api_counter_id: "424242", matched: true },
       goal_binding: { expected_goal_id: "1717", api_goal_id: "1717", matched: true },
       goal_definition: {
+        source: "YANDEX_METRIKA_MANAGEMENT_API",
         name: "Отправленная заявка на участие",
-        type: "ACTION",
-        semantic_role: "PRIMARY_BUSINESS_RESULT",
-        funnel_stage: "QUALIFIED_LEAD",
-        funnel_complete: true,
+        type: "FORM",
+        default_price: 25000,
+        is_retargeting: false,
+        conditions: [{ type: "EXACT", value: "participate-form" }],
+        steps: [],
+        provider_metadata_complete: true,
       },
-      value_tracking: { relevant: true, status: "READY", currency: "RUB" },
-      offline_conversion: { relevant: false, status: "NOT_APPLICABLE" },
+      goal_catalog: [{
+        id: "1717",
+        name: "Отправленная заявка на участие",
+        type: "FORM",
+        default_price: 25000,
+        is_retargeting: false,
+        conditions: [{ type: "EXACT", value: "participate-form" }],
+        steps: [],
+      }],
+      goal_catalog_complete: true,
+      goal_catalog_total: 1,
       ...overrides,
     },
     performance: {
@@ -127,16 +139,81 @@ test("exact measurement and relevant existing landing are ready for every served
 });
 
 test("sparse weak goal is a blocker with a concrete measurement repair plan and no write action", async () => {
-  const weak = context({ goal_definition: { name: "Просмотр страницы", type: "PAGE_VIEW", semantic_role: "MICRO_CONVERSION", funnel_stage: "AWARENESS", funnel_complete: false } });
+  const weak = context({
+    goal_definition: {
+      source: "YANDEX_METRIKA_MANAGEMENT_API",
+      name: "Просмотр страницы",
+      type: "URL",
+      default_price: null,
+      is_retargeting: false,
+      conditions: [{ type: "CONTAIN", value: "/participate" }],
+      steps: [],
+      provider_metadata_complete: true,
+    },
+    goal_catalog: [{ id: "1717", name: "Просмотр страницы", type: "URL", default_price: null, is_retargeting: false, conditions: [{ type: "CONTAIN", value: "/participate" }], steps: [] }],
+  });
   weak.performance.display_metrics.goal_visits = "1";
   const result = await build({ metrika: weak });
   assert.equal(result.measurement.status, "BLOCKED");
   assert.equal(result.status, "BLOCKED");
   assert.ok(result.measurement.checks.some((check) => check.code === "GOAL_SEMANTICS" && check.status === "FAIL"));
   assert.ok(result.measurement.checks.some((check) => check.code === "RECENT_REACHES" && check.status === "FAIL"));
-  assert.ok(result.repair_plan.some((item) => /выбрать существующую основную цель|проверить достижение/iu.test(item.action)));
+  assert.ok(result.repair_plan.some((item) => /подтвердить одну существующую основную цель|проверить достижение/iu.test(item.action)));
   assert.equal(result.external_changes_performed, false);
   assert.doesNotMatch(JSON.stringify(result), /create goal|goal creation|изменить сайт автоматически/iu);
+});
+
+test("duplicate or materially ambiguous goals block without an arbitrary choice and prepare an owner decision", async (t) => {
+  await t.test("duplicate", async () => {
+    const duplicate = context({
+      goal_catalog: [
+        { id: "1717", name: "Отправленная заявка на участие", type: "FORM", default_price: 25000, is_retargeting: false, conditions: [{ type: "EXACT", value: "participate-form" }], steps: [] },
+        { id: "1818", name: "Отправленная заявка на участие", type: "FORM", default_price: 25000, is_retargeting: false, conditions: [{ type: "EXACT", value: "participate-form" }], steps: [] },
+      ],
+    });
+    const result = await build({ metrika: duplicate });
+    assert.ok(result.measurement.checks.some((check) => check.code === "GOAL_DUPLICATION" && check.status === "FAIL"));
+    assert.equal(result.measurement.status, "BLOCKED");
+    assert.ok(result.human_decision_gate);
+    assert.match(result.human_decision_gate.evidence.join(" "), /две цели|1717|1818/iu);
+    assert.equal(result.human_decision_gate.options.length >= 2, true);
+  });
+
+  await t.test("unknown semantic stage", async () => {
+    const ambiguous = context({
+      goal_definition: {
+        source: "YANDEX_METRIKA_MANAGEMENT_API",
+        name: "Успешное действие",
+        type: "ACTION",
+        default_price: null,
+        is_retargeting: false,
+        conditions: [{ type: "EXACT", value: "success" }],
+        steps: [],
+        provider_metadata_complete: true,
+      },
+      goal_catalog: [
+        { id: "1717", name: "Успешное действие", type: "ACTION", default_price: null, is_retargeting: false, conditions: [{ type: "EXACT", value: "success" }], steps: [] },
+        { id: "1818", name: "Отправленная заявка на участие", type: "FORM", default_price: null, is_retargeting: false, conditions: [{ type: "EXACT", value: "participate-form" }], steps: [] },
+      ],
+    });
+    const result = await build({ metrika: ambiguous });
+    assert.ok(result.measurement.checks.some((check) => check.code === "GOAL_SEMANTICS" && check.status === "UNKNOWN"));
+    assert.ok(result.human_decision_gate);
+    assert.match(result.human_decision_gate.recommendation, /не переключать|заблокир/iu);
+    assert.ok(result.human_decision_gate.options.some((option) => /Отправленная заявка/iu.test(option.option)));
+    assert.equal(result.external_changes_performed, false);
+  });
+});
+
+test("missing exact attribution prepares a material decision instead of inventing a traffic link", async () => {
+  const missing = context();
+  missing.performance.provenance.attribution = "unspecified";
+  missing.performance.provenance.dimensions = [];
+  missing.performance.provenance.filters = "";
+  const result = await build({ metrika: missing });
+  assert.ok(result.measurement.checks.some((check) => check.code === "ATTRIBUTION" && check.status === "UNKNOWN"));
+  assert.ok(result.human_decision_gate);
+  assert.match(result.human_decision_gate.evidence.join(" "), /атрибуц|область трафика/iu);
 });
 
 test("desktop/mobile destination mismatch blocks the served mobile scope", async () => {

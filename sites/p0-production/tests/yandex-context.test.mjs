@@ -92,7 +92,17 @@ test("verifies exact Metrika counter and goal authority through management APIs"
       const url = String(input);
       urls.push(url);
       if (url.endsWith("/counter/424242")) return json({ counter: { id: 424242, name: "Owner", time_zone_name: "Europe/Moscow" } });
-      if (url.endsWith("/counter/424242/goals")) return json({ goals: [{ id: 1717, name: "Lead" }] });
+      if (url.endsWith("/counter/424242/goals")) return json({ goals: [
+        {
+          id: 1717,
+          name: "Отправленная заявка на участие",
+          type: "form",
+          default_price: 25000,
+          is_retargeting: 0,
+          conditions: [{ type: "exact", url: "participate-form" }],
+        },
+        { id: 1818, name: "Просмотр страницы участия", type: "url", conditions: [{ type: "contain", url: "/participate" }] },
+      ] });
       throw new Error(`Unexpected URL ${url}`);
     },
     () => "2026-08-21T10:00:00.000Z",
@@ -109,6 +119,38 @@ test("verifies exact Metrika counter and goal authority through management APIs"
     time_zone: "Europe/Moscow",
     binding: { expected_counter_id: "424242", api_counter_id: "424242", matched: true },
     goal_binding: { expected_goal_id: "1717", api_goal_id: "1717", matched: true },
+    goal_definition: {
+      source: "YANDEX_METRIKA_MANAGEMENT_API",
+      name: "Отправленная заявка на участие",
+      type: "FORM",
+      default_price: 25000,
+      is_retargeting: false,
+      conditions: [{ type: "EXACT", value: "participate-form" }],
+      steps: [],
+      provider_metadata_complete: true,
+    },
+    goal_catalog: [
+      {
+        id: "1717",
+        name: "Отправленная заявка на участие",
+        type: "FORM",
+        default_price: 25000,
+        is_retargeting: false,
+        conditions: [{ type: "EXACT", value: "participate-form" }],
+        steps: [],
+      },
+      {
+        id: "1818",
+        name: "Просмотр страницы участия",
+        type: "URL",
+        default_price: null,
+        is_retargeting: null,
+        conditions: [{ type: "CONTAIN", value: "/participate" }],
+        steps: [],
+      },
+    ],
+    goal_catalog_complete: true,
+    goal_catalog_total: 2,
     observed_at: "2026-08-21T10:00:00.000Z",
   });
   assert.doesNotMatch(JSON.stringify(result), /fixture-only/u);

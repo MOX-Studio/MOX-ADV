@@ -161,7 +161,7 @@ export type OwnerJourneyProjection = {
       priorityCorrections: Array<{ priority: number; action: string; basis: "Наблюдение" | "Гипотеза" }>;
     };
     repairPlan: Array<{ priority: number; action: string; expectedResult: string }>;
-    decisionGate: null | { recommendation: string; evidence: string; options: string };
+    decisionGate: null | { recommendation: string; evidence: string; confidence: string; options: string };
     limitations: string[];
   } | null;
   materialUnknowns: string[];
@@ -1080,6 +1080,7 @@ const READINESS_CHECK_LABELS: Record<string, string> = {
   EXACT_BINDING: "Точная привязка аналитики",
   GOAL_SEMANTICS: "Смысл основной цели",
   GOAL_FUNNEL: "Этап воронки",
+  GOAL_DUPLICATION: "Отсутствие дублирующей цели",
   RECENT_REACHES: "Свежие достижения",
   SAMPLING_PRIVACY_LAG: "Качество и задержка данных",
   ATTRIBUTION: "Привязка результата к выбранному трафику",
@@ -1138,6 +1139,7 @@ function businessReadinessProjection(state: InternalState): OwnerJourneyProjecti
     decisionGate: Object.keys(gate).length ? {
       recommendation: ownerText(gate.recommendation),
       evidence: list(gate.evidence).map((item) => ownerText(item)).join(" · "),
+      confidence: gate.confidence === "LIMITED" ? "Ограниченная" : ownerText(gate.confidence, "Не определена"),
       options: list(gate.options).map((item) => `${ownerText(record(item).option)}: ${ownerText(record(item).consequence)}`).join(" · "),
     } : null,
     limitations: list(readiness.limitations).map((item) => ownerText(item)).filter(Boolean),

@@ -149,14 +149,18 @@ function context() {
         matched: true,
       },
       goal_definition: {
+        source: "YANDEX_METRIKA_MANAGEMENT_API",
         name: "Заявка на участие в промышленной выставке",
-        type: "ACTION",
-        semantic_role: "PRIMARY_BUSINESS_RESULT",
-        funnel_stage: "QUALIFIED_LEAD",
-        funnel_complete: true,
+        type: "FORM",
+        default_price: 25000,
+        is_retargeting: false,
+        conditions: [{ type: "EXACT", value: "participate-form" }],
+        steps: [],
+        provider_metadata_complete: true,
       },
-      value_tracking: { relevant: true, status: "READY", currency: "RUB" },
-      offline_conversion: { relevant: false, status: "NOT_APPLICABLE" },
+      goal_catalog: [{ id: "1717", name: "Заявка на участие в промышленной выставке", type: "FORM", default_price: 25000, is_retargeting: false, conditions: [{ type: "EXACT", value: "participate-form" }], steps: [] }],
+      goal_catalog_complete: true,
+      goal_catalog_total: 1,
       observed_at: "2026-08-21T10:00:00.000Z",
     },
     campaign_catalog: { total: 1, active: [] },
@@ -840,6 +844,39 @@ test("unavailable destination inspection remains an owner-visible blocker with a
   assert.equal(projection.businessReadiness.destination.status, "Недоступно");
   assert.ok(projection.businessReadiness.repairPlan.some((item) => /безопасн|провер/iu.test(item.action)));
   assert.equal(projection.primaryAction, null);
+});
+
+test("material Metrika goal ambiguity reaches the owner as a complete prepared decision packet", async (t) => {
+  const { directory, store } = await fixture();
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const ambiguous = context();
+  ambiguous.metrika.goal_definition = {
+    source: "YANDEX_METRIKA_MANAGEMENT_API",
+    name: "Успешное действие",
+    type: "ACTION",
+    default_price: null,
+    is_retargeting: false,
+    conditions: [{ type: "EXACT", value: "success" }],
+    steps: [],
+    provider_metadata_complete: true,
+  };
+  ambiguous.metrika.goal_catalog = [
+    { id: "1717", name: "Успешное действие", type: "ACTION", default_price: null, is_retargeting: false, conditions: [{ type: "EXACT", value: "success" }], steps: [] },
+    { id: "1818", name: "Заявка на участие в промышленной выставке", type: "FORM", default_price: null, is_retargeting: false, conditions: [{ type: "EXACT", value: "participate-form" }], steps: [] },
+  ];
+  const application = new P0Application({ store, adapters: adapters({ async readContext() { return structuredClone(ambiguous); } }) });
+  let result = await application.command("owner", { action: "analyze_site", expected_revision: 0, url: "https://owner.example/participate" });
+  result = await application.command("owner", { action: "confirm_context_goal", expected_revision: result.revision, confirmation: "CONFIRM_CONTEXT_GOAL", goal: result.state.context_state.provisional_business_goal.value });
+  result = await application.command("owner", { action: "save_business_model", expected_revision: result.revision, value: ownerModel(result.state) });
+  result = await approveStrategy(application, result);
+
+  assert.equal(result.state.measurement_destination_readiness.measurement.status, "BLOCKED");
+  assert.equal(result.state.recommendation_set.drafts.some((draft) => draft.shortlist_eligible), false);
+  const projection = await new P0OwnerJourney(application, { agentProjection: async () => null }).query("owner");
+  assert.match(projection.businessReadiness.decisionGate.recommendation, /не переключать/iu);
+  assert.match(projection.businessReadiness.decisionGate.evidence, /Успешное действие|бизнес-результат/iu);
+  assert.equal(projection.businessReadiness.decisionGate.confidence, "Ограниченная");
+  assert.match(projection.businessReadiness.decisionGate.options, /Заявка на участие.+потребуется точная серверная привязка/iu);
 });
 
 test("rejects a content-rehashed cross-party LandingAdvisoryRun before query or downstream use", async (t) => {
@@ -4380,7 +4417,8 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
   assert.match(projection.appliedPractice.limitation, /не обещание результата/iu);
   assert.doesNotMatch(JSON.stringify(projection.appliedPractice), /release|digest|rule[_ -]?id|evaluator/iu);
   assert.equal(projection.businessReadiness.status, "Готово");
-  assert.equal(projection.businessReadiness.measurement.checks.length, 8);
+  assert.equal(projection.businessReadiness.measurement.checks.length, 9);
+  assert.ok(projection.businessReadiness.measurement.checks.some((check) => check.label === "Отсутствие дублирующей цели" && check.result === "Пройдено"));
   assert.deepEqual(projection.businessReadiness.destination.scopes.map((scope) => [scope.device, scope.classification]), [
     ["Компьютеры", "Существующая посадочная"],
     ["Мобильные устройства", "Существующая посадочная"],

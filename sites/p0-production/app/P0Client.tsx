@@ -186,7 +186,7 @@ export default function P0Client() {
             </div>
             {projection.businessReadiness.destination.priorityCorrections.length > 0 && <div><h3>До трёх приоритетных исправлений</h3><ol>{projection.businessReadiness.destination.priorityCorrections.map((item) => <li key={`${item.priority}-${item.action}`}><strong>{item.priority}. {item.action}</strong><span>{item.basis}</span></li>)}</ol></div>}
             {projection.businessReadiness.repairPlan.length > 0 && <div><h3>Подготовленный план</h3><ol>{projection.businessReadiness.repairPlan.map((item) => <li key={`${item.priority}-${item.action}`}><strong>{item.action}</strong><span>{item.expectedResult}</span></li>)}</ol></div>}
-            {projection.businessReadiness.decisionGate && <article className="owner-card human-decision-gate"><span>РЕШЕНИЕ ВЛАДЕЛЬЦА</span><h3>{projection.businessReadiness.decisionGate.recommendation}</h3><p>{projection.businessReadiness.decisionGate.evidence}</p><p>{projection.businessReadiness.decisionGate.options}</p></article>}
+            {projection.businessReadiness.decisionGate && <article className="owner-card human-decision-gate"><span>РЕШЕНИЕ ВЛАДЕЛЬЦА</span><h3>{projection.businessReadiness.decisionGate.recommendation}</h3><p><b>Доказательства:</b> {projection.businessReadiness.decisionGate.evidence}</p><p><b>Уверенность:</b> {projection.businessReadiness.decisionGate.confidence}</p><p><b>Варианты и последствия:</b> {projection.businessReadiness.decisionGate.options}</p></article>}
           </section>}
 
           {activeStage === "findings" && activeStageStatus !== "upcoming" && projection.competitorMatrix && <section className="owner-competitor-matrix" aria-labelledby="owner-competitor-matrix-title">

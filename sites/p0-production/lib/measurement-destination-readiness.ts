@@ -15,7 +15,7 @@ export type DestinationClassification = "EXISTING_BUSINESS_PAGE" | "EXISTING_LAN
 type CheckStatus = "PASS" | "FAIL" | "UNKNOWN" | "NOT_APPLICABLE";
 
 export type ReadinessCheck = {
-  code: "EXACT_BINDING" | "GOAL_SEMANTICS" | "GOAL_FUNNEL" | "RECENT_REACHES" | "SAMPLING_PRIVACY_LAG" | "ATTRIBUTION" | "VALUE_REVENUE" | "OFFLINE_READINESS";
+  code: "EXACT_BINDING" | "GOAL_SEMANTICS" | "GOAL_FUNNEL" | "GOAL_DUPLICATION" | "RECENT_REACHES" | "SAMPLING_PRIVACY_LAG" | "ATTRIBUTION" | "VALUE_REVENUE" | "OFFLINE_READINESS";
   status: CheckStatus;
   conclusion: string;
   limitation: string | null;
@@ -31,6 +31,17 @@ export type MeasurementDestinationReadiness = {
   measurement: {
     status: "READY" | "BLOCKED";
     checks: ReadinessCheck[];
+    goal_assessment: {
+      business_result: string;
+      selected_goal: { goal_id: string; name: string; type: string; source: string };
+      result_funnel_stage: "QUALIFIED_LEAD" | "SALE" | "AWARENESS" | "UNKNOWN";
+      goal_funnel_stage: "QUALIFIED_LEAD" | "SALE" | "AWARENESS" | "UNKNOWN";
+      semantic_similarity: number;
+      duplicate_goal_ids: string[];
+      alternatives: Array<{ goal_id: string; name: string; type: string; funnel_stage: string; semantic_similarity: number }>;
+      attribution_assumption: string;
+      value_assumption: string;
+    };
     evidence: {
       source: "YANDEX_METRIKA_OFFICIAL_API";
       observed_at: string | null;
@@ -144,6 +155,58 @@ function currentFreshness(observedAt: unknown, nowValue: string, maximumDays: nu
   return now - observed <= maximumDays * 86_400_000 && now >= observed - 60_000 ? "CURRENT" as const : "STALE" as const;
 }
 
+type FunnelStage = "QUALIFIED_LEAD" | "SALE" | "AWARENESS" | "UNKNOWN";
+
+const GENERIC_RESULT_WORDS = new Set(["отправлен", "успешн", "основн", "участи", "получен", "результ", "действ"]);
+
+function semanticTokens(value: unknown) {
+  return [...new Set((text(value, 1_000).toLowerCase().match(/[\p{L}\p{N}]{4,}/gu) ?? [])
+    .map((item) => item.slice(0, Math.min(item.length, 7)))
+    .filter((item) => !GENERIC_RESULT_WORDS.has(item)))];
+}
+
+function semanticSimilarity(left: unknown, right: unknown) {
+  const expected = semanticTokens(left);
+  const observed = new Set(semanticTokens(right));
+  return expected.length ? expected.filter((item) => observed.has(item)).length / expected.length : 0;
+}
+
+function stageFromText(value: unknown): FunnelStage {
+  const normalized = text(value, 1_000).toLowerCase();
+  if (/(?:покуп|оплат|продаж|заказ.{0,20}(?:оформ|заверш)|выруч)/u.test(normalized)) return "SALE";
+  if (/(?:заяв|регистрац|обращен|звон|встреч|консультац|брони|запрос|лид)/u.test(normalized)) return "QUALIFIED_LEAD";
+  if (/(?:просмотр|переход|клик|посещ|скач)/u.test(normalized)) return "AWARENESS";
+  return "UNKNOWN";
+}
+
+function stageFromGoal(goal: Record<string, unknown>): FunnelStage {
+  const type = text(goal.type, 100).toUpperCase();
+  if (["PURCHASE", "ORDER"].includes(type)) return "SALE";
+  if (["FORM", "PHONE", "EMAIL", "MESSENGER"].includes(type)) return "QUALIFIED_LEAD";
+  if (["URL", "DEPTH", "NUMBER", "PAGE_VIEW", "SOCIAL", "FILE", "SEARCH"].includes(type)) return "AWARENESS";
+  return stageFromText(goal.name);
+}
+
+function funnelStageLabel(value: string) {
+  return ({ QUALIFIED_LEAD: "квалифицированный лид", SALE: "продажа", AWARENESS: "ранний этап", UNKNOWN: "этап не определён" } as Record<string, string>)[value] ?? "этап не определён";
+}
+
+function goalTypeLabel(value: string) {
+  return ({ FORM: "отправка формы", PHONE: "звонок", EMAIL: "письмо", MESSENGER: "обращение в мессенджер", PURCHASE: "покупка", ORDER: "заказ", ACTION: "составное действие", URL: "посещение страницы" } as Record<string, string>)[value] ?? "тип провайдера не распознан";
+}
+
+function goalTriggerSignature(goal: Record<string, unknown>) {
+  const conditions = list(goal.conditions).map((item) => {
+    const value = record(item);
+    return `${text(value.type, 100).toUpperCase()}:${text(value.value ?? value.url, 1_000).toLowerCase()}`;
+  }).filter((item) => item !== ":").sort();
+  const steps = list(goal.steps).map((item) => {
+    const value = record(item);
+    return `${text(value.type, 100).toUpperCase()}:${text(value.name, 500).toLowerCase()}`;
+  }).filter((item) => item !== ":").sort();
+  return [...conditions, ...steps].join("|");
+}
+
 function measurementChecks(context: Record<string, unknown>, qualifiedResult: string, nowValue: string) {
   const metrika = record(context.metrika);
   const binding = record(metrika.binding);
@@ -153,8 +216,6 @@ function measurementChecks(context: Record<string, unknown>, qualifiedResult: st
   const display = record(performance.display_metrics);
   const provenance = record(performance.provenance);
   const sampling = record(provenance.sampling);
-  const valueTracking = record(metrika.value_tracking);
-  const offline = record(metrika.offline_conversion);
   const exact = metrika.ready === true
     && metrika.authority === "VERIFIED"
     && metrika.access === "YANDEX_METRIKA_MANAGEMENT_AND_REPORTS_API"
@@ -163,13 +224,38 @@ function measurementChecks(context: Record<string, unknown>, qualifiedResult: st
     && text(binding.api_counter_id, 100) === text(metrika.counter_id, 100)
     && text(goalBinding.expected_goal_id, 100) === text(metrika.goal_id, 100)
     && text(goalBinding.api_goal_id, 100) === text(metrika.goal_id, 100);
-  const goalName = text(goal.name, 500).toLowerCase();
-  const resultTokens = qualifiedResult.toLowerCase().match(/[\p{L}\p{N}]{4,}/gu) ?? [];
-  const overlap = resultTokens.length ? resultTokens.filter((token) => goalName.includes(token)).length / resultTokens.length : 0;
-  const semanticsKnown = Boolean(goalName && goal.type && goal.semantic_role);
-  const semanticsPass = semanticsKnown && goal.semantic_role === "PRIMARY_BUSINESS_RESULT" && overlap >= 0.15;
-  const funnelKnown = typeof goal.funnel_complete === "boolean" && Boolean(goal.funnel_stage);
-  const funnelPass = funnelKnown && goal.funnel_complete === true && !["AWARENESS", "MICRO_CONVERSION"].includes(String(goal.funnel_stage));
+  const selectedGoalId = text(metrika.goal_id, 100);
+  const goalName = text(goal.name, 500);
+  const goalType = text(goal.type, 100).toUpperCase();
+  const providerMetadata = goal.source === "YANDEX_METRIKA_MANAGEMENT_API"
+    && goal.provider_metadata_complete === true && Boolean(goalName && goalType);
+  const resultStage = stageFromText(qualifiedResult);
+  const goalStage = stageFromGoal(goal);
+  const similarity = semanticSimilarity(qualifiedResult, goalName);
+  const semanticsKnown = providerMetadata && resultStage !== "UNKNOWN" && goalStage !== "UNKNOWN";
+  const semanticsPass = semanticsKnown && resultStage === goalStage && similarity >= 0.2;
+  const funnelKnown = providerMetadata && resultStage !== "UNKNOWN" && goalStage !== "UNKNOWN";
+  const funnelPass = funnelKnown && resultStage === goalStage && !["AWARENESS", "UNKNOWN"].includes(goalStage);
+  const catalog = list(metrika.goal_catalog).map(record).filter((item) => text(item.id, 100));
+  const selectedSignature = goalTriggerSignature(goal);
+  const selectedName = goalName.toLowerCase();
+  const duplicates = catalog.filter((candidate) => text(candidate.id, 100) !== selectedGoalId
+    && ((selectedName && text(candidate.name, 500).toLowerCase() === selectedName)
+      || (selectedSignature && text(candidate.type, 100).toUpperCase() === goalType && goalTriggerSignature(candidate) === selectedSignature)));
+  const duplicationKnown = providerMetadata && metrika.goal_catalog_complete === true
+    && catalog.some((candidate) => text(candidate.id, 100) === selectedGoalId);
+  const alternatives = catalog
+    .filter((candidate) => text(candidate.id, 100) !== selectedGoalId)
+    .map((candidate) => ({
+      goal_id: text(candidate.id, 100),
+      name: text(candidate.name, 500),
+      type: text(candidate.type, 100).toUpperCase(),
+      funnel_stage: stageFromGoal(candidate),
+      semantic_similarity: semanticSimilarity(qualifiedResult, candidate.name),
+    }))
+    .filter((candidate) => candidate.name && (candidate.semantic_similarity >= 0.2 || candidate.funnel_stage === resultStage))
+    .sort((left, right) => right.semantic_similarity - left.semantic_similarity || left.goal_id.localeCompare(right.goal_id))
+    .slice(0, 5);
   const reaches = metric(display.goal_visits);
   const reportOfficial = provenance.source_kind === "METRIKA_REPORTS_API";
   const reportWindowKnown = Boolean(text(performance.period_start, 20) && text(performance.period_end, 20));
@@ -178,34 +264,52 @@ function measurementChecks(context: Record<string, unknown>, qualifiedResult: st
   const metadataComplete = sampling.metadata_complete === true || ["sampled", "contains_sensitive_data", "sample_share", "sample_size", "sample_space", "data_lag"].every((key) => Object.hasOwn(sampling, key));
   const qualityPass = reportOfficial && metadataComplete && sampling.sampled === false && sampling.contains_sensitive_data === false && Number(sampling.data_lag) === 0;
   const attribution = text(provenance.attribution, 200);
-  const attributionPass = reportOfficial && attribution.length > 0 && attribution !== "unspecified" && list(provenance.dimensions).length > 0 && text(provenance.filters, 1_000).length > 0;
-  const valueRelevanceKnown = typeof valueTracking.relevant === "boolean";
-  const valueRelevant = valueTracking.relevant === true;
-  const valuePass = valueRelevanceKnown && (!valueRelevant || (reportOfficial && valueTracking.status === "READY" && Boolean(text(valueTracking.currency, 20)) && metric(display.goal_value) !== null));
-  const offlineRelevanceKnown = typeof offline.relevant === "boolean";
-  const offlineRelevant = offline.relevant === true;
-  const offlinePass = offlineRelevanceKnown && (!offlineRelevant || offline.status === "READY");
+  const dimensions = list(provenance.dimensions).map((item) => text(item, 200));
+  const trafficFilter = text(provenance.filters, 1_000);
+  const attributionPass = reportOfficial && attribution === "last_direct_click_order_dimension"
+    && dimensions.some((item) => item.includes("lastDirectClickOrder"))
+    && trafficFilter.includes("lastDirectClickOrder");
+  const defaultPrice = metric(goal.default_price);
+  const goalValue = metric(display.goal_value);
+  const valueKnown = resultStage !== "UNKNOWN";
+  const valuePass = resultStage === "SALE" && (defaultPrice !== null || goalValue !== null);
+  const valueStatus: CheckStatus = !valueKnown ? "UNKNOWN" : resultStage === "SALE" ? valuePass ? "PASS" : "UNKNOWN" : "NOT_APPLICABLE";
+  const valueAssumption = resultStage === "SALE"
+    ? valuePass ? "Продажа является выбранным результатом; денежная ценность наблюдаема в метаданных или отчёте Метрики." : "Продажа является выбранным результатом, но денежная ценность пока не наблюдаема."
+    : resultStage === "QUALIFIED_LEAD" ? "Выбранный результат — квалифицированный лид; выручка после продажи не приписывается этой цели без отдельного доказательства." : "Роль ценности не определена из выбранного результата.";
   const checks = [
     check("EXACT_BINDING", exact ? "PASS" : "FAIL", exact ? "Точный счётчик и цель подтверждены официальным API." : "Точная привязка счётчика и цели не подтверждена.", exact ? null : "Недоступность или несовпадение не считается готовностью."),
-    check("GOAL_SEMANTICS", semanticsPass ? "PASS" : semanticsKnown ? "FAIL" : "UNKNOWN", semanticsPass ? "Основная цель соответствует выбранному бизнес-результату." : "Смысл цели не подтверждает выбранный основной результат.", semanticsKnown ? null : "Название, тип или роль цели недоступны."),
-    check("GOAL_FUNNEL", funnelPass ? "PASS" : funnelKnown ? "FAIL" : "UNKNOWN", funnelPass ? "Цель занимает подходящий этап воронки." : "Воронка цели не подтверждена для квалифицированного результата.", funnelKnown ? null : "Этап или полнота воронки недоступны."),
+    check("GOAL_SEMANTICS", semanticsPass ? "PASS" : semanticsKnown ? "FAIL" : "UNKNOWN", semanticsPass ? `Цель «${goalName}» соответствует выбранному результату «${qualifiedResult}».` : semanticsKnown ? `Цель «${goalName}» не связана достаточно точно с результатом «${qualifiedResult}».` : "Смысл точно привязанной цели нельзя уверенно связать с выбранным результатом.", semanticsKnown ? semanticsPass ? null : `Лексическое соответствие ${(similarity * 100).toFixed(0)}%; произвольная замена цели запрещена.` : "Официальные метаданные или однозначный смысл бизнес-результата недостаточны."),
+    check("GOAL_FUNNEL", funnelPass ? "PASS" : funnelKnown ? "FAIL" : "UNKNOWN", funnelPass ? `Цель и бизнес-результат относятся к этапу «${funnelStageLabel(goalStage)}».` : funnelKnown ? `Цель относится к этапу «${funnelStageLabel(goalStage)}», а выбранный результат — к этапу «${funnelStageLabel(resultStage)}».` : "Этап воронки нельзя установить с достаточной уверенностью.", funnelKnown ? null : "Неоднозначный этап является существенной неопределённостью."),
+    check("GOAL_DUPLICATION", !duplicationKnown ? "UNKNOWN" : duplicates.length ? "FAIL" : "PASS", duplicates.length ? `Официальный API обнаружил ${duplicates.length + 1} дублирующие цели для одного события.` : duplicationKnown ? "Дублирующая цель для выбранного события не обнаружена." : "Полный каталог целей для проверки дублей недоступен.", duplicates.length ? `Дубли: ${[selectedGoalId, ...duplicates.map((item) => text(item.id, 100))].join(", ")}.` : duplicationKnown ? null : "Недоступность каталога не считается отсутствием дублей."),
     check("RECENT_REACHES", reachesPass ? "PASS" : reaches === null || !reportWindowKnown ? "UNKNOWN" : "FAIL", reachesPass ? `За свежий период наблюдалось ${reaches} достижений.` : "Свежих достижений недостаточно для проверки измеримости.", reaches === null || !reportWindowKnown ? "Недоступность не является нулём." : !reportOfficial ? "Источник отчёта не подтверждён." : reportFresh === "STALE" ? "Отчёт устарел." : reaches < 3 ? "Наблюдение разрежено: менее трёх достижений." : null),
     check("SAMPLING_PRIVACY_LAG", qualityPass ? "PASS" : metadataComplete ? "FAIL" : "UNKNOWN", qualityPass ? "Sampling, privacy и lag не ограничивают текущий отчёт." : "Качество отчёта ограничено sampling, privacy, lag или неизвестными метаданными."),
-    check("ATTRIBUTION", attributionPass ? "PASS" : "UNKNOWN", attributionPass ? "Attribution и точный traffic filter сохранены." : "Attribution или traffic scope отчёта недоступны."),
-    check("VALUE_REVENUE", !valueRelevanceKnown ? "UNKNOWN" : valueRelevant ? valuePass ? "PASS" : "FAIL" : "NOT_APPLICABLE", !valueRelevanceKnown ? "Релевантность ценности и выручки не определена." : valueRelevant ? valuePass ? "Ценность результата наблюдаема в выбранной валюте." : "Ценность или выручка результата не готовы." : "Ценность результата не требуется для выбранной measurement-схемы."),
-    check("OFFLINE_READINESS", !offlineRelevanceKnown ? "UNKNOWN" : offlineRelevant ? offlinePass ? "PASS" : "FAIL" : "NOT_APPLICABLE", !offlineRelevanceKnown ? "Релевантность результатов после продажи не определена." : offlineRelevant ? offlinePass ? "Релевантные offline results готовы к сопоставлению." : "Релевантные offline results не готовы." : "Offline measurement не требуется для выбранного результата."),
+    check("ATTRIBUTION", attributionPass ? "PASS" : "UNKNOWN", attributionPass ? "Результат связан с точной областью трафика Яндекс Директа через lastDirectClickOrder." : "Атрибуция или точная область трафика отчёта недоступны.", attributionPass ? null : "Без точного измерения и фильтра нельзя приписать результат выбранной рекламе."),
+    check("VALUE_REVENUE", valueStatus, valueAssumption, valueStatus === "UNKNOWN" ? "Предположение о ценности может изменить экономический вывод и требует решения." : null),
+    check("OFFLINE_READINESS", valueKnown ? "NOT_APPLICABLE" : "UNKNOWN", valueKnown ? "Результат оценивается на выбранном этапе; последующая продажа не приписывается ему без отдельного доказательства по результатам после продажи." : "Неясно, требуется ли сопоставление результата после продажи.", valueKnown ? null : "Неизвестный этап не позволяет определить область результатов после продажи."),
   ];
   const blocking = checks.some((item) => ["FAIL", "UNKNOWN"].includes(item.status));
   const limitations = checks.flatMap((item) => item.limitation ? [item.limitation] : []);
   return {
     status: blocking ? "BLOCKED" as const : "READY" as const,
     checks,
+    goal_assessment: {
+      business_result: qualifiedResult,
+      selected_goal: { goal_id: selectedGoalId, name: goalName, type: goalType, source: text(goal.source, 100) },
+      result_funnel_stage: resultStage,
+      goal_funnel_stage: goalStage,
+      semantic_similarity: similarity,
+      duplicate_goal_ids: duplicates.map((item) => text(item.id, 100)),
+      alternatives,
+      attribution_assumption: attributionPass ? `lastDirectClickOrder; ${trafficFilter}` : "Точная атрибуция не подтверждена.",
+      value_assumption: valueAssumption,
+    },
     evidence: {
       source: "YANDEX_METRIKA_OFFICIAL_API" as const,
       observed_at: text(provenance.observed_at || metrika.observed_at, 100) || null,
       scope: "Выбранный business result, traffic attribution и exact destination scope",
       freshness: currentFreshness(provenance.observed_at || metrika.observed_at, nowValue, 30),
-      confidence: !exact || !semanticsKnown ? "UNKNOWN" as const : blocking ? "LIMITED" as const : "HIGH" as const,
+      confidence: !exact || !providerMetadata ? "UNKNOWN" as const : blocking ? "LIMITED" as const : "HIGH" as const,
       limitations,
     },
   };
@@ -321,7 +425,7 @@ async function destinationReadiness(input: {
 function repairPlan(measurement: MeasurementDestinationReadiness["measurement"], destination: MeasurementDestinationReadiness["destination"]) {
   const actions: MeasurementDestinationReadiness["repair_plan"] = [];
   const failed = new Map(measurement.checks.filter((item) => item.status === "FAIL" || item.status === "UNKNOWN").map((item) => [item.code, item]));
-  if (failed.has("GOAL_SEMANTICS") || failed.has("GOAL_FUNNEL")) actions.push({ priority: actions.length + 1, area: "MEASUREMENT", action: "Выбрать существующую основную цель, которая точно означает выбранный квалифицированный результат; если её нет — передать ответственному за сайт подготовленное задание на настройку измерения.", expected_result: "Существующая основная цель с подтверждённым смыслом и этапом воронки.", owner_or_site_team: true });
+  if (failed.has("GOAL_SEMANTICS") || failed.has("GOAL_FUNNEL") || failed.has("GOAL_DUPLICATION")) actions.push({ priority: actions.length + 1, area: "MEASUREMENT", action: "По подготовленному пакету решения подтвердить одну существующую основную цель, которая точно означает выбранный квалифицированный результат и не дублирует то же событие; если её нет — передать ответственному за сайт готовое задание на настройку измерения.", expected_result: "Одна существующая основная цель с подтверждёнными смыслом, этапом воронки и уникальностью.", owner_or_site_team: true });
   if (failed.has("RECENT_REACHES")) actions.push({ priority: actions.length + 1, area: "MEASUREMENT", action: "Выполнить контролируемую проверку достижения на сайте силами владельца сайта и дождаться свежего отчёта без изменения цели агентом.", expected_result: "Не менее трёх свежих достижений exact-bound цели или честно задокументированная неисправность.", owner_or_site_team: true });
   if ([...failed.keys()].some((code) => !["GOAL_SEMANTICS", "GOAL_FUNNEL", "RECENT_REACHES"].includes(code))) actions.push({ priority: actions.length + 1, area: "MEASUREMENT", action: "Исправить указанные ограничения качества, задержки, привязки результата, ценности или передачи результатов после продажи; затем повторить проверку.", expected_result: "Полный свежий отчёт в нужной области без неизвестных ограничений качества.", owner_or_site_team: true });
   for (const item of destination.priority_corrections) actions.push({ priority: actions.length + 1, area: "DESTINATION", action: item.action, expected_result: `Релевантная существующая landing для ${item.device}.`, owner_or_site_team: true });
@@ -349,7 +453,34 @@ export async function buildMeasurementDestinationReadiness(input: {
   const destination = await destinationReadiness({ requestedUrl, contextSiteUrl: input.contextSiteUrl, expected, servedDevices, adapter: input.adapter });
   const plan = repairPlan(measurement, destination);
   const limitations = [...new Set([...measurement.evidence.limitations, ...destination.device_scopes.flatMap((item) => item.limitations), ...(destination.status === "UNAVAILABLE" ? ["Проверка destination недоступна; это не ноль и не готовность."] : []), ...(destination.status === "SAFETY_BLOCKED" ? ["Destination inspection остановлена fail-closed политикой сетевой безопасности."] : [])])];
-  const gateRequired = measurement.checks.some((item) => item.status === "UNKNOWN" && ["GOAL_SEMANTICS", "GOAL_FUNNEL", "VALUE_REVENUE", "OFFLINE_READINESS"].includes(item.code));
+  const materialChecks = measurement.checks.filter((item) => item.status === "UNKNOWN" && ["GOAL_SEMANTICS", "GOAL_FUNNEL", "GOAL_DUPLICATION", "ATTRIBUTION", "VALUE_REVENUE", "OFFLINE_READINESS"].includes(item.code));
+  const selectedGoal = measurement.goal_assessment.selected_goal;
+  const ambiguousAlternatives = measurement.goal_assessment.alternatives;
+  const duplicateIds = measurement.goal_assessment.duplicate_goal_ids;
+  const gateRequired = materialChecks.length > 0 || duplicateIds.length > 0
+    || (measurement.checks.some((item) => ["GOAL_SEMANTICS", "GOAL_FUNNEL"].includes(item.code) && item.status === "FAIL") && ambiguousAlternatives.length > 0);
+  const decisionEvidence = [
+    `Выбранный бизнес-результат: «${measurement.goal_assessment.business_result}».`,
+    `Точно привязанная цель ${selectedGoal.goal_id}: «${selectedGoal.name}» (${goalTypeLabel(selectedGoal.type)}).`,
+    ...materialChecks.map((item) => `${item.conclusion}${item.limitation ? ` ${item.limitation}` : ""}`),
+    ...(duplicateIds.length ? [`Официальный API показывает две цели или более для одного события: ${[selectedGoal.goal_id, ...duplicateIds].join(", ")}.`] : []),
+    `Предположение об атрибуции: ${measurement.goal_assessment.attribution_assumption}`,
+    `Предположение о ценности: ${measurement.goal_assessment.value_assumption}`,
+  ];
+  const decisionOptions = [
+    {
+      option: `Сохранить точно привязанную цель «${selectedGoal.name || "без подтверждённого названия"}» (${selectedGoal.goal_id})`,
+      consequence: "Допустимо только после подтверждения, что событие действительно означает выбранный квалифицированный результат; до этого черновик кампании остаётся заблокирован.",
+    },
+    ...ambiguousAlternatives.slice(0, 3).map((candidate) => ({
+      option: `Подтвердить существующую цель «${candidate.name}» (${candidate.goal_id}, ${goalTypeLabel(candidate.type)})`,
+      consequence: `Потребуется точная серверная привязка и повторная проверка только для чтения; предполагаемый этап «${funnelStageLabel(candidate.funnel_stage)}», смысловое соответствие ${(candidate.semantic_similarity * 100).toFixed(0)}%.`,
+    })),
+    {
+      option: "Не подтверждать ни одну существующую цель и передать готовое задание на измерение команде сайта или аналитики",
+      consequence: "Черновик кампании останется заблокирован до появления одной точной недублирующей цели и повторной проверки официальным API.",
+    },
+  ];
   const unsigned = {
     schema_version: MEASUREMENT_DESTINATION_READINESS_SCHEMA as typeof MEASUREMENT_DESTINATION_READINESS_SCHEMA,
     contract_version: MEASUREMENT_DESTINATION_READINESS_VERSION as typeof MEASUREMENT_DESTINATION_READINESS_VERSION,
@@ -361,13 +492,10 @@ export async function buildMeasurementDestinationReadiness(input: {
     repair_plan: plan,
     human_decision_gate: gateRequired ? {
       reason: "MATERIAL_UNCERTAINTY" as const,
-      recommendation: "Сначала подтвердить смысл существующей основной цели и подготовить instrumentation brief; не разрешать traffic до повторной проверки.",
-      evidence: measurement.checks.filter((item) => item.status === "UNKNOWN").map((item) => item.conclusion),
+      recommendation: "Не переключать цель автоматически и оставить черновик кампании заблокированным, пока владелец не выберет подготовленный вариант по смыслу бизнес-события.",
+      evidence: decisionEvidence,
       confidence: "LIMITED" as const,
-      options: [
-        { option: "Подтвердить подходящую существующую цель", consequence: "Агент повторит read-only проверку без создания цели." },
-        { option: "Передать подготовленный instrumentation brief site/analytics team", consequence: "Draft останется заблокирован до появления проверяемых достижений." },
-      ],
+      options: decisionOptions,
     } : null,
     limitations,
     external_changes_performed: false as const,

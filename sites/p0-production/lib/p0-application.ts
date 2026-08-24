@@ -1005,8 +1005,7 @@ function sanitizeContext(input: P0Context): P0Context {
   const metrikaBinding = record(metrika.binding);
   const goalBinding = record(metrika.goal_binding);
   const goalDefinition = record(metrika.goal_definition);
-  const valueTracking = record(metrika.value_tracking);
-  const offlineConversion = record(metrika.offline_conversion);
+  const goalCatalog = Array.isArray(metrika.goal_catalog) ? metrika.goal_catalog.map(record) : [];
   const catalog = record(input.campaign_catalog);
   const performance = record(input.performance);
   const metrics = record(performance.display_metrics);
@@ -1089,21 +1088,38 @@ function sanitizeContext(input: P0Context): P0Context {
       },
       observed_at: cleanText(String(metrika.observed_at ?? ""), 100),
       goal_definition: {
+        source: cleanText(String(goalDefinition.source ?? ""), 100),
         name: artifactText(goalDefinition.name, 500),
         type: cleanText(String(goalDefinition.type ?? ""), 100),
-        semantic_role: cleanText(String(goalDefinition.semantic_role ?? ""), 100),
-        funnel_stage: cleanText(String(goalDefinition.funnel_stage ?? ""), 100),
-        funnel_complete: typeof goalDefinition.funnel_complete === "boolean" ? goalDefinition.funnel_complete : null,
+        default_price: goalDefinition.default_price === null || goalDefinition.default_price === undefined ? null : Number(goalDefinition.default_price),
+        is_retargeting: typeof goalDefinition.is_retargeting === "boolean" ? goalDefinition.is_retargeting : null,
+        conditions: Array.isArray(goalDefinition.conditions) ? goalDefinition.conditions.slice(0, 50).map((value) => {
+          const item = record(value);
+          return { type: cleanText(String(item.type ?? ""), 100), value: artifactText(item.value, 1_000) };
+        }) : [],
+        steps: Array.isArray(goalDefinition.steps) ? goalDefinition.steps.slice(0, 50).map((value) => {
+          const item = record(value);
+          return { id: cleanText(String(item.id ?? ""), 100), name: artifactText(item.name, 500), type: cleanText(String(item.type ?? ""), 100) };
+        }) : [],
+        provider_metadata_complete: goalDefinition.provider_metadata_complete === true,
       },
-      value_tracking: {
-        relevant: typeof valueTracking.relevant === "boolean" ? valueTracking.relevant : null,
-        status: cleanText(String(valueTracking.status ?? ""), 100),
-        currency: cleanText(String(valueTracking.currency ?? ""), 20),
-      },
-      offline_conversion: {
-        relevant: typeof offlineConversion.relevant === "boolean" ? offlineConversion.relevant : null,
-        status: cleanText(String(offlineConversion.status ?? ""), 100),
-      },
+      goal_catalog: goalCatalog.slice(0, 500).map((item) => ({
+        id: cleanText(String(item.id ?? ""), 100),
+        name: artifactText(item.name, 500),
+        type: cleanText(String(item.type ?? ""), 100),
+        default_price: item.default_price === null || item.default_price === undefined ? null : Number(item.default_price),
+        is_retargeting: typeof item.is_retargeting === "boolean" ? item.is_retargeting : null,
+        conditions: Array.isArray(item.conditions) ? item.conditions.slice(0, 50).map((value) => {
+          const condition = record(value);
+          return { type: cleanText(String(condition.type ?? ""), 100), value: artifactText(condition.value, 1_000) };
+        }) : [],
+        steps: Array.isArray(item.steps) ? item.steps.slice(0, 50).map((value) => {
+          const step = record(value);
+          return { id: cleanText(String(step.id ?? ""), 100), name: artifactText(step.name, 500), type: cleanText(String(step.type ?? ""), 100) };
+        }) : [],
+      })).filter((item) => item.id),
+      goal_catalog_complete: metrika.goal_catalog_complete === true,
+      goal_catalog_total: Number.isFinite(Number(metrika.goal_catalog_total)) ? Number(metrika.goal_catalog_total) : goalCatalog.length,
       blockers: stringList(metrika.blockers),
     },
     campaign_catalog: input.campaign_catalog
