@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import { D1P0AgentRunStore } from "../lib/p0-agent-d1-store.ts";
+import { D1P0ApplicationStore } from "../lib/p0-application-d1-store.ts";
 
 function d1Shim(database) {
   const wrap = (statement, values = []) => ({
@@ -15,6 +16,9 @@ function d1Shim(database) {
     },
     async first() {
       return statement.get(...values) ?? null;
+    },
+    async all() {
+      return { results: statement.all(...values) };
     },
   });
   return {
@@ -107,6 +111,65 @@ function runState() {
     updated_at: "2026-08-22T16:00:00.000Z",
   };
 }
+
+test("D1 application store preserves the complete interview document and rejects stale CAS", async () => {
+  const database = new DatabaseSync(":memory:");
+  const binding = d1Shim(database);
+  const firstProcess = new D1P0ApplicationStore(binding);
+  const initial = {
+    revision: 0,
+    updated_at: "2026-08-22T16:00:00.000Z",
+    value_json: JSON.stringify({
+      schema_version: "p0-application-document-v16",
+      owner_goal_interview: {
+        schema_version: "p0-owner-goal-interview-v1",
+        interviewKey: "d1-interview",
+        revision: 4,
+        questionOrder: ["goal", "audience"],
+        questions: [
+          { key: "goal", prompt: "Цель?", recommendation: { answer: "Заявка", rationale: "Основание", evidence: "Факт", confidence: "Достаточная" }, target: { kind: "BUSINESS_GOAL" } },
+          { key: "audience", prompt: "Аудитория?", recommendation: { answer: "Руководитель", rationale: "Основание", evidence: "Факт", confidence: "Достаточная" }, target: { kind: "BUSINESS_MODEL_FIELD", field: "audience" } },
+        ],
+        confirmedAnswers: [{ questionKey: "goal", question: "Цель?", answer: "Квалифицированная заявка", source: "OWNER_CORRECTED" }],
+        invalidatedAnswers: [],
+        corrections: [{ questionKey: "goal", answer: "Квалифицированная заявка", interviewRevision: 2 }],
+        remainingQuestions: [{ key: "audience", prompt: "Аудитория?", recommendation: { answer: "Руководитель", rationale: "Основание", evidence: "Факт", confidence: "Достаточная" }, target: { kind: "BUSINESS_MODEL_FIELD", field: "audience" } }],
+        phase: "resumable-continuation",
+        current: { key: "goal", prompt: "Цель?", recommendation: { answer: "Заявка", rationale: "Основание", evidence: "Факт", confidence: "Достаточная" }, target: { kind: "BUSINESS_GOAL" } },
+        confirmedAnswer: { questionKey: "goal", question: "Цель?", answer: "Квалифицированная заявка", source: "OWNER_CORRECTED" },
+      },
+      owner_goal_interview_pending_answer: null,
+    }),
+  };
+  assert.equal(await firstProcess.initialize("owner", initial), true);
+
+  const next = {
+    revision: 1,
+    updated_at: "2026-08-22T16:01:00.000Z",
+    value_json: initial.value_json.replace('"revision":4', '"revision":5'),
+  };
+  assert.equal(await firstProcess.compareAndSwap("owner", 0, next), true);
+  assert.equal(await firstProcess.compareAndSwap("owner", 0, { ...next, revision: 2 }), false);
+
+  const compactedRun = runState();
+  const agentStore = new D1P0AgentRunStore(binding);
+  assert.equal(await agentStore.initialize(compactedRun), true);
+  compactedRun.version = 1;
+  compactedRun.compaction = {
+    through_observation_sequence: 0,
+    summary: "Контекст агента сжат без изменения authoritative owner input.",
+    compacted_at: "2026-08-22T16:02:00.000Z",
+  };
+  compactedRun.updated_at = "2026-08-22T16:02:00.000Z";
+  assert.equal(await agentStore.compareAndSwap(compactedRun.run_id, 0, compactedRun), true);
+
+  const restarted = new D1P0ApplicationStore(binding);
+  assert.deepEqual({ ...await restarted.load("owner") }, next);
+  const history = await restarted.history("owner");
+  assert.deepEqual(history.map((row) => row.revision), [1, 0]);
+  assert.equal(JSON.parse(history[0].value_json).owner_goal_interview.corrections[0].answer, "Квалифицированная заявка");
+  database.close();
+});
 
 test("D1 store durably reloads run, checkpoint, observation, source references, budget and stop reason", async () => {
   const database = new DatabaseSync(":memory:");

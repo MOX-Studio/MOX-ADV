@@ -137,6 +137,16 @@ import {
   summarizeP0Revision,
   type P0RevisionSummary,
 } from "./revision-history.ts";
+import {
+  beginOwnerGoalInterview,
+  correctConfirmedOwnerGoalInterviewAnswer,
+  transitionOwnerGoalInterview,
+  validateOwnerGoalInterviewState,
+  type OwnerGoalInterviewConfirmedAnswer,
+  type OwnerGoalInterviewQuestion,
+  type OwnerGoalInterviewState,
+  type OwnerGoalInterviewSubmission,
+} from "./p0-owner-journey-transition.ts";
 import { normalizePublicHttpsUrl } from "./site-url.ts";
 import { cleanText } from "./text.ts";
 import type { MarketEvidenceInput } from "./market-evidence.ts";
@@ -156,8 +166,8 @@ import {
 
 export const P0_APPLICATION_CONTRACT = "mox-adv.p0.application";
 export const P0_APPLICATION_CONTRACT_VERSION = "1.28.0";
-export const P0_DOCUMENT_SCHEMA = "p0-application-document-v15";
-const P0_LEGACY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4", "p0-application-document-v5", "p0-application-document-v6", "p0-application-document-v7", "p0-application-document-v8", "p0-application-document-v9", "p0-application-document-v10", "p0-application-document-v11", "p0-application-document-v12", "p0-application-document-v13", "p0-application-document-v14"]);
+export const P0_DOCUMENT_SCHEMA = "p0-application-document-v16";
+const P0_LEGACY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4", "p0-application-document-v5", "p0-application-document-v6", "p0-application-document-v7", "p0-application-document-v8", "p0-application-document-v9", "p0-application-document-v10", "p0-application-document-v11", "p0-application-document-v12", "p0-application-document-v13", "p0-application-document-v14", "p0-application-document-v15"]);
 const P0_PRE_PACKAGE_AUTHORITY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4"]);
 export const P0_CONTEXT_SCHEMA = "p0-context-v2";
 const P0_LEGACY_CONTEXT_SCHEMA = "p0-context-v1";
@@ -359,6 +369,8 @@ export type P0ContextState = {
 
 export type P0Document = {
   schema_version: typeof P0_DOCUMENT_SCHEMA;
+  owner_goal_interview: OwnerGoalInterviewState | null;
+  owner_goal_interview_pending_answer: OwnerGoalInterviewConfirmedAnswer | null;
   context_state: P0ContextState | null;
   site_analysis: SiteAnalysis | null;
   business_model: BusinessModel | null;
@@ -711,6 +723,8 @@ function fail(code: string, message: string): never {
 function emptyDocument(): P0Document {
   return {
     schema_version: P0_DOCUMENT_SCHEMA,
+    owner_goal_interview: null,
+    owner_goal_interview_pending_answer: null,
     context_state: null,
     site_analysis: null,
     business_model: null,
@@ -1760,6 +1774,83 @@ function invalidateStrategyDownstream(state: P0Document) {
   state.recommendation_recalculation = null;
 }
 
+async function applyPendingOwnerGoalInterviewAnswer(state: P0Document, appliedAt: string) {
+  const pending = state.owner_goal_interview_pending_answer;
+  if (!pending) return false;
+  const interview = state.owner_goal_interview;
+  if (!interview) lineageError("pending owner interview answer существует без опроса.");
+  const persisted = interview.confirmedAnswers.find((answer) => answer.questionKey === pending.questionKey);
+  const question = interview.questions.find((item) => item.key === pending.questionKey);
+  if (!persisted || JSON.stringify(persisted) !== JSON.stringify(pending) || !question) {
+    lineageError("pending owner interview answer не совпадает с подтверждённым ответом.");
+  }
+  const target = question.target;
+  if (!target) {
+    state.owner_goal_interview_pending_answer = null;
+    return true;
+  }
+  if (target.kind === "BUSINESS_GOAL") {
+    if (!state.context_state) lineageError("исправление цели потеряло persisted Context.");
+    const context = state.context_state;
+    const previousValue = context.business_goal_decision?.value ?? context.provisional_business_goal.value;
+    if (previousValue !== pending.answer) {
+      context.last_material_change = invalidationRecord(state, appliedAt);
+      state.last_cascade = cascadeRecord(state, "CONTEXT", appliedAt, ["campaign_strategy", "recommendation_set", "campaign_drafts", "shortlist", "confirmation"]);
+      await invalidateDecisionAuthority(state, "CONTEXT_MATERIAL_CHANGE", "Owner interview materially corrected the confirmed business goal.", appliedAt);
+      invalidateContextDownstream(state);
+      state.analytics_evidence_snapshot = null;
+      context.status = "GOAL_CONFIRMED";
+      context.business_goal_decision = {
+        value: pending.answer,
+        provisional_value: context.provisional_business_goal.value,
+        decision: pending.answer === context.provisional_business_goal.value ? "CONFIRMED" : "CORRECTED",
+        decided_at: appliedAt,
+        owner_confirmed: true,
+      };
+      context.context_revision_id = `context-interview-r${interview.revision}`;
+      context.material_fingerprint = await confirmedContextMaterialFingerprint(context.research_fingerprint, pending.answer);
+    }
+  } else {
+    if (!state.business_model) lineageError("исправление модели потеряло persisted Business Model.");
+    const model = state.business_model;
+    const field = target.field;
+    const previousValue = cleanText(String(model[field] ?? ""), 1_000);
+    if (previousValue !== pending.answer) {
+      state.last_cascade = cascadeRecord(state, "MODEL", appliedAt, ["analytics_evidence", "campaign_strategy", "recommendation_set", "campaign_drafts", "shortlist", "confirmation"]);
+      await invalidateDecisionAuthority(state, "MODEL_MATERIAL_CHANGE", "Owner interview materially corrected the confirmed Business Model.", appliedAt);
+      model[field] = pending.answer;
+      const contractField = field === "audience" ? "customer_context"
+        : field === "qualified_result" ? "qualified_outcome"
+          : field === "exclusions" ? "exclusions" : null;
+      if (contractField) {
+        model.owner_contract = await reviseBusinessModelContract({
+          previous: model.owner_contract,
+          values: { [contractField]: pending.answer },
+          confirmedAt: appliedAt,
+        });
+        model[contractField] = pending.answer as never;
+        model.missing_questions = model.owner_contract.questions.map((item) => item.question);
+      }
+      model.field_evidence[field] = {
+        ...model.field_evidence[field],
+        confidence: "OWNER_CONFIRMED",
+        source_url: model.field_evidence[field]?.source_url ?? state.site_analysis?.url ?? "",
+        quote: pending.answer,
+        owner_confirmed: true,
+        owner_confirmed_at: appliedAt,
+        owner_edited: true,
+      };
+      model.source = "REAL_SITE_RESEARCH_PLUS_OWNER_CONFIRMATION";
+      state.analytics_evidence_snapshot = null;
+      state.product_focus = null;
+      state.strategy_questionnaire = null;
+      invalidateStrategyDownstream(state);
+    }
+  }
+  state.owner_goal_interview_pending_answer = null;
+  return true;
+}
+
 async function buildMaterialDraftCorrection(
   state: P0Document,
   sourceRecommendationSet: CampaignRecommendationSet,
@@ -2119,6 +2210,23 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
   const legacyShortlistPresent = Boolean(record(raw.shortlist).shortlist_revision_id);
   let changed = legacyDocument;
   if (changed) state.schema_version = P0_DOCUMENT_SCHEMA;
+  for (const key of ["owner_goal_interview", "owner_goal_interview_pending_answer"] as const) {
+    if (!(key in state)) {
+      if (!legacyDocument) lineageError(`same-schema document field ${key} отсутствует.`);
+      state[key] = null;
+      changed = true;
+    }
+  }
+  if (state.owner_goal_interview) {
+    try {
+      state.owner_goal_interview = validateOwnerGoalInterviewState(state.owner_goal_interview);
+    } catch (error) {
+      lineageError(`owner goal interview snapshot invalid: ${errorMessage(error)}`);
+    }
+  } else if (state.owner_goal_interview_pending_answer) {
+    lineageError("pending owner goal interview answer существует без snapshot.");
+  }
+  if (await applyPendingOwnerGoalInterviewAnswer(state, updatedAt)) changed = true;
   const legacyModel = record(state.business_model);
   if (!state.analytics_evidence_snapshot && legacyModel.analysis_evidence) {
     state.analytics_evidence_snapshot = legacyModel.analysis_evidence as AnalyticsEvidenceBundle;
@@ -3976,6 +4084,91 @@ export class P0Application {
   async exportP1Handoff(key: string): Promise<P0P1Handoff> {
     const stored = await this.load(key);
     return buildP0P1Handoff(stored.state);
+  }
+
+  private async persistOwnerGoalInterviewCheckpoint(
+    key: string,
+    expectedRevision: number,
+    state: P0Document,
+  ) {
+    const checkpointAt = this.adapters.now();
+    const next: P0StoredRow = {
+      revision: expectedRevision + 1,
+      updated_at: checkpointAt,
+      value_json: JSON.stringify(state),
+    };
+    if (!await this.store.compareAndSwap(key, expectedRevision, next)) {
+      fail("P0_REVISION_CONFLICT", "P0 изменился в другой вкладке. Сохранённый ввод владельца не перезаписан.");
+    }
+    return next;
+  }
+
+  async startOwnerGoalInterview(key: string, input: {
+    expected_revision: number;
+    interview_key: string;
+    questions: OwnerGoalInterviewQuestion[];
+  }) {
+    const current = await this.load(key);
+    if (current.revision !== input.expected_revision) {
+      fail("P0_REVISION_CONFLICT", "P0 изменился в другой вкладке. Обновите опрос перед продолжением.");
+    }
+    if (current.state.owner_goal_interview) {
+      fail("P0_OWNER_INTERVIEW_ALREADY_STARTED", "Опрос уже сохранён и должен быть продолжен без изменения порядка.");
+    }
+    const state = structuredClone(current.state);
+    state.owner_goal_interview = beginOwnerGoalInterview({
+      interviewKey: input.interview_key,
+      questions: input.questions,
+    });
+    await this.persistOwnerGoalInterviewCheckpoint(key, current.revision, state);
+    return this.query(key);
+  }
+
+  async submitOwnerGoalInterview(key: string, input: {
+    expected_revision: number;
+    submission: OwnerGoalInterviewSubmission;
+  }) {
+    const current = await this.load(key);
+    if (current.revision !== input.expected_revision) {
+      fail("P0_REVISION_CONFLICT", "P0 изменился в другой вкладке. Подтверждённые ответы сохранены без перезаписи.");
+    }
+    if (!current.state.owner_goal_interview) {
+      fail("P0_OWNER_INTERVIEW_MISSING", "Сохранённый опрос отсутствует.");
+    }
+    const state = structuredClone(current.state);
+    const previous = state.owner_goal_interview!;
+    const nextInterview = await transitionOwnerGoalInterview(key, previous, input.submission);
+    state.owner_goal_interview = nextInterview;
+    if (previous.phase === "confirmation" && nextInterview.phase === "resumable-continuation") {
+      const question = nextInterview.questions.find((item) => item.key === nextInterview.confirmedAnswer.questionKey);
+      if (question?.target) state.owner_goal_interview_pending_answer = nextInterview.confirmedAnswer;
+    }
+    await this.persistOwnerGoalInterviewCheckpoint(key, current.revision, state);
+    return this.query(key);
+  }
+
+  async correctOwnerGoalInterviewAnswer(key: string, input: {
+    expected_revision: number;
+    question_key: string;
+    answer: unknown;
+  }) {
+    const current = await this.load(key);
+    if (current.revision !== input.expected_revision) {
+      fail("P0_REVISION_CONFLICT", "P0 изменился в другой вкладке. Ранее сохранённые ответы не перезаписаны.");
+    }
+    if (!current.state.owner_goal_interview) {
+      fail("P0_OWNER_INTERVIEW_MISSING", "Сохранённый опрос отсутствует.");
+    }
+    const state = structuredClone(current.state);
+    state.owner_goal_interview = correctConfirmedOwnerGoalInterviewAnswer(state.owner_goal_interview!, {
+      questionKey: input.question_key,
+      answer: input.answer,
+    });
+    const corrected = state.owner_goal_interview.confirmedAnswers.find((answer) => answer.questionKey === input.question_key);
+    const question = state.owner_goal_interview.questions.find((item) => item.key === input.question_key);
+    if (corrected && question?.target) state.owner_goal_interview_pending_answer = corrected;
+    await this.persistOwnerGoalInterviewCheckpoint(key, current.revision, state);
+    return this.query(key);
   }
 
   async query(key: string) {

@@ -18,6 +18,7 @@ import {
 import { sealCuratedPlaybookRelease } from "../lib/campaign-playbook.ts";
 import { collectOfficialWordstatBatch } from "../lib/market-evidence.ts";
 import { P0OwnerJourney, projectDemandCostResearchForOwner } from "../lib/p0-owner-journey.ts";
+import { projectOwnerGoalInterview } from "../lib/p0-owner-journey-transition.ts";
 
 class JsonDurableStore {
   constructor(path) {
@@ -713,6 +714,147 @@ test("restart preserves a long owner-confirmed audience and its Product Focus li
   assert.equal(queried.state.business_model.audience, value.audience);
   assert.equal(queried.state.business_model.field_evidence.audience.owner_confirmed, true);
   assert.equal(queried.state.product_focus?.decision_status, "OWNER_SELECTED");
+});
+
+test("durable goal interview restores after restart and applies owner correction before invalidating dependent outputs", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "mox-p0-owner-interview-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new JsonDurableStore(join(directory, "state.json"));
+  const application = new P0Application({ store, adapters: adapters() });
+
+  let result = await application.command("owner", { action: "analyze_site", expected_revision: 0, url: "https://owner.example/" });
+  result = await application.command("owner", {
+    action: "confirm_context_goal",
+    expected_revision: result.revision,
+    confirmation: "CONFIRM_CONTEXT_GOAL",
+    goal: result.state.context_state.provisional_business_goal.value,
+  });
+  result = await application.command("owner", { action: "save_business_model", expected_revision: result.revision, value: ownerModel(result.state) });
+  result = await approveStrategy(application, result);
+  assert.ok(result.state.strategy);
+  const recommendedAudience = result.state.business_model.audience;
+  const materiality = {
+    boundary: "MATERIAL_UNCERTAINTY",
+    whyMaterial: "Ответ меняет Business Model и Campaign Strategy.",
+    consequences: ["Подтверждение пересчитывает зависимые результаты."],
+  };
+
+  result = await application.startOwnerGoalInterview("owner", {
+    expected_revision: result.revision,
+    interview_key: "owner-goal-2026",
+    questions: [
+      {
+        key: "audience",
+        prompt: "Кого считать целевым клиентом?",
+        target: { kind: "BUSINESS_MODEL_FIELD", field: "audience" },
+        materiality,
+        recommendation: {
+          answer: result.state.business_model.audience,
+          rationale: "Роли найдены в модели покупки.",
+          evidence: "Подтверждённая модель бизнеса.",
+          confidence: "MEDIUM",
+        },
+      },
+      {
+        key: "qualified-result",
+        prompt: "Какой результат считать качественным?",
+        target: { kind: "BUSINESS_MODEL_FIELD", field: "qualified_result" },
+        materiality,
+        recommendation: {
+          answer: result.state.business_model.qualified_result,
+          rationale: "Это ближайший проверяемый результат.",
+          evidence: "Форма заявки и модель бизнеса.",
+          confidence: "MEDIUM",
+        },
+      },
+    ],
+  });
+  const answer = "Директора по маркетингу производственной компании с подтверждённым бюджетом";
+  for (const values of [undefined, { answer }, { answer }]) {
+    const projection = await projectOwnerGoalInterview("owner", result.state.owner_goal_interview);
+    result = await application.submitOwnerGoalInterview("owner", {
+      expected_revision: result.revision,
+      submission: { handle: projection.primaryAction.handle, ...(values ? { values } : {}) },
+    });
+  }
+  const confirmation = await projectOwnerGoalInterview("owner", result.state.owner_goal_interview);
+  result = await application.submitOwnerGoalInterview("owner", {
+    expected_revision: result.revision,
+    submission: { handle: confirmation.primaryAction.handle },
+  });
+
+  assert.equal(result.state.business_model.audience, answer);
+  assert.equal(result.state.business_model.customer_context, answer);
+  assert.equal(result.state.owner_goal_interview.corrections[0].answer, answer);
+  assert.equal(result.state.owner_goal_interview.confirmedAnswers[0].answer, answer);
+  assert.equal(result.state.strategy, null);
+  assert.equal(result.state.recommendation_set, null);
+  assert.equal(result.state.analytics_evidence_snapshot, null);
+  assert.equal(result.state.last_cascade.trigger, "MODEL");
+
+  const rows = await store.history("owner");
+  const durableInputCheckpoint = rows.map((row) => JSON.parse(row.value_json)).find((state) => state.owner_goal_interview_pending_answer?.answer === answer);
+  assert.ok(durableInputCheckpoint, "owner input checkpoint must precede invalidation recovery");
+  assert.ok(durableInputCheckpoint.strategy, "dependent outputs still exist in the owner-input checkpoint");
+
+  const restarted = new P0Application({ store, adapters: adapters() });
+  const restored = await restarted.query("owner");
+  assert.deepEqual(restored.state.owner_goal_interview.questionOrder, ["audience", "qualified-result"]);
+  assert.equal(restored.state.owner_goal_interview.questions[0].recommendation.answer, recommendedAudience);
+  assert.equal(restored.state.business_model.audience, answer);
+  assert.equal(restored.state.owner_goal_interview_pending_answer, null);
+  const ownerProjection = await new P0OwnerJourney(restarted, { agentProjection: async () => null }).query("owner");
+  assert.equal(ownerProjection.goalInterview.confirmedAnswers[0].answer, answer);
+  assert.equal(Object.hasOwn(ownerProjection.goalInterview, "questionOrder"), false);
+});
+
+test("goal interview CAS conflict and corrupted snapshot fail closed without replacing persisted owner input", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "mox-p0-owner-interview-conflict-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new JsonDurableStore(join(directory, "state.json"));
+  const first = new P0Application({ store, adapters: adapters() });
+  const materiality = {
+    boundary: "MATERIAL_UNCERTAINTY",
+    whyMaterial: "Ответ меняет Campaign Strategy.",
+    consequences: ["Подтверждение пересчитывает зависимые результаты."],
+  };
+  let result = await first.startOwnerGoalInterview("owner", {
+    expected_revision: 0,
+    interview_key: "cas",
+    questions: [
+      { key: "one", prompt: "Первый?", materiality, recommendation: { answer: "Один", rationale: "Основание", evidence: "Факт", confidence: "MEDIUM" } },
+      { key: "two", prompt: "Второй?", materiality, recommendation: { answer: "Два", rationale: "Основание", evidence: "Факт", confidence: "MEDIUM" } },
+    ],
+  });
+  const staleRevision = result.revision;
+  const projection = await projectOwnerGoalInterview("owner", result.state.owner_goal_interview);
+  result = await first.submitOwnerGoalInterview("owner", {
+    expected_revision: staleRevision,
+    submission: { handle: projection.primaryAction.handle },
+  });
+  const second = new P0Application({ store, adapters: adapters() });
+  await assert.rejects(
+    second.submitOwnerGoalInterview("owner", {
+      expected_revision: staleRevision,
+      submission: { handle: projection.primaryAction.handle },
+    }),
+    (error) => error instanceof P0ApplicationError && error.code === "P0_REVISION_CONFLICT",
+  );
+  assert.equal((await first.query("owner")).state.owner_goal_interview.phase, "recommendation");
+
+  const row = await store.load("owner");
+  const corrupted = JSON.parse(row.value_json);
+  corrupted.owner_goal_interview.questionOrder.reverse();
+  await store.seed("owner", { ...row, value_json: JSON.stringify(corrupted) });
+  await assert.rejects(
+    second.query("owner"),
+    (error) => error instanceof P0ApplicationError
+      && error.code === "P0_MIGRATION_LINEAGE_INVALID"
+      && /owner goal interview snapshot invalid/u.test(error.message),
+  );
+  const persistedCorrupt = JSON.parse((await store.load("owner")).value_json);
+  assert.equal(persistedCorrupt.owner_goal_interview.phase, "recommendation");
+  assert.deepEqual(persistedCorrupt.owner_goal_interview.questionOrder, ["two", "one"]);
 });
 
 test("application persists focus cards and an owner focus edit revises focus lineage and invalidates downstream artifacts", async (t) => {

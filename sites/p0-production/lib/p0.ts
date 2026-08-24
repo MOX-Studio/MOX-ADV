@@ -32,11 +32,10 @@ import { readP0CuratedPlaybookV1 } from "./p0-curated-playbook-v1.ts";
 import { collectProductionCompetitorResearch } from "./production-competitor-research.ts";
 import {
   P0Application,
-  type P0ApplicationStore,
   type P0Context,
   type P0Document,
-  type P0StoredRow,
 } from "./p0-application.ts";
+import { D1P0ApplicationStore as D1P0ApplicationStoreBase } from "./p0-application-d1-store.ts";
 import {
   P0OwnerJourney,
   type OwnerActionSubmission,
@@ -958,61 +957,6 @@ const accessReadinessService = new AccessReadinessService({
   now,
 });
 
-export class D1P0ApplicationStore implements P0ApplicationStore {
-  async load(key: string): Promise<P0StoredRow | null> {
-    await ensureTables();
-    const row = await runtimeEnv().DB
-      .prepare("SELECT revision, updated_at, value_json FROM p0_state WHERE user_key = ?")
-      .bind(key)
-      .first<P0StoredRow>();
-    if (row) {
-      await runtimeEnv().DB
-        .prepare("INSERT OR IGNORE INTO p0_state_revisions(user_key, revision, updated_at, value_json) VALUES (?, ?, ?, ?)")
-        .bind(key, row.revision, row.updated_at, row.value_json)
-        .run();
-    }
-    return row;
-  }
-
-  async initialize(key: string, row: P0StoredRow) {
-    await ensureTables();
-    const result = await runtimeEnv().DB
-      .prepare("INSERT OR IGNORE INTO p0_state(user_key, revision, updated_at, value_json) VALUES (?, ?, ?, ?)")
-      .bind(key, row.revision, row.updated_at, row.value_json)
-      .run();
-    if (Number(result.meta.changes) !== 1) return false;
-    await runtimeEnv().DB
-      .prepare("INSERT OR IGNORE INTO p0_state_revisions(user_key, revision, updated_at, value_json) VALUES (?, ?, ?, ?)")
-      .bind(key, row.revision, row.updated_at, row.value_json)
-      .run();
-    return true;
-  }
-
-  async compareAndSwap(key: string, expectedRevision: number, row: P0StoredRow) {
-    const db = runtimeEnv().DB;
-    const [result] = await db.batch([
-      db.prepare(
-        "UPDATE p0_state SET revision = ?, updated_at = ?, value_json = ? WHERE user_key = ? AND revision = ?",
-      ).bind(row.revision, row.updated_at, row.value_json, key, expectedRevision),
-      db.prepare(
-        "INSERT OR IGNORE INTO p0_state_revisions(user_key, revision, updated_at, value_json) SELECT user_key, revision, updated_at, value_json FROM p0_state WHERE user_key = ? AND revision = ? AND value_json = ?",
-      ).bind(key, row.revision, row.value_json),
-    ]);
-    return Number(result.meta.changes) === 1;
-  }
-
-  async history(key: string, limit = 50) {
-    await ensureTables();
-    const result = await runtimeEnv().DB
-      .prepare(
-        "SELECT revision, updated_at, value_json FROM p0_state_revisions WHERE user_key = ? ORDER BY revision DESC LIMIT ?",
-      )
-      .bind(key, limit)
-      .all<P0StoredRow>();
-    return result.results;
-  }
-}
-
 async function createPackageItemOutcome({
   key,
   state,
@@ -1416,6 +1360,17 @@ async function createExternalOutcome({
     now,
   });
   return { execution_id: executionId, ...result };
+}
+
+export class D1P0ApplicationStore extends D1P0ApplicationStoreBase {
+  constructor() {
+    super(() => runtimeEnv().DB);
+  }
+
+  override async load(key: string) {
+    await ensureTables();
+    return super.load(key);
+  }
 }
 
 const application = new P0Application({

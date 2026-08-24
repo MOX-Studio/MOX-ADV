@@ -2,6 +2,10 @@ import {
   P0Application,
   P0ApplicationError,
 } from "./p0-application.ts";
+import {
+  projectOwnerGoalInterview,
+  type OwnerGoalInterviewProjection,
+} from "./p0-owner-journey-transition.ts";
 import { BUSINESS_MODEL_FIELD_ORDER } from "./business-model-contract.ts";
 import type { P0AgentOwnerProjection } from "./p0-agent-runtime.ts";
 import { buildOwnerPublishPreview } from "./campaign-creation-profile.ts";
@@ -35,6 +39,7 @@ export type OwnerActionField = {
 
 export type OwnerJourneyProjection = {
   accessReadiness: AccessReadinessProjection | null;
+  goalInterview: OwnerGoalInterviewProjection | null;
   journey: {
     stages: Array<{ id: OwnerJourneyStageId; label: string; status: "complete" | "current" | "upcoming" }>;
     currentStage: OwnerJourneyStageId;
@@ -1660,6 +1665,9 @@ async function project(
   const campaigns = campaignOptions(view);
   return {
     accessReadiness: access,
+    goalInterview: view.state.owner_goal_interview
+      ? await projectOwnerGoalInterview(ownerKey, view.state.owner_goal_interview)
+      : null,
     journey: {
       stages: OWNER_JOURNEY_STAGES.map((item, index) => ({
         ...item,
@@ -1786,6 +1794,7 @@ async function projectAccessOnly(
   const working = ["choose-path", "needs-consent", "needs-selection"].includes(access.status);
   return {
     accessReadiness: access,
+    goalInterview: null,
     journey: {
       currentStage: "goal",
       stages: OWNER_JOURNEY_STAGES.map((stage, index) => ({ ...stage, status: index === 0 ? "current" : "upcoming" })),

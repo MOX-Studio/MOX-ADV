@@ -15,6 +15,22 @@ export type OwnerGoalInterviewRecommendation = {
   confidence: "LOW" | "MEDIUM";
 };
 
+export const OWNER_GOAL_INTERVIEW_SCHEMA = "p0-owner-goal-interview-v1" as const;
+
+export const OWNER_GOAL_INTERVIEW_BUSINESS_MODEL_FIELDS = [
+  "product",
+  "audience",
+  "value",
+  "qualified_result",
+  "exclusions",
+] as const;
+
+export type OwnerGoalInterviewBusinessModelField = typeof OWNER_GOAL_INTERVIEW_BUSINESS_MODEL_FIELDS[number];
+
+export type OwnerGoalInterviewTarget =
+  | { kind: "BUSINESS_GOAL" }
+  | { kind: "BUSINESS_MODEL_FIELD"; field: OwnerGoalInterviewBusinessModelField };
+
 export type OwnerGoalInterviewQuestion = {
   key: string;
   prompt: string;
@@ -24,6 +40,7 @@ export type OwnerGoalInterviewQuestion = {
     consequences: string[];
   };
   recommendation: OwnerGoalInterviewRecommendation;
+  target?: OwnerGoalInterviewTarget | null;
 };
 
 export type OwnerGoalInterviewConfirmedAnswer = {
@@ -33,10 +50,21 @@ export type OwnerGoalInterviewConfirmedAnswer = {
   source: "RECOMMENDED" | "OWNER_CORRECTED";
 };
 
+export type OwnerGoalInterviewCorrection = {
+  questionKey: string;
+  answer: string;
+  interviewRevision: number;
+};
+
 type OwnerGoalInterviewStateBase = {
+  schema_version: typeof OWNER_GOAL_INTERVIEW_SCHEMA;
   interviewKey: string;
   revision: number;
+  questionOrder: string[];
+  questions: OwnerGoalInterviewQuestion[];
   confirmedAnswers: OwnerGoalInterviewConfirmedAnswer[];
+  invalidatedAnswers: OwnerGoalInterviewConfirmedAnswer[];
+  corrections: OwnerGoalInterviewCorrection[];
   remainingQuestions: OwnerGoalInterviewQuestion[];
 };
 
@@ -154,6 +182,21 @@ function ownerSafeText(value: unknown, label: string, maximum = 1_000) {
   return text;
 }
 
+function normalizedTarget(value: unknown): OwnerGoalInterviewTarget | null {
+  if (value === undefined || value === null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    fail("P0_OWNER_INTERVIEW_TARGET_INVALID", "Назначение ответа имеет неизвестный формат.");
+  }
+  const target = value as Record<string, unknown>;
+  if (target.kind === "BUSINESS_GOAL" && Object.keys(target).length === 1) return { kind: "BUSINESS_GOAL" };
+  if (target.kind === "BUSINESS_MODEL_FIELD"
+    && Object.keys(target).length === 2
+    && OWNER_GOAL_INTERVIEW_BUSINESS_MODEL_FIELDS.includes(target.field as OwnerGoalInterviewBusinessModelField)) {
+    return { kind: "BUSINESS_MODEL_FIELD", field: target.field as OwnerGoalInterviewBusinessModelField };
+  }
+  fail("P0_OWNER_INTERVIEW_TARGET_INVALID", "Назначение ответа не поддерживается безопасным контрактом опроса.");
+}
+
 function normalizedQuestion(question: OwnerGoalInterviewQuestion): OwnerGoalInterviewQuestion {
   const preparedText = [
     question.prompt,
@@ -187,11 +230,91 @@ function normalizedQuestion(question: OwnerGoalInterviewQuestion): OwnerGoalInte
       evidence: ownerSafeText(question.recommendation?.evidence, "Доказательства"),
       confidence: question.recommendation.confidence,
     },
+    target: normalizedTarget(question.target),
   };
 }
 
-function cloneState(state: OwnerGoalInterviewState): OwnerGoalInterviewState {
-  return structuredClone(state);
+function stateInvalid(message: string): never {
+  fail("P0_OWNER_INTERVIEW_STATE_INVALID", `Сохранённый опрос отклонён: ${message}`);
+}
+
+function sameJson(left: unknown, right: unknown) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+/** Rejects malformed snapshots instead of repairing or dropping owner input. */
+export function validateOwnerGoalInterviewState(value: unknown): OwnerGoalInterviewState {
+  if (!value || typeof value !== "object" || Array.isArray(value)) stateInvalid("состояние должно быть объектом.");
+  const state = structuredClone(value) as OwnerGoalInterviewState;
+  if (state.schema_version !== OWNER_GOAL_INTERVIEW_SCHEMA) stateInvalid("версия схемы не поддерживается.");
+  if (!Number.isSafeInteger(state.revision) || state.revision < 0) stateInvalid("revision некорректна.");
+  if (!Array.isArray(state.questions) || state.questions.length < 2) stateInvalid("полный порядок вопросов отсутствует.");
+  let canonicalQuestions: OwnerGoalInterviewQuestion[];
+  try {
+    canonicalQuestions = state.questions.map(normalizedQuestion);
+  } catch (error) {
+    stateInvalid(error instanceof Error ? error.message : "вопрос некорректен.");
+  }
+  if (!sameJson(state.questions, canonicalQuestions)) stateInvalid("вопросы или рекомендации не каноничны.");
+  const canonicalOrder = canonicalQuestions.map((question) => question.key);
+  if (new Set(canonicalOrder).size !== canonicalOrder.length) stateInvalid("ключи вопросов повторяются.");
+  if (!Array.isArray(state.questionOrder) || !sameJson(state.questionOrder, canonicalOrder)) stateInvalid("порядок вопросов изменён.");
+  if (!Array.isArray(state.confirmedAnswers) || !Array.isArray(state.invalidatedAnswers)
+    || !Array.isArray(state.corrections) || !Array.isArray(state.remainingQuestions)) {
+    stateInvalid("история ответов или продолжение отсутствуют.");
+  }
+  const questionByKey = new Map(canonicalQuestions.map((question) => [question.key, question]));
+  const validateAnswer = (answer: OwnerGoalInterviewConfirmedAnswer) => {
+    const question = questionByKey.get(String(answer?.questionKey ?? ""));
+    if (!answer || typeof answer !== "object" || !sameJson(Object.keys(answer).sort(), ["answer", "question", "questionKey", "source"])) {
+      stateInvalid("подтверждённый ответ содержит неизвестные поля.");
+    }
+    if (!question || answer.question !== question.prompt || !["RECOMMENDED", "OWNER_CORRECTED"].includes(answer.source)) {
+      stateInvalid("подтверждённый ответ потерял вопрос или источник.");
+    }
+    if (ownerSafeText(answer.answer, "Ответ") !== answer.answer) stateInvalid("подтверждённый ответ не каноничен.");
+  };
+  state.confirmedAnswers.forEach(validateAnswer);
+  state.invalidatedAnswers.forEach(validateAnswer);
+  if (new Set(state.confirmedAnswers.map((answer) => answer.questionKey)).size !== state.confirmedAnswers.length) {
+    stateInvalid("подтверждённый вопрос повторяется.");
+  }
+  const confirmedOrder = state.confirmedAnswers.map((answer) => answer.questionKey);
+  if (!sameJson(confirmedOrder, canonicalOrder.slice(0, confirmedOrder.length))) stateInvalid("подтверждённые ответы нарушают порядок.");
+  for (const correction of state.corrections) {
+    if (!correction || typeof correction !== "object"
+      || !sameJson(Object.keys(correction).sort(), ["answer", "interviewRevision", "questionKey"])
+      || !questionByKey.has(String(correction.questionKey ?? ""))
+      || !Number.isSafeInteger(correction.interviewRevision) || correction.interviewRevision < 1
+      || ownerSafeText(correction.answer, "Исправление") !== correction.answer) {
+      stateInvalid("история исправлений некорректна.");
+    }
+  }
+  const current = questionByKey.get(String((state as OwnerGoalInterviewState).current?.key ?? ""));
+  if (!current || !sameJson(state.current, current)) stateInvalid("текущий вопрос не совпадает с сохранённым порядком.");
+  const remainingKeys = state.remainingQuestions.map((question) => question.key);
+  if (!state.remainingQuestions.every((question) => sameJson(question, questionByKey.get(question.key)))) {
+    stateInvalid("оставшиеся вопросы были изменены.");
+  }
+  const currentIndex = canonicalOrder.indexOf(current.key);
+  if (!sameJson(remainingKeys, canonicalOrder.slice(currentIndex + 1))) stateInvalid("продолжение нарушает порядок вопросов.");
+  const expectedConfirmedCount = state.phase === "resumable-continuation" ? currentIndex + 1 : currentIndex;
+  if (state.confirmedAnswers.length !== expectedConfirmedCount) {
+    stateInvalid("подтверждённый вопрос был повторно открыт без материальной инвалидации.");
+  }
+  if (state.phase === "owner-correction") {
+    if (ownerSafeText(state.ownerCorrection, "Исправление") !== state.ownerCorrection) stateInvalid("текущее исправление не канонично.");
+  } else if (state.phase === "confirmation") {
+    if (ownerSafeText(state.answer, "Ответ") !== state.answer || !["RECOMMENDED", "OWNER_CORRECTED"].includes(state.answerSource)) {
+      stateInvalid("подтверждение некорректно.");
+    }
+  } else if (state.phase === "resumable-continuation") {
+    validateAnswer(state.confirmedAnswer);
+    if (!sameJson(state.confirmedAnswer, state.confirmedAnswers.at(-1))) stateInvalid("точка продолжения потеряла последний ответ.");
+  } else if (!OWNER_GOAL_INTERVIEW_PHASES.includes(state.phase)) {
+    stateInvalid("этап опроса неизвестен.");
+  }
+  return state;
 }
 
 /**
@@ -212,11 +335,16 @@ export function beginOwnerGoalInterview(input: {
   }
   const [current, ...remainingQuestions] = questions;
   return {
+    schema_version: OWNER_GOAL_INTERVIEW_SCHEMA,
     interviewKey,
     revision: 0,
     phase: "question",
     current,
+    questionOrder: questions.map((question) => question.key),
+    questions,
     confirmedAnswers: [],
+    invalidatedAnswers: [],
+    corrections: [],
     remainingQuestions,
   };
 }
@@ -330,7 +458,7 @@ export async function transitionOwnerGoalInterview(
   currentState: OwnerGoalInterviewState,
   submission: OwnerGoalInterviewSubmission,
 ): Promise<OwnerGoalInterviewState> {
-  const state = cloneState(currentState);
+  const state = validateOwnerGoalInterviewState(currentState);
   const descriptor = actionDescriptor(state);
   const expectedHandle = await opaqueActionHandle(ownerKey, state, descriptor.kind);
   if (submission.handle !== expectedHandle) {
@@ -362,17 +490,38 @@ export async function transitionOwnerGoalInterview(
       phase: "owner-correction",
       revision: state.revision + 1,
       ownerCorrection: answer,
+      corrections: [...state.corrections, {
+        questionKey: state.current.key,
+        answer,
+        interviewRevision: state.revision + 1,
+      }],
     };
   }
   if (state.phase === "owner-correction") {
+    const answer = ownerSafeText(values.answer, "Исправленный ответ");
     return {
+      schema_version: state.schema_version,
       interviewKey: state.interviewKey,
       revision: state.revision + 1,
       phase: "confirmation",
       current: state.current,
-      answer: ownerSafeText(values.answer, "Исправленный ответ"),
+      answer,
       answerSource: "OWNER_CORRECTED",
+      questionOrder: state.questionOrder,
+      questions: state.questions,
       confirmedAnswers: state.confirmedAnswers,
+      invalidatedAnswers: state.invalidatedAnswers,
+      corrections: state.corrections.at(-1)?.questionKey === state.current.key
+        ? [...state.corrections.slice(0, -1), {
+            questionKey: state.current.key,
+            answer,
+            interviewRevision: state.revision + 1,
+          }]
+        : [...state.corrections, {
+            questionKey: state.current.key,
+            answer,
+            interviewRevision: state.revision + 1,
+          }],
       remainingQuestions: state.remainingQuestions,
     };
   }
@@ -387,12 +536,17 @@ export async function transitionOwnerGoalInterview(
       source: state.answerSource,
     };
     return {
+      schema_version: state.schema_version,
       interviewKey: state.interviewKey,
       revision: state.revision + 1,
       phase: "resumable-continuation",
       current: state.current,
       confirmedAnswer,
+      questionOrder: state.questionOrder,
+      questions: state.questions,
       confirmedAnswers: [...state.confirmedAnswers, confirmedAnswer],
+      invalidatedAnswers: state.invalidatedAnswers,
+      corrections: state.corrections,
       remainingQuestions: state.remainingQuestions,
     };
   }
@@ -402,11 +556,61 @@ export async function transitionOwnerGoalInterview(
     fail("P0_OWNER_INTERVIEW_CONTINUATION_REQUIRED", "Следующий подготовленный вопрос недоступен; подтверждённые ответы не изменены.");
   }
   return {
+    schema_version: state.schema_version,
     interviewKey: state.interviewKey,
     revision: state.revision + 1,
     phase: "question",
     current,
+    questionOrder: state.questionOrder,
+    questions: state.questions,
     confirmedAnswers: state.confirmedAnswers,
+    invalidatedAnswers: state.invalidatedAnswers,
+    corrections: state.corrections,
+    remainingQuestions,
+  };
+}
+
+/**
+ * Records a later material owner correction, preserves invalidated dependent
+ * answers for audit, and resumes only from the next question in fixed order.
+ */
+export function correctConfirmedOwnerGoalInterviewAnswer(
+  currentState: OwnerGoalInterviewState,
+  input: { questionKey: string; answer: unknown },
+): OwnerGoalInterviewState {
+  const state = validateOwnerGoalInterviewState(currentState);
+  const questionKey = normalizedText(input.questionKey, "Ключ вопроса", 120);
+  const answer = ownerSafeText(input.answer, "Исправленный ответ");
+  const confirmedIndex = state.confirmedAnswers.findIndex((item) => item.questionKey === questionKey);
+  if (confirmedIndex < 0) fail("P0_OWNER_INTERVIEW_ANSWER_NOT_CONFIRMED", "Исправить можно только подтверждённый ответ.");
+  const previous = state.confirmedAnswers[confirmedIndex];
+  if (previous.answer === answer) fail("P0_OWNER_INTERVIEW_CORRECTION_NOT_MATERIAL", "Исправление не меняет подтверждённый ответ.");
+  const questionIndex = state.questionOrder.indexOf(questionKey);
+  const question = state.questions[questionIndex];
+  const corrected: OwnerGoalInterviewConfirmedAnswer = {
+    questionKey,
+    question: question.prompt,
+    answer,
+    source: "OWNER_CORRECTED",
+  };
+  const dependentAnswers = state.confirmedAnswers.slice(confirmedIndex + 1);
+  const remainingQuestions = state.questions.slice(questionIndex + 1);
+  return {
+    schema_version: state.schema_version,
+    interviewKey: state.interviewKey,
+    revision: state.revision + 1,
+    phase: "resumable-continuation",
+    current: question,
+    confirmedAnswer: corrected,
+    questionOrder: state.questionOrder,
+    questions: state.questions,
+    confirmedAnswers: [...state.confirmedAnswers.slice(0, confirmedIndex), corrected],
+    invalidatedAnswers: [...state.invalidatedAnswers, ...dependentAnswers],
+    corrections: [...state.corrections, {
+      questionKey,
+      answer,
+      interviewRevision: state.revision + 1,
+    }],
     remainingQuestions,
   };
 }
