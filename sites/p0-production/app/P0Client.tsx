@@ -6,6 +6,7 @@ import styles from "./prototype/prd-149/prototype.module.css";
 import type {
   OwnerActionField,
   OwnerJourneyProjection,
+  OwnerJourneyStageId,
 } from "../lib/p0-owner-journey";
 
 type JsonRecord = Record<string, unknown>;
@@ -39,12 +40,19 @@ const stageDetails: Record<OwnerJourneyProjection["journey"]["stages"][number]["
 
 export default function P0Client() {
   const [projection, setProjection] = useState<OwnerJourneyProjection | null>(null);
+  const [selectedStage, setSelectedStage] = useState<OwnerJourneyStageId | null>(null);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
     request("/api/p0")
-      .then(setProjection)
+      .then((next) => {
+        setProjection(next);
+        const requestedStage = new URL(window.location.href).searchParams.get("stage");
+        setSelectedStage(next.journey.stages.some((stage) => stage.id === requestedStage)
+          ? requestedStage as OwnerJourneyStageId
+          : next.journey.currentStage);
+      })
       .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
       .finally(() => setBusy(false));
   }, []);
@@ -56,7 +64,12 @@ export default function P0Client() {
     const businessContinues = projection.businessOutcome.status === "working" && !projection.primaryAction;
     if (!agentContinues && !businessContinues) return;
     const timer = window.setTimeout(() => {
-      request("/api/p0").then(setProjection).catch(() => undefined);
+      request("/api/p0").then((next) => {
+        setProjection(next);
+        setSelectedStage((selected) => !selected || selected === projection.journey.currentStage
+          ? next.journey.currentStage
+          : selected);
+      }).catch(() => undefined);
     }, 3_000);
     return () => window.clearTimeout(timer);
   }, [projection]);
@@ -67,14 +80,16 @@ export default function P0Client() {
     setBusy(true);
     setError("");
     try {
-      setProjection(await request("/api/p0", {
+      const next = await request("/api/p0", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           handle: projection.primaryAction.handle,
           values: actionValues(event.currentTarget, projection.primaryAction.fields),
         }),
-      }));
+      });
+      setProjection(next);
+      setSelectedStage(next.journey.currentStage);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -89,14 +104,26 @@ export default function P0Client() {
     </div>;
   }
 
+  const activeStage = selectedStage ?? projection.journey.currentStage;
+  const activeStageStatus = projection.journey.stages.find((stage) => stage.id === activeStage)?.status ?? "upcoming";
+  const viewingCurrentStage = activeStage === projection.journey.currentStage;
+
+  function chooseStage(stage: OwnerJourneyStageId) {
+    setSelectedStage(stage);
+    const url = new URL(window.location.href);
+    url.searchParams.set("stage", stage);
+    window.history.replaceState({}, "", url);
+    window.requestAnimationFrame(() => document.getElementById("owner-stage-panel")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }
+
   return <div className={styles.prototype}>
     <Header />
     <main className={styles.pageA} id="module">
-      {projection.journey.currentStage === "goal" && <Hero projection={projection} />}
-      <StageNavigation projection={projection} />
+      {activeStage === "goal" && <Hero projection={projection} />}
+      <StageNavigation projection={projection} selectedStage={activeStage} onStage={chooseStage} />
       <div className={styles.ownerWorkspace}>
-        <AgentRail projection={projection} />
-        <section className={`${styles.artifact} owner-main`}>
+        <AgentRail projection={projection} selectedStage={activeStage} />
+        <section className={`${styles.artifact} owner-main`} id="owner-stage-panel" aria-labelledby={`owner-stage-tab-${activeStage}`}>
           <header className={`${styles.sectionHead} owner-outcome`}>
             <div><p className={styles.eyebrow}>ТЕКУЩИЙ БИЗНЕС-РЕЗУЛЬТАТ</p><h2>{projection.businessOutcome.headline}</h2><p>{projection.businessOutcome.summary}</p></div>
           </header>
@@ -105,7 +132,10 @@ export default function P0Client() {
             <span>Текущая рекомендация</span><h3>{projection.currentRecommendation.headline}</h3><p>{projection.currentRecommendation.rationale}</p>
           </section>}
 
-          {projection.directReport && <section className="owner-direct-report" data-report-state={projection.directReport.state} aria-labelledby="owner-direct-report-title">
+          {activeStageStatus === "upcoming" && <StageUnavailable projection={projection} stage={activeStage} />}
+          {activeStage === "goal" && activeStageStatus !== "upcoming" && <GoalStageSummary projection={projection} />}
+
+          {activeStage === "findings" && activeStageStatus !== "upcoming" && projection.directReport && <section className="owner-direct-report" data-report-state={projection.directReport.state} aria-labelledby="owner-direct-report-title">
             <header><div><p className="owner-eyebrow">ТЕКУЩЕЕ ПРОДВИЖЕНИЕ В ЯНДЕКС ДИРЕКТЕ</p><h2 id="owner-direct-report-title">Отчёт о текущем продвижении</h2></div><strong>{projection.directReport.status}</strong></header>
             <div className="owner-direct-lead"><div><h3>{projection.directReport.headline}</h3><p>{projection.directReport.summary}</p></div><dl><div><dt>Наблюдение</dt><dd>{projection.directReport.observedAt}</dd></div><div><dt>Свежесть</dt><dd>{projection.directReport.freshness}</dd></div></dl></div>
             <div className="owner-direct-inventory" aria-label="Состав продвижения">{projection.directReport.inventory.map((item) => <article key={item.label}><span>{item.label}</span><strong>{item.value}</strong><small>{item.detail}</small></article>)}</div>
@@ -114,10 +144,9 @@ export default function P0Client() {
               <article><header><span>Поисковые запросы</span><b>{projection.directReport.queries.status}</b></header><h3>{projection.directReport.queries.value}</h3><p>{projection.directReport.queries.detail}</p></article>
               <article><header><span>Наблюдаемые результаты</span><b>{projection.directReport.results.status}</b></header><h3>{projection.directReport.results.value}</h3><p>{projection.directReport.results.detail}</p></article>
             </div>
-            <div className="owner-direct-guidance"><section><h3>Ограничения</h3><ul>{projection.directReport.limitations.map((item) => <li key={item}>{item}</li>)}</ul></section><section><h3>Что делать дальше</h3><ol>{projection.directReport.nextActions.map((item) => <li key={item}>{item}</li>)}</ol></section></div>
           </section>}
 
-          {projection.businessModel && <section className="owner-business-model" aria-labelledby="owner-business-model-title">
+          {activeStage === "findings" && activeStageStatus !== "upcoming" && projection.businessModel && <section className="owner-business-model" aria-labelledby="owner-business-model-title">
             <header><div><p className="owner-eyebrow">МОДЕЛЬ БИЗНЕСА</p><h2 id="owner-business-model-title">Проверяемое понимание бизнеса</h2></div><strong>{projection.businessModel.economics.status}</strong></header>
             <div className="owner-model-economics"><span>Целевая стоимость результата</span><b>{projection.businessModel.economics.targetResultCost}</b><p>{projection.businessModel.economics.explanation}</p></div>
             <div className="owner-model-grid">{projection.businessModel.fields.map((field) => <article key={field.label}>
@@ -127,7 +156,7 @@ export default function P0Client() {
             {projection.businessModel.materialQuestions.length > 0 && <div className="owner-model-questions"><h3>Только существенные вопросы</h3><ul>{projection.businessModel.materialQuestions.map((item) => <li key={item.question}><strong>{item.question}</strong><span>{item.consequence}</span></li>)}</ul></div>}
           </section>}
 
-          {projection.campaignStrategy && <section className="owner-business-readiness" aria-labelledby="owner-campaign-strategy-title">
+          {activeStage === "strategy" && activeStageStatus !== "upcoming" && projection.campaignStrategy && <section className="owner-business-readiness" aria-labelledby="owner-campaign-strategy-title">
             <header><div><p className="owner-eyebrow">CAMPAIGN STRATEGY</p><h2 id="owner-campaign-strategy-title">Полная рекомендация агента</h2></div><strong>{projection.campaignStrategy.status}</strong></header>
             <div className="owner-demand-cost-grid">{projection.campaignStrategy.recommendations.map((item) => <article key={item.label}>
               <span>{item.label}</span><h3>{item.value}</h3><p>{item.rationale}</p><small>Уверенность: {item.confidence}</small>
@@ -136,7 +165,7 @@ export default function P0Client() {
             {projection.campaignStrategy.decisionGate && <article className="owner-card human-decision-gate"><span>РЕШЕНИЕ ВЛАДЕЛЬЦА</span><h3>{projection.campaignStrategy.decisionGate.recommendation}</h3><p><b>Основание:</b> {projection.campaignStrategy.decisionGate.evidence}</p><p><b>Уверенность:</b> {projection.campaignStrategy.decisionGate.confidence}</p><p><b>Альтернативы:</b> {projection.campaignStrategy.decisionGate.alternatives}</p><p><b>Последствия:</b> {projection.campaignStrategy.decisionGate.consequences}</p></article>}
           </section>}
 
-          {projection.demandCostResearch && <section className="owner-demand-cost" aria-labelledby="owner-demand-cost-title">
+          {activeStage === "findings" && activeStageStatus !== "upcoming" && projection.demandCostResearch && <section className="owner-demand-cost" aria-labelledby="owner-demand-cost-title">
             <header><div><p className="owner-eyebrow">СПРОС И СОПОСТАВИМАЯ СТОИМОСТЬ</p><h2 id="owner-demand-cost-title">Исследование нескольких формулировок</h2></div><strong>{projection.demandCostResearch.demand.status}</strong></header>
             <div className="owner-demand-cost-grid">
               <article><span>Спрос</span><h3>{projection.demandCostResearch.demand.conclusion}</h3><dl><div><dt>Источник и дата</dt><dd>{projection.demandCostResearch.demand.source} · {projection.demandCostResearch.demand.observedAt}</dd></div><div><dt>Область</dt><dd>{projection.demandCostResearch.demand.scope}</dd></div><div><dt>Сезонность</dt><dd>{projection.demandCostResearch.demand.seasonality}</dd></div></dl><p>{projection.demandCostResearch.demand.limitation}</p></article>
@@ -145,11 +174,11 @@ export default function P0Client() {
             <div className="owner-demand-formulations"><h3>Проверенные формулировки</h3>{projection.demandCostResearch.demand.formulations.map((item, index) => <article key={`${item.category}-${index}`}><span>{item.category}</span><strong>{item.phrase}</strong><small>{item.status}</small></article>)}</div>
           </section>}
 
-          {projection.appliedPractice && <section className="owner-recommendation" aria-labelledby="owner-applied-practice-title">
+          {activeStage === "strategy" && activeStageStatus !== "upcoming" && projection.appliedPractice && <section className="owner-recommendation" aria-labelledby="owner-applied-practice-title">
             <span>Применённая практика</span><h3 id="owner-applied-practice-title">{projection.appliedPractice.practice}</h3><p>{projection.appliedPractice.limitation}</p>
           </section>}
 
-          {projection.businessReadiness && <section className="owner-business-readiness" aria-labelledby="owner-business-readiness-title">
+          {activeStage === "findings" && activeStageStatus !== "upcoming" && projection.businessReadiness && <section className="owner-business-readiness" aria-labelledby="owner-business-readiness-title">
             <header><div><p className="owner-eyebrow">ИЗМЕРИМОСТЬ И ПОСАДОЧНАЯ</p><h2 id="owner-business-readiness-title">Готовность бизнес-результата</h2></div><strong>{projection.businessReadiness.status}</strong></header>
             <div className="owner-demand-cost-grid">
               <article><span>Измеримость</span><h3>{projection.businessReadiness.measurement.status}</h3><p>{projection.businessReadiness.measurement.summary}</p><dl>{projection.businessReadiness.measurement.checks.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.result}. {item.limitation}</dd></div>)}</dl></article>
@@ -160,7 +189,7 @@ export default function P0Client() {
             {projection.businessReadiness.decisionGate && <article className="owner-card human-decision-gate"><span>РЕШЕНИЕ ВЛАДЕЛЬЦА</span><h3>{projection.businessReadiness.decisionGate.recommendation}</h3><p>{projection.businessReadiness.decisionGate.evidence}</p><p>{projection.businessReadiness.decisionGate.options}</p></article>}
           </section>}
 
-          {projection.competitorMatrix && <section className="owner-competitor-matrix" aria-labelledby="owner-competitor-matrix-title">
+          {activeStage === "findings" && activeStageStatus !== "upcoming" && projection.competitorMatrix && <section className="owner-competitor-matrix" aria-labelledby="owner-competitor-matrix-title">
             <header><div><p className="owner-eyebrow">ПУБЛИЧНОЕ ПОЗИЦИОНИРОВАНИЕ</p><h2 id="owner-competitor-matrix-title">Матрица конкурентов</h2></div><strong>{projection.competitorMatrix.status}</strong></header>
             <p className="owner-competitor-rule"><b>Как выбран набор:</b> {projection.competitorMatrix.competitorSetRule}</p>
             <div className="owner-competitor-candidates">{projection.competitorMatrix.candidates.map((candidate) => <article key={candidate.competitor}><h3>{candidate.competitor}</h3><p>{candidate.rationale}</p><small>{candidate.exactDestinations.join(" · ")}</small></article>)}</div>
@@ -180,19 +209,19 @@ export default function P0Client() {
             <div className="owner-competitor-limitations"><strong>Что эта матрица не доказывает</strong><ul>{projection.competitorMatrix.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}</ul></div>
           </section>}
 
-          {projection.agentActivity && <section className="owner-progress" aria-label="Ход работы агента">
+          {viewingCurrentStage && projection.agentActivity && <section className="owner-progress" aria-label="Ход работы агента">
             <i /><div><strong>{projection.agentActivity.summary}</strong><p>{projection.agentActivity.nextBusinessStep}</p></div>
             <span>{projection.agentActivity.completed} из {projection.agentActivity.total}</span>
           </section>}
 
-          <section className="owner-cards" aria-label="Выводы и решения">
+          {viewingCurrentStage && <section className="owner-cards" aria-label="Выводы и решения">
             {projection.cards.map((card, index) => <article key={`${card.kind}-${index}`} className={`owner-card ${card.kind}`}>
               <span>{cardLabels[card.kind]}</span><h3>{card.title}</h3><p>{card.body}</p>
               {card.facts && <dl>{card.facts.map((fact) => <div key={fact.label}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}</dl>}
             </article>)}
-          </section>
+          </section>}
 
-          {projection.campaignOptions.length > 0 && <section className="owner-campaigns" aria-labelledby="owner-campaigns-title">
+          {activeStage === "campaigns" && activeStageStatus !== "upcoming" && projection.campaignOptions.length > 0 && <section className="owner-campaigns" aria-labelledby="owner-campaigns-title">
             <header><p className="owner-eyebrow">ВАРИАНТЫ КАМПАНИЙ</p><h2 id="owner-campaigns-title">Кампании для бизнес-проверки</h2></header>
             <div>{projection.campaignOptions.map((campaign, index) => <article key={`${campaign.name}-${index}`} className={campaign.selected ? "selected" : ""}>
               <header><span>{campaign.status} · {campaign.readiness}</span>{campaign.selected ? <b>Выбрана владельцем</b> : campaign.agentRecommended && <b>Рекомендация агента</b>}</header>
@@ -228,7 +257,7 @@ export default function P0Client() {
             </article>)}</div>
           </section>}
 
-          {projection.packageSummary && <section className="owner-package" aria-labelledby="owner-package-title">
+          {activeStage === "review" && activeStageStatus !== "upcoming" && projection.packageSummary && <section className="owner-package" aria-labelledby="owner-package-title">
             <header><div><p className="owner-eyebrow">ИТОГОВАЯ ПРОВЕРКА</p><h2 id="owner-package-title">{projection.packageSummary.campaignCount} кампании к созданию</h2></div><strong>{projection.packageSummary.preflight}</strong></header>
             <p>{projection.packageSummary.execution}</p>
             <div className="owner-demand-cost-grid">
@@ -240,14 +269,14 @@ export default function P0Client() {
             {projection.packageSummary.outcomes.length > 0 && <ul>{projection.packageSummary.outcomes.map((item) => <li key={item.campaign}><strong>{item.campaign}</strong><span>{item.outcome}</span></li>)}</ul>}
           </section>}
 
-          {projection.materialUnknowns.length > 0 && <details className={styles.disclosure} open><summary>СУЩЕСТВЕННЫЕ НЕИЗВЕСТНЫЕ</summary><ul>{projection.materialUnknowns.map((item) => <li key={item}>{item}</li>)}</ul></details>}
+          {viewingCurrentStage && projection.materialUnknowns.length > 0 && <details className={styles.disclosure} open><summary>СУЩЕСТВЕННЫЕ НЕИЗВЕСТНЫЕ</summary><ul>{projection.materialUnknowns.map((item) => <li key={item}>{item}</li>)}</ul></details>}
 
-          {projection.primaryAction && <form key={projection.primaryAction.handle} className="owner-action" onSubmit={submit}>
+          {viewingCurrentStage && projection.primaryAction && <form key={projection.primaryAction.handle} className="owner-action" onSubmit={submit}>
             <header><p className="owner-eyebrow">СЛЕДУЮЩИЙ ШАГ</p><h2>{projection.primaryAction.label}</h2><p>{projection.primaryAction.description}</p></header>
             {projection.primaryAction.fields.length > 0 && <div className="owner-fields">{projection.primaryAction.fields.map((field) => <OwnerField key={field.key} field={field} />)}</div>}
             <button className={styles.primaryButton} type="submit" disabled={busy}>{busy ? "Агент выполняет работу…" : projection.primaryAction.label}</button>
           </form>}
-          {!projection.primaryAction && projection.businessOutcome.status === "working" && <div className="owner-progress" role="status"><i /><div><strong>Агент продолжает работу</strong><p>Ожидание, повторные проверки и безопасная сверка не требуют действий владельца.</p></div></div>}
+          {viewingCurrentStage && !projection.primaryAction && projection.businessOutcome.status === "working" && <div className="owner-progress" role="status"><i /><div><strong>Агент продолжает работу</strong><p>Ожидание, повторные проверки и безопасная сверка не требуют действий владельца.</p></div></div>}
           {error && <p className="owner-error" role="alert">{error}</p>}
         </section>
 
@@ -263,22 +292,52 @@ function Hero({ projection }: { projection: OwnerJourneyProjection }) {
   </section>;
 }
 
-function StageNavigation({ projection }: { projection: OwnerJourneyProjection }) {
+function StageNavigation({ projection, selectedStage, onStage }: { projection: OwnerJourneyProjection; selectedStage: OwnerJourneyStageId; onStage: (stage: OwnerJourneyStageId) => void }) {
   return <ol className={`${styles.stageNav} ${styles.stageNavhorizontal}`} aria-label="Путь подготовки рекламных кампаний">
     {projection.journey.stages.map((stage, index) => <li key={stage.id}>
-      <div className={`${styles.stageItem} ${stage.status === "current" ? styles.currentStage : ""} ${stage.status === "complete" ? styles.passedStage : ""}`} aria-current={stage.status === "current" ? "step" : undefined}>
+      <button
+        id={`owner-stage-tab-${stage.id}`}
+        type="button"
+        className={`${selectedStage === stage.id ? styles.currentStage : ""} ${stage.status === "current" ? styles.workflowStage : ""} ${stage.status === "complete" ? styles.passedStage : ""}`}
+        onClick={() => onStage(stage.id)}
+        aria-current={stage.status === "current" ? "step" : undefined}
+        aria-pressed={selectedStage === stage.id}
+        aria-controls="owner-stage-panel"
+      >
         <span>{stage.status === "complete" ? "✓" : index + 1}</span><div><strong>{stage.label}</strong><small>{stageDetails[stage.id]}</small></div>
-      </div>
+      </button>
     </li>)}
   </ol>;
 }
 
-function AgentRail({ projection }: { projection: OwnerJourneyProjection }) {
+function GoalStageSummary({ projection }: { projection: OwnerJourneyProjection }) {
+  const qualifiedResult = projection.businessModel?.fields.find((field) => field.label === "Квалифицированный результат");
+  return <section className="owner-stage-summary" aria-labelledby="owner-goal-summary-title">
+    <header><div><p className="owner-eyebrow">ЦЕЛЬ</p><h2 id="owner-goal-summary-title">Цель и бизнес-результат</h2></div><strong>{qualifiedResult ? "Зафиксирована" : "Текущий этап"}</strong></header>
+    <div>
+      <article><span>Бизнес-результат</span><strong>{qualifiedResult?.value ?? projection.businessOutcome.headline}</strong><p>{qualifiedResult?.limitation ?? projection.businessOutcome.summary}</p></article>
+      <article><span>Целевая стоимость результата</span><strong>{projection.businessModel?.economics.targetResultCost ?? "Будет рассчитана после подтверждения экономики"}</strong><p>{projection.businessModel?.economics.explanation ?? "Агент сначала проверяет доступные факты и готовит цель для решения владельца."}</p></article>
+    </div>
+  </section>;
+}
+
+function StageUnavailable({ projection, stage }: { projection: OwnerJourneyProjection; stage: OwnerJourneyStageId }) {
+  const label = projection.journey.stages.find((item) => item.id === stage)?.label ?? "Следующий этап";
+  const current = projection.journey.stages.find((item) => item.status === "current")?.label ?? "текущий этап";
+  return <section className="owner-stage-unavailable" role="status">
+    <span>ЭТАП ЕЩЁ НЕ ОТКРЫТ</span><h2>{label}</h2><p>Сначала завершите этап «{current}». Просмотр этого раздела не меняет состояние и не выдаёт новых полномочий.</p>
+  </section>;
+}
+
+function AgentRail({ projection, selectedStage }: { projection: OwnerJourneyProjection; selectedStage: OwnerJourneyStageId }) {
   const agentWorking = projection.agentActivity?.status === "working" || projection.agentActivity?.status === "waiting";
+  const currentStage = projection.journey.stages.find((stage) => stage.status === "current");
+  const openedStage = projection.journey.stages.find((stage) => stage.id === selectedStage);
+  const viewingCurrentStage = selectedStage === projection.journey.currentStage;
   return <aside className={styles.agentRail} aria-label="Контекст работы агента">
     <header><span>А</span><div><strong>Агент кампании</strong><small>{agentWorking ? "Выполняет безопасную работу" : "Безопасная работа завершена"}</small></div></header>
     <section className={styles.agentMessage}><p className={styles.eyebrow}>ТЕКУЩИЙ ВЫВОД</p><strong>{projection.agentActivity?.summary ?? projection.businessOutcome.headline}</strong><p>{projection.agentActivity?.nextBusinessStep ?? projection.businessOutcome.summary}</p></section>
-    <section className={styles.railSnapshot}><span>Текущий этап</span><strong>{projection.journey.stages.find((stage) => stage.status === "current")?.label ?? "Проверка и создание"}</strong><small>{projection.businessOutcome.status === "blocked" ? "Нужно внимание владельца" : "Факты и ограничения раскрыты в основном рабочем поле"}</small></section>
+    <section className={styles.railSnapshot}><span>{viewingCurrentStage ? "Текущий этап" : "Открытый раздел"}</span><strong>{openedStage?.label ?? currentStage?.label ?? "Проверка и создание"}</strong><small>{viewingCurrentStage ? (projection.businessOutcome.status === "blocked" ? "Нужно внимание владельца" : "Факты и ограничения раскрыты в основном рабочем поле") : `Текущий этап процесса: ${currentStage?.label ?? "не определён"}`}</small></section>
     <section className={styles.automationMap} aria-label="Карта автоматизации">
       <h2>Карта автоматизации</h2>
       <div><span>Исследование</span><strong>АГЕНТ</strong></div>

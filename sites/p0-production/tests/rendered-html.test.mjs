@@ -4,6 +4,7 @@ import test from "node:test";
 
 const clientSource = await readFile(new URL("../app/P0Client.tsx", import.meta.url), "utf8");
 const ownerSource = await readFile(new URL("../lib/p0-owner-journey.ts", import.meta.url), "utf8");
+const ownerStyles = await readFile(new URL("../app/owner-journey.css", import.meta.url), "utf8");
 
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
@@ -34,6 +35,12 @@ test("production page consumes only the typed owner projection", () => {
   assert.match(clientSource, /projection\.primaryAction/u);
   assert.doesNotMatch(clientSource, /payload\.state|workflow\.allowed_commands|context_preflight|write_readiness/u);
   assert.doesNotMatch(clientSource, /schema_version|revision_history|provider_ids|publish_fingerprint/u);
+});
+
+test("owner Direct report omits the guidance cards below its verified details", () => {
+  assert.match(clientSource, /owner-direct-details/u);
+  assert.doesNotMatch(clientSource, /owner-direct-guidance/u);
+  assert.doesNotMatch(ownerStyles, /\.owner-direct-guidance\b/u);
 });
 
 test("owner interface fixes the accepted five stages and exposes only planned product modules", () => {

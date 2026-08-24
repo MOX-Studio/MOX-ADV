@@ -76,6 +76,7 @@ test("owner Direct report shows a filled verified slice without provider identif
 
   assert.equal(report.state, "filled");
   assert.equal(report.status, "Данные получены");
+  assert.equal(report.observedAt, "24 авг. 2026 г., 15:00 МСК");
   assert.equal(report.inventory.find((item) => item.label === "Объявления").value, "8");
   assert.equal(report.queries.value, "17 строк за период");
   assert.equal(report.results.value, "4 достижения цели");
@@ -85,7 +86,7 @@ test("owner Direct report shows a filled verified slice without provider identif
     review: "Принята рекламной системой",
   }]);
   assert.doesNotMatch(JSON.stringify(report), /9007199254740993123|UNIFIED_CAMPAIGN|direct-audit|schema_version|campaigns\.get|SEARCH_QUERY_PERFORMANCE_REPORT/iu);
-  assert.match(report.summary, /не доказательство эффективности/iu);
+  assert.match(report.summary, /не доказывает причинную эффективность/iu);
 });
 
 test("owner Direct report distinguishes a verified empty slice from unavailable activity", () => {

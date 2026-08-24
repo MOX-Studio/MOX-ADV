@@ -342,8 +342,8 @@ function ownerObservedAt(value: unknown) {
   return `${new Intl.DateTimeFormat("ru-RU", {
     dateStyle: "medium",
     timeStyle: "short",
-    timeZone: "UTC",
-  }).format(date)} UTC`;
+    timeZone: "Europe/Moscow",
+  }).format(date)} МСК`;
 }
 
 const CAMPAIGN_DELIVERY_LABELS: Record<string, string> = {
@@ -409,7 +409,7 @@ export function projectDirectAuditForOwner(snapshot: unknown): OwnerJourneyProje
     filled: {
       status: "Данные получены" as const,
       headline: "Виден состав продвижения и наблюдаемые результаты",
-      summary: "Снимок связывает текущие кампании, объявления, условия показа и доступные отчёты. Это наблюдение, а не доказательство эффективности.",
+      summary: "Снимок связывает текущие кампании, объявления, условия показа и доступные отчёты. Это наблюдение не доказывает причинную эффективность.",
     },
     empty: {
       status: "Пустой срез" as const,

@@ -34,8 +34,19 @@ test("production Dashboard uses the accepted PRD-149 visual layer instead of a p
   assert.doesNotMatch(productionSource, /owner-topbar|owner-hero|owner-workspace|owner-agent-rail/u);
 });
 
+test("production stage cards switch the visible owner section without mutating workflow state", () => {
+  assert.match(productionSource, /useState<OwnerJourneyStageId \| null>/u);
+  assert.match(productionSource, /<StageNavigation projection=\{projection\} selectedStage=\{activeStage\} onStage=\{chooseStage\}/u);
+  assert.match(productionSource, /<button[\s\S]*aria-pressed=\{selectedStage === stage\.id\}[\s\S]*aria-controls="owner-stage-panel"/u);
+  for (const stage of ["goal", "findings", "strategy", "campaigns", "review"]) {
+    assert.match(productionSource, new RegExp(`activeStage === "${stage}"`, "u"));
+  }
+  assert.match(productionSource, /function StageUnavailable/u);
+  assert.match(productionSource, /Просмотр этого раздела не меняет состояние и не выдаёт новых полномочий/u);
+});
+
 test("production keeps the accepted Goal-only hero and never renders prototype labeling", () => {
-  assert.match(productionSource, /projection\.journey\.currentStage === "goal"[^\n]*<Hero/u);
+  assert.match(productionSource, /activeStage === "goal"[^\n]*<Hero/u);
   assert.doesNotMatch(productionSource, /prototypeFlag|ПРОТОТИП · ЦЕЛЕВОЕ СОСТОЯНИЕ/u);
 });
 
