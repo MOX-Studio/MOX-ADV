@@ -246,12 +246,18 @@ test("turns a 90 percent bounded competitor ad pattern into a market control and
       facts: ["Bounded public ad observations"],
       evidence_ids: candidates.map((_, index) => `evidence-${index + 1}`),
     }],
+    evidence: candidates.map((candidate, index) => ({
+      evidence_id: `evidence-${index + 1}`,
+      source_kind: "competitor_public_web",
+      source_locator: { url: candidate.exact_destinations[0] },
+    })),
     competitor_matrix: {
       candidate_set: { competitor_set_rule: "Десять сопоставимых агентств", candidates },
       rows: candidates.map((candidate, index) => ({
         competitor: candidate.competitor,
         observed_offer_message: "Комплексный брендинг под ключ",
         exact_landing: candidate.exact_destinations[0],
+        observation_date: `2026-08-${String(index + 1).padStart(2, "0")}T10:00:00.000Z`,
         ad_visibility_sample: {
           status: index < 9 ? "OBSERVED" : "NOT_OBSERVED",
           query: "заказать брендинг",
@@ -288,8 +294,13 @@ test("turns a 90 percent bounded competitor ad pattern into a market control and
   assert.match(control.variant.control_basis.observed_weakness, /B2B-лицо/u);
   assert.match(control.campaign_name, /Рыночный контроль/u);
   assert.equal(treatment.variant.hypothesis.source, "COMPETITOR_PUBLIC_WEB");
+  assert.equal(treatment.variant.hypothesis.claim_status, "TESTABLE_HYPOTHESIS_NOT_PERFORMANCE_FACT");
   assert.equal(treatment.variant.hypothesis.changed_family, "AUDIENCE_SPECIFICITY");
+  assert.equal(treatment.variant.hypothesis.competitor_set_rule, "Десять сопоставимых агентств");
   assert.equal(treatment.variant.hypothesis.prevalence.percent, 90);
+  assert.deepEqual(treatment.variant.hypothesis.evidence_ids, candidates.slice(0, 9).map((_, index) => `evidence-${index + 1}`));
+  assert.deepEqual(treatment.variant.hypothesis.evidence_set.map((item) => item.exact_landing), candidates.slice(0, 9).map((candidate) => candidate.exact_destinations[0]));
+  assert.match(treatment.variant.hypothesis.mechanism, /Проверяемая гипотеза, не факт эффективности/u);
   assert.match(treatment.variant.hypothesis.mechanism, /9 из 10 конкурентов \(90%\)/u);
   assert.match(treatment.variant.hypothesis.mechanism, /Уточнить B2B-аудиторию/u);
   assert.match(treatment.campaign_name, /Улучшенная гипотеза/u);
@@ -334,10 +345,10 @@ test("turns public competitor positioning into a clearly qualified control when 
   const treatment = value.drafts.find((draft) => draft.variant.kind === "IMPROVEMENT");
 
   assert.equal(control.variant.control_basis.kind, "COMPETITIVE_POSITIONING_CONTROL");
-  assert.match(control.variant.control_basis.scope, /гипотеза по публичному позиционированию, а не доказательство запуска рекламы/iu);
+  assert.match(control.variant.control_basis.scope, /наблюдение публичного позиционирования, а не доказательство запуска рекламы/iu);
   assert.equal(control.variant.control_basis.pattern_id, "dedicated-branding-offer");
   assert.equal(treatment.variant.hypothesis.prevalence.percent, 100);
-  assert.match(treatment.auction_protocol.tested_change, /гипотеза по позиционирован/u);
+  assert.match(treatment.auction_protocol.tested_change, /Проверяемая гипотеза, не факт эффективности/u);
 });
 
 test("terminates at one control plus at most two improvements and audits excluded playbook rules", async () => {

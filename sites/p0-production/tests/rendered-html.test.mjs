@@ -56,6 +56,15 @@ test("owner Direct report omits the guidance cards below its verified details", 
   assert.doesNotMatch(ownerStyles, /\.owner-direct-guidance\b/u);
 });
 
+test("competitor disclosure separates testable hypotheses from performance facts and shows exact evidence", () => {
+  assert.match(clientSource, /Гипотезы для кампании — не факты эффективности/u);
+  assert.match(clientSource, /Проверяемая гипотеза/u);
+  assert.match(clientSource, /Точный набор доказательств/u);
+  assert.match(clientSource, /hypothesis\.evidenceSet/u);
+  assert.match(ownerSource, /TESTABLE_HYPOTHESIS_NOT_PERFORMANCE_FACT|не факт эффективности или прогноз результата/u);
+  assert.match(ownerStyles, /\.owner-competitor-hypotheses\b/u);
+});
+
 test("owner interface fixes the accepted five stages and exposes only planned product modules", () => {
   for (const label of ["Цель", "Что узнал агент", "Стратегия", "Кампании", "Проверка и создание"]) {
     assert.match(ownerSource, new RegExp(label, "u"));

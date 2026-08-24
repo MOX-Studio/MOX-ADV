@@ -617,6 +617,12 @@ test("accepts only policy-bound allowlisted public competitor observations and p
   assert.equal(result.competitor_matrix.rows[0].ad_visibility_sample.observation_date, "2026-08-21T09:25:00.000Z");
   assert.equal(result.competitor_matrix.aggregate_claims[0].denominator, 1);
   assert.equal(result.competitor_matrix.aggregate_claims[0].observed_count, 1);
+  assert.equal(result.competitor_matrix.aggregate_claims[0].claim_status, "OBSERVED_PUBLIC_FACT_NOT_PERFORMANCE_FACT");
+  assert.deepEqual(result.competitor_matrix.aggregate_claims[0].evidence_set, [{
+    competitor: "Альфа",
+    exact_landing: "https://competitor.example/offer",
+    observation_date: "2026-08-21T09:30:00.000Z",
+  }]);
   assert.ok(record?.limitations.some((item) => item.includes("не доказывает")));
   assert.ok(result.gaps.some((item) => item.code === "COMPETITOR_INTERNAL_PERFORMANCE_UNAVAILABLE"));
   assert.doesNotMatch(JSON.stringify(result.claims), /competitor_(?:budget|cpc|conversions|internal_strategy)/iu);

@@ -151,10 +151,11 @@ function matrixCompetitiveControlBasis(evidence: Record<string, unknown> | null 
   const rows = Array.isArray(matrix.rows) ? matrix.rows as Array<Record<string, unknown>> : [];
   const denominator = candidates.length;
   if (denominator < 2 || rows.length < 2) return null;
-  const sources = Array.isArray(evidence?.sources) ? evidence.sources as Array<Record<string, unknown>> : [];
-  const evidenceIds = [...new Set(sources
-    .filter((source) => text(source.source_id) === "competitors" || text(source.source_kind).toLowerCase().includes("competitor"))
-    .flatMap((source) => Array.isArray(source.evidence_ids) ? source.evidence_ids.map(String) : []))].sort();
+  const evidenceRecords = Array.isArray(evidence?.evidence) ? evidence.evidence as Array<Record<string, unknown>> : [];
+  const competitorEvidenceByLanding = Map.groupBy(
+    evidenceRecords.filter((item) => text(item.source_kind) === "competitor_public_web" && text(record(item.source_locator).url)),
+    (item) => text(record(item.source_locator).url),
+  );
   const competitorIdentity = (row: Record<string, unknown>) => keyText(row.competitor);
   const availableAdSamples = rows.filter((row) => {
     const sample = record(row.ad_visibility_sample);
@@ -177,20 +178,41 @@ function matrixCompetitiveControlBasis(evidence: Record<string, unknown> | null 
     }))
     .filter((item) => item.patternId && item.competitorCount >= 2)
     .sort((left, right) => right.competitorCount - left.competitorCount || left.patternId.localeCompare(right.patternId))[0];
-  const basis = (kind: string, patternId: string, observedCount: number, sampledCount: number, scope: string) => ({
-    kind,
-    evidence_ids: evidenceIds,
-    pattern_id: patternId,
-    sample_rule_id: null,
-    sample_rule_version: null,
-    fallback_reason: null,
-    observed_count: observedCount,
-    denominator,
-    sampled_count: sampledCount,
-    prevalence_percent: Math.round(observedCount / denominator * 100),
-    evidence_status: sampledCount === denominator ? "AVAILABLE" : "PARTIAL",
-    scope,
-  });
+  const basis = (
+    kind: string,
+    patternId: string,
+    observedCount: number,
+    sampledCount: number,
+    scope: string,
+    supportingRows: Array<Record<string, unknown>>,
+  ) => {
+    const evidenceSet = supportingRows.map((row) => ({
+      competitor: text(row.competitor),
+      exact_landing: text(row.exact_landing),
+      observation_date: text(row.observation_date),
+    })).sort((left, right) => left.competitor.localeCompare(right.competitor, "ru-RU")
+      || left.exact_landing.localeCompare(right.exact_landing));
+    const evidenceIds = [...new Set(evidenceSet.flatMap((reference) =>
+      (competitorEvidenceByLanding.get(reference.exact_landing) ?? []).map((item) => text(item.evidence_id)).filter(Boolean)
+    ))].sort();
+    return {
+      kind,
+      evidence_ids: evidenceIds,
+      evidence_set: evidenceSet,
+      pattern_id: patternId,
+      sample_rule_id: null,
+      sample_rule_version: null,
+      fallback_reason: null,
+      competitor_set_rule: text(candidateSet.competitor_set_rule),
+      observed_count: observedCount,
+      denominator,
+      sampled_count: sampledCount,
+      prevalence_percent: Math.round(observedCount / denominator * 100),
+      evidence_status: sampledCount === denominator ? "AVAILABLE" : "PARTIAL",
+      scope,
+      limitation: "Повторяемость техники в ограниченном наборе не является фактом эффективности и не доказывает запуск, расходы или результат рекламы конкурентов.",
+    };
+  };
   if (dominantAnalysis) {
     const analysis = record(dominantAnalysis.patternRows[0].campaign_analysis);
     const observedAd = analysis.evidence_status === "OBSERVED_AD";
@@ -200,7 +222,8 @@ function matrixCompetitiveControlBasis(evidence: Record<string, unknown> | null 
         dominantAnalysis.patternId,
         dominantAnalysis.competitorCount,
         observedAd ? sampledCompetitors.size : positionedCompetitors.size,
-        `${dominantAnalysis.competitorCount} из ${denominator} конкурентов (${Math.round(dominantAnalysis.competitorCount / denominator * 100)}%) используют паттерн «${text(analysis.pattern_label)}». ${observedAd ? "Паттерн наблюдался в ограниченном рекламном срезе." : "Это гипотеза по публичному позиционированию, а не доказательство запуска рекламы."}`,
+        `${dominantAnalysis.competitorCount} из ${denominator} конкурентов (${Math.round(dominantAnalysis.competitorCount / denominator * 100)}%) используют паттерн «${text(analysis.pattern_label)}». ${observedAd ? "Паттерн наблюдался в ограниченном рекламном срезе." : "Это наблюдение публичного позиционирования, а не доказательство запуска рекламы."}`,
+        dominantAnalysis.patternRows,
       ),
       pattern_label: text(analysis.pattern_label),
       campaign_type: text(analysis.campaign_type),
@@ -217,6 +240,7 @@ function matrixCompetitiveControlBasis(evidence: Record<string, unknown> | null 
       adObservedCompetitors.size,
       sampledCompetitors.size,
       `${adObservedCompetitors.size} из ${denominator} конкурентов (${Math.round(adObservedCompetitors.size / denominator * 100)}%) наблюдались в ограниченном рекламном срезе; проверено ${sampledCompetitors.size} из ${denominator}.`,
+      availableAdSamples.filter((row) => record(row.ad_visibility_sample).status === "OBSERVED"),
     );
   }
   if (positionedCompetitors.size >= 2) {
@@ -226,6 +250,7 @@ function matrixCompetitiveControlBasis(evidence: Record<string, unknown> | null 
       positionedCompetitors.size,
       positionedCompetitors.size,
       `${positionedCompetitors.size} из ${denominator} конкурентов (${Math.round(positionedCompetitors.size / denominator * 100)}%) используют отдельную публичную посадочную с конкретным предложением; это позиционирование, а не доказательство запуска рекламы.`,
+      rows,
     );
   }
   return null;
@@ -304,9 +329,13 @@ function competitorImprovement(controlBasis: Record<string, unknown>) {
   return {
     hypothesis_id: `competitor-public-web-${text(controlBasis.pattern_id) || "pattern"}-${changedFamily.toLowerCase()}@1.1.0`,
     source: "COMPETITOR_PUBLIC_WEB",
-    mechanism: `${observedCount} из ${denominator} конкурентов (${prevalencePercent}%) используют паттерн «${patternLabel}». ${adObserved ? "Наблюдаемую кампанию сохраняем как контроль." : "Это гипотеза по позиционированию; используем её как контроль без заявления о запуске рекламы."}${weakness ? ` Ограничение: ${weakness}.` : ""} Улучшение для цели стратегии: ${improvement}.`,
+    claim_status: "TESTABLE_HYPOTHESIS_NOT_PERFORMANCE_FACT",
+    mechanism: `Проверяемая гипотеза, не факт эффективности. ${observedCount} из ${denominator} конкурентов (${prevalencePercent}%) используют паттерн «${patternLabel}». ${adObserved ? "Наблюдаемый рекламный паттерн сохраняем как контроль." : "Наблюдаемое позиционирование используем как контроль без заявления о запуске рекламы."}${weakness ? ` Ограничение: ${weakness}.` : ""} Улучшение для цели стратегии: ${improvement}.`,
     changed_family: changedFamily,
+    competitor_set_rule: text(controlBasis.competitor_set_rule),
     evidence_ids: Array.isArray(controlBasis.evidence_ids) ? controlBasis.evidence_ids.map(String) : [],
+    evidence_set: Array.isArray(controlBasis.evidence_set) ? controlBasis.evidence_set : [],
+    limitations: [text(controlBasis.limitation)].filter(Boolean),
     prevalence: {
       observed_count: Number(controlBasis.observed_count),
       denominator: Number(controlBasis.denominator),

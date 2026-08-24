@@ -212,6 +212,15 @@ export default function P0Client() {
               </dl>
             </article>)}</div> : <p className="owner-competitor-unavailable">Публичные наблюдения не получены и остаются недоступными, а не нулевыми.</p>}
             <div className="owner-competitor-aggregates"><h3>Выводы только по этому набору</h3>{projection.competitorMatrix.aggregateClaims.map((claim) => <article key={claim.claim}><strong>{claim.claim}</strong><span>{claim.result}</span><p>{claim.scope} {claim.limitation}</p></article>)}</div>
+            {projection.competitorMatrix.hypotheses.length > 0 && <div className="owner-competitor-hypotheses"><h3>Гипотезы для кампании — не факты эффективности</h3>{projection.competitorMatrix.hypotheses.map((hypothesis) => <article key={hypothesis.pattern}>
+              <span>ПОВТОРЯЮЩАЯСЯ РЫНОЧНАЯ ТЕХНИКА</span>
+              <h4>{hypothesis.pattern}</h4>
+              <p><b>Проверяемая гипотеза:</b> {hypothesis.hypothesis}</p>
+              <p><b>Основание:</b> {hypothesis.basis}</p>
+              <p><b>Точный набор доказательств:</b></p>
+              <ul>{hypothesis.evidenceSet.map((evidence) => <li key={`${evidence.competitor}-${evidence.exactLanding}`}><strong>{evidence.competitor}</strong> · {evidence.exactLanding} · {evidence.observationDate}</li>)}</ul>
+              <p>{hypothesis.limitation}</p>
+            </article>)}</div>}
             <div className="owner-competitor-limitations"><strong>Что эта матрица не доказывает</strong><ul>{projection.competitorMatrix.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}</ul></div>
           </section>}
 

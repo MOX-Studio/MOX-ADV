@@ -92,10 +92,16 @@ export type CompetitorMatrix = {
   coverage: Array<{ competitor: string; status: "OBSERVED" | "UNAVAILABLE" }>;
   aggregate_claims: Array<{
     claim: string;
+    claim_status: "OBSERVED_PUBLIC_FACT_NOT_PERFORMANCE_FACT" | "OBSERVED_TECHNIQUE_NOT_PERFORMANCE_FACT";
     competitor_set_rule: string;
     denominator: number;
     observed_count: number | null;
     evidence_status: "AVAILABLE" | "PARTIAL" | "UNAVAILABLE";
+    evidence_set: Array<{
+      competitor: string;
+      exact_landing: string;
+      observation_date: string;
+    }>;
     limitation: string;
   }>;
   limitations: string[];
@@ -140,7 +146,7 @@ function validObservationDate(value: unknown) {
 }
 
 const PROMPT_INJECTION = /(?:ignore|disregard|override|forget)\s+(?:all\s+)?(?:previous|prior|system|developer)\s+(?:instructions?|prompts?)|(?:system|developer)\s+prompt|reveal\s+(?:the\s+)?(?:prompt|secrets?|credentials?)|игнорир\p{L}*\s+(?:предыдущ\p{L}*|системн\p{L}*)\s+(?:инструкц\p{L}*|промпт\p{L}*)|раскрой\p{L}*\s+(?:системн\p{L}*\s+)?(?:промпт|секрет|уч[её]тн\p{L}*\s+данн\p{L}*)/iu;
-const HIDDEN_PERFORMANCE = /(?:\b(?:advertising\s+budget|budget|spend|cpc|cpa|roi|roas|conversions?|profitability|performance|effectiveness|account\s+state|internal\s+strategy|bids?)\b|бюджет\p{L}*|расход\p{L}*\s+(?:на\s+)?реклам\p{L}*|цен\p{L}*\s+(?:за\s+)?клик|стоимост\p{L}*\s+(?:за\s+)?клик|стоимост\p{L}*\s+(?:за\s+)?(?:заявк\p{L}*|конверси\p{L}*)|конверси\p{L}*|эффективност\p{L}*|окупаемост\p{L}*|рентабельност\p{L}*|прибыльност\p{L}*|состояни\p{L}*\s+аккаунт\p{L}*|внутренн\p{L}*\s+стратег\p{L}*|(?:^|\s)ставк\p{L}*)/iu;
+const HIDDEN_PERFORMANCE = /(?:\b(?:advertising\s+budget|budget|spend|ctr|cvr|cpc|cpa|roi|roas|success\s+rate|conversions?|profitability|performance|effectiveness|account\s+state|internal\s+strategy|bids?|ads?\s+(?:launched|running|active))\b|бюджет\p{L}*|расход\p{L}*\s+(?:на\s+)?реклам\p{L}*|цен\p{L}*\s+(?:за\s+)?клик|стоимост\p{L}*\s+(?:за\s+)?клик|стоимост\p{L}*\s+(?:за\s+)?(?:заявк\p{L}*|конверси\p{L}*)|конверси\p{L}*|эффективност\p{L}*|результативност\p{L}*|успешност\p{L}*\s+(?:реклам\p{L}*)?|окупаемост\p{L}*|рентабельност\p{L}*|прибыльност\p{L}*|состояни\p{L}*\s+аккаунт\p{L}*|внутренн\p{L}*\s+стратег\p{L}*|реклам\p{L}*\s+(?:запущен\p{L}*|работа\p{L}*|активн\p{L}*)|(?:^|\s)ставк\p{L}*)/iu;
 
 export function containsCompetitorPromptInjection(value: unknown) {
   return PROMPT_INJECTION.test(String(value ?? ""));
@@ -307,6 +313,17 @@ export function buildCompetitorMatrix(input: {
     };
   }).sort((left, right) => left.competitor.localeCompare(right.competitor, "ru-RU") || left.exact_landing.localeCompare(right.exact_landing));
 
+  const analysesByPattern = Map.groupBy(
+    rows.filter((row) => row.campaign_analysis),
+    (row) => row.campaign_analysis!.pattern_id,
+  );
+  for (const patternRows of analysesByPattern.values()) {
+    const signatures = new Set(patternRows.map((row) => JSON.stringify(row.campaign_analysis)));
+    if (signatures.size !== 1) {
+      fail("COMPETITOR_CAMPAIGN_PATTERN_CONFLICT", "Один campaign pattern ID не может объединять разные техники, evidence status или improvement hypotheses.");
+    }
+  }
+
   const observedCompetitors = new Set(rows.map((row) => row.competitor));
   const denominator = candidateSet.candidates.length;
   const offersObserved = rows.length ? observedCompetitors.size : null;
@@ -317,24 +334,36 @@ export function buildCompetitorMatrix(input: {
   const visibilityObserved = availableVisibilitySamples.length
     ? new Set(availableVisibilitySamples.filter((row) => row.ad_visibility_sample.status === "OBSERVED").map((row) => row.competitor)).size
     : null;
-  const campaignPatterns = Map.groupBy(
-    rows.filter((row) => row.campaign_analysis),
-    (row) => row.campaign_analysis!.pattern_id,
-  );
-  const aggregate = (claim: string, observedCount: number | null) => ({
+  const campaignPatterns = analysesByPattern;
+  const exactEvidenceSet = (supportingRows: typeof rows) => supportingRows
+    .map((row) => ({
+      competitor: row.competitor,
+      exact_landing: row.exact_landing,
+      observation_date: row.observation_date,
+    }))
+    .sort((left, right) => left.competitor.localeCompare(right.competitor, "ru-RU")
+      || left.exact_landing.localeCompare(right.exact_landing));
+  const aggregate = (
+    claim: string,
+    observedCount: number | null,
+    supportingRows: typeof rows,
+    claimStatus: CompetitorMatrix["aggregate_claims"][number]["claim_status"] = "OBSERVED_PUBLIC_FACT_NOT_PERFORMANCE_FACT",
+  ) => ({
     claim,
+    claim_status: claimStatus,
     competitor_set_rule: candidateSet.competitor_set_rule,
     denominator,
     observed_count: observedCount,
     evidence_status: evidenceStatus(observedCount, denominator),
+    evidence_set: exactEvidenceSet(supportingRows),
     limitation: "Наблюдение относится только к ограниченному набору и не доказывает эффективность.",
   });
   const campaignPatternClaims = [...campaignPatterns.entries()]
     .map(([, patternRows]) => {
       const analysis = patternRows[0].campaign_analysis!;
       const count = new Set(patternRows.map((row) => row.competitor)).size;
-      const prefix = analysis.evidence_status === "OBSERVED_AD" ? "Рекламный паттерн" : "Гипотеза по позиционированию";
-      return aggregate(`${prefix}: ${analysis.pattern_label}`, count);
+      const prefix = analysis.evidence_status === "OBSERVED_AD" ? "Наблюдаемый рекламный паттерн" : "Наблюдаемый паттерн публичного позиционирования";
+      return aggregate(`${prefix}: ${analysis.pattern_label}`, count, patternRows, "OBSERVED_TECHNIQUE_NOT_PERFORMANCE_FACT");
     })
     .sort((left, right) => (right.observed_count ?? 0) - (left.observed_count ?? 0) || left.claim.localeCompare(right.claim, "ru-RU"));
   return {
@@ -347,9 +376,9 @@ export function buildCompetitorMatrix(input: {
       status: observedCompetitors.has(candidate.competitor) ? "OBSERVED" as const : "UNAVAILABLE" as const,
     })),
     aggregate_claims: [
-      aggregate("Публичное предложение наблюдалось", offersObserved),
-      aggregate("Публичная цена опубликована", pricesObserved),
-      aggregate("Рекламная видимость наблюдалась", visibilityObserved),
+      aggregate("Публичное предложение наблюдалось", offersObserved, rows),
+      aggregate("Публичная цена опубликована", pricesObserved, rows.filter((row) => row.published_price.status === "PUBLISHED")),
+      aggregate("Рекламная видимость наблюдалась", visibilityObserved, availableVisibilitySamples.filter((row) => row.ad_visibility_sample.status === "OBSERVED")),
       ...campaignPatternClaims,
     ],
     limitations: [

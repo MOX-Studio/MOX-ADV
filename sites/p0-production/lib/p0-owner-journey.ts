@@ -83,6 +83,13 @@ export type OwnerJourneyProjection = {
       adVisibilitySample: string;
     }>;
     aggregateClaims: Array<{ claim: string; scope: string; result: string; limitation: string }>;
+    hypotheses: Array<{
+      pattern: string;
+      hypothesis: string;
+      basis: string;
+      evidenceSet: Array<{ competitor: string; exactLanding: string; observationDate: string }>;
+      limitation: string;
+    }>;
     limitations: string[];
   } | null;
   demandCostResearch: {
@@ -890,7 +897,7 @@ const BUSINESS_MODEL_LABELS: Record<string, string> = {
   key_constraints: "Ключевые ограничения",
 };
 
-function competitorMatrixProjection(state: InternalState): OwnerJourneyProjection["competitorMatrix"] {
+export function projectCompetitorMatrixForOwner(state: InternalState): OwnerJourneyProjection["competitorMatrix"] {
   const matrix = record(record(state.analytics_evidence_snapshot).competitor_matrix);
   const candidateSet = record(matrix.candidate_set);
   if (!Object.keys(candidateSet).length) return null;
@@ -902,8 +909,8 @@ function competitorMatrixProjection(state: InternalState): OwnerJourneyProjectio
       exactDestinations: list(candidate.exact_destinations).map((destination) => ownerText(destination, "Недоступно", 1_500)),
     };
   });
-  const rows = list(matrix.rows).map((rowValue) => {
-    const row = record(rowValue);
+  const matrixRows = list(matrix.rows).map(record);
+  const rows = matrixRows.map((row) => {
     const price = record(row.published_price);
     const source = record(row.source);
     const sample = record(row.ad_visibility_sample);
@@ -940,6 +947,29 @@ function competitorMatrixProjection(state: InternalState): OwnerJourneyProjectio
       adVisibilitySample: `${analysisSummary} ${sampleStatus}. Запрос: ${sample.query === null ? "недоступен" : ownerText(sample.query)}. География: ${sample.geography === "UNAVAILABLE" ? "недоступна" : ownerText(sample.geography)}. Устройство: ${sample.device === "UNAVAILABLE" ? "недоступно" : ownerText(sample.device)}. Дата: ${ownerText(sample.observation_date, "недоступна", 100)}. Источник: ${ownerText(sample.source)}.`,
     };
   });
+  const hypotheses = list(matrix.aggregate_claims).map(record)
+    .filter((claim) => claim.claim_status === "OBSERVED_TECHNIQUE_NOT_PERFORMANCE_FACT" && Number(claim.observed_count) >= 2)
+    .map((claim) => {
+      const pattern = ownerText(claim.claim).replace(/^Наблюдаемый (?:рекламный паттерн|паттерн публичного позиционирования):\s*/u, "");
+      const patternRow = matrixRows.find((row) => ownerText(record(row.campaign_analysis).pattern_label) === pattern);
+      const analysis = record(patternRow?.campaign_analysis);
+      const denominator = Number(claim.denominator);
+      const observedCount = Number(claim.observed_count);
+      return {
+        pattern,
+        hypothesis: ownerText(analysis.improvement_hypothesis),
+        basis: `Техника наблюдалась у ${observedCount} из ${denominator} конкурентов. Правило набора: ${ownerText(claim.competitor_set_rule)}`,
+        evidenceSet: list(claim.evidence_set).map((referenceValue) => {
+          const reference = record(referenceValue);
+          return {
+            competitor: ownerPublicBrandName(reference.competitor),
+            exactLanding: ownerText(reference.exact_landing, "Недоступно", 1_500),
+            observationDate: ownerText(reference.observation_date, "Дата недоступна", 100),
+          };
+        }),
+        limitation: `${ownerText(claim.limitation)} Это проверяемая гипотеза кампании, а не факт эффективности или прогноз результата.`,
+      };
+    });
   return {
     status: matrix.status === "AVAILABLE" ? "Доступно" : matrix.status === "PARTIAL" ? "Частично" : "Недоступно",
     competitorSetRule: ownerText(candidateSet.competitor_set_rule),
@@ -961,6 +991,7 @@ function competitorMatrixProjection(state: InternalState): OwnerJourneyProjectio
         limitation: ownerText(claim.limitation),
       };
     }),
+    hypotheses,
     limitations: list(matrix.limitations).map((item) => ownerText(item)).filter(Boolean),
   };
 }
@@ -1645,7 +1676,7 @@ async function project(
     businessOutcome: outcome(view, stage, unknowns),
     currentRecommendation: recommendation(view, stage),
     directReport: projectDirectAuditForOwner(view.state.analytics_evidence_snapshot),
-    competitorMatrix: competitorMatrixProjection(view.state),
+    competitorMatrix: projectCompetitorMatrixForOwner(view.state),
     demandCostResearch: projectDemandCostResearchForOwner(view.state.analytics_evidence_snapshot),
     businessModel: businessModelProjection(view.state),
     campaignStrategy: campaignStrategyProjection(view.state),

@@ -127,6 +127,13 @@
 .owner-competitor-aggregates > h3 { margin: 0 0 7px; font-size: 10px; }
 .owner-competitor-aggregates article { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; padding: 6px 0; border-top: 1px solid var(--owner-line); font-size: 7px; }
 .owner-competitor-aggregates article p { grid-column: 1 / -1; margin: 0; color: var(--owner-muted); line-height: 1.4; }
+.owner-competitor-hypotheses { margin-top: 10px; padding: 11px; border: 1px solid #c9ddd0; border-radius: 8px; background: #f7fbf8; }
+.owner-competitor-hypotheses > h3 { margin: 0 0 8px; font-size: 10px; }
+.owner-competitor-hypotheses article { padding: 9px 0; border-top: 1px solid var(--owner-line); }
+.owner-competitor-hypotheses article > span { color: var(--owner-green-dark); font-size: 6px; font-weight: 850; letter-spacing: .08em; }
+.owner-competitor-hypotheses h4 { margin: 4px 0 6px; font-size: 9px; }
+.owner-competitor-hypotheses p, .owner-competitor-hypotheses li { margin: 4px 0; color: var(--owner-muted); font-size: 7px; line-height: 1.45; overflow-wrap: anywhere; }
+.owner-competitor-hypotheses ul { margin: 4px 0; padding-left: 15px; }
 .owner-competitor-limitations { margin-top: 10px; padding: 11px; border-radius: 8px; background: var(--owner-amber); font-size: 8px; }
 .owner-competitor-limitations ul { margin: 7px 0 0; padding-left: 15px; color: var(--owner-muted); line-height: 1.45; }
 .owner-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 16px; }
