@@ -386,7 +386,7 @@ export type P0Document = {
     schema_version: "p0-recommendation-recalculation-v1";
     material_change: boolean;
     message: string;
-    reason_code: "ACTIVE_PLAYBOOK_RELEASE_CHANGED_OR_ROLLED_BACK" | "NO_ACTIVE_PLAYBOOK_MATERIAL_CHANGE";
+    reason_code: "ACTIVE_PLAYBOOK_RELEASE_CHANGED_OR_ROLLED_BACK" | "COMPETITOR_GUIDANCE_GENERATED" | "NO_ACTIVE_PLAYBOOK_MATERIAL_CHANGE";
     recalculated_at: string;
     previous_recommendation_set_id: string;
     current_recommendation_set_id: string;
