@@ -2,7 +2,7 @@ import { resolveCuratedPlaybookReleases, type CuratedPlaybookRelease } from "./c
 import { cleanText } from "./text.ts";
 
 export const STRATEGY_QUESTIONNAIRE_SCHEMA = "p0-strategy-questionnaire-v2";
-export const STRATEGY_QUESTIONNAIRE_CONTRACT_VERSION = "2.0.0";
+export const STRATEGY_QUESTIONNAIRE_CONTRACT_VERSION = "2.1.0";
 export const CAMPAIGN_STRATEGY_SCHEMA = "p0-campaign-strategy-v2";
 
 export const STRATEGY_FIELD_ORDER = [
@@ -28,6 +28,7 @@ export type StrategyAnswerValue = string | number | StrategyPeriod;
 
 export type PreparedStrategyDecision = {
   required: true;
+  owner_decision_required: true;
   question: string;
   recommendation: string;
   evidence: string[];
@@ -184,9 +185,10 @@ function modelRecommendation(model: Record<string, unknown>, fieldId: "product" 
 function missingDecision(question: string, recommendation: string, evidence: string[], consequences: string[]): PreparedStrategyDecision {
   return {
     required: true,
+    owner_decision_required: true,
     question,
     recommendation,
-    evidence,
+    evidence: evidence.length ? evidence : ["Разрешённые источники не подтвердили это business-owned значение."],
     confidence: evidence.length ? "MEDIUM" : "LOW",
     alternatives: ["Принять рекомендацию агента", "Указать другое бизнес-значение и пересчитать зависимые результаты"],
     consequences,
@@ -463,7 +465,11 @@ export async function buildStrategyQuestionnaire({
     rule_ids: playbook.rules.map((rule) => rule.rule_id),
     rule_digests: playbook.rules.map((rule) => rule.content_digest),
   };
-  const materialQuestions = fields.flatMap((field) => field.prepared_decision ? [{ field_id: field.field_id, decision: field.prepared_decision }] : []);
+  const materialQuestions = fields.flatMap((field) => (
+    field.recommended_value === null && field.prepared_decision?.owner_decision_required === true
+      ? [{ field_id: field.field_id, decision: field.prepared_decision }]
+      : []
+  ));
   const materialConflicts = list(analyticsEvidence.conflicts).map(record).filter((conflict) => conflict.material === true);
   const materialGaps = list(analyticsEvidence.gaps).map(record).filter((gap) => gap.material === true);
   const evidenceProblems = [

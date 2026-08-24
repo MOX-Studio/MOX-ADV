@@ -27,11 +27,29 @@ export type P0AgentStopReasonCode =
   | "AMBIGUOUS_WRITE_REQUIRES_RECONCILIATION"
   | "RESUME_PRECONDITION_FAILED";
 
+export type P0AgentOwnerDecisionPacket = {
+  decision_key: string;
+  boundary: "MATERIAL_UNCERTAINTY" | "CRITICAL_DECISION";
+  question: string;
+  recommendation: {
+    answer: string;
+    evidence: string[];
+    confidence: "LOW" | "MEDIUM";
+    limitations: string[];
+  };
+  owner_decision: {
+    required: true;
+    alternatives: string[];
+    consequences: string[];
+  };
+};
+
 export type P0AgentStopReason = {
   code: P0AgentStopReasonCode;
   message: string;
   resumable: boolean;
   resume_at?: string;
+  decision_packet?: P0AgentOwnerDecisionPacket;
 };
 
 export type P0AgentToolDefinition = {
@@ -547,6 +565,7 @@ export type P0AgentOwnerProjection = {
     kind: "agent-activity" | "finding" | "problem" | "human-decision-gate";
     title: string;
     body: string;
+    decisionPacket?: P0AgentOwnerDecisionPacket;
   };
   nextBusinessStep: string;
 };
@@ -563,6 +582,9 @@ export function projectP0AgentRunForOwner(state: Pick<P0AgentRunState, "status" 
         kind: "human-decision-gate",
         title: "Подготовлено существенное решение",
         body: "Агент собрал доступные факты и остановился только на границе бизнес-решения или полномочия.",
+        ...(state.stop_reason?.decision_packet
+          ? { decisionPacket: clone(state.stop_reason.decision_packet) }
+          : {}),
       },
       nextBusinessStep: "Рассмотреть подготовленную рекомендацию и её последствия.",
     };

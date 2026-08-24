@@ -48,6 +48,12 @@ export type BusinessModelContract = {
     field: BusinessModelFieldId;
     question: string;
     why_material: string;
+    boundary: "MATERIAL_UNCERTAINTY";
+    recommendation: {
+      answer: string;
+      evidence: string[];
+      confidence: "LOW";
+    };
   }>;
   economics: {
     status: "CONFIRMED" | "MATERIAL_UNCERTAINTY";
@@ -121,10 +127,21 @@ async function digest(value: unknown) {
   return [...new Uint8Array(hash)].map((item) => item.toString(16).padStart(2, "0")).join("");
 }
 
-function questions(fields: BusinessModelContract["fields"]) {
+function questions(fields: BusinessModelContract["fields"]): BusinessModelContract["questions"] {
   return BUSINESS_MODEL_FIELD_ORDER
     .filter((field) => fields[field].availability === "UNAVAILABLE" && !fields[field].owner_confirmed)
-    .map((field) => ({ field, question: FIELD_QUESTIONS[field].question, why_material: FIELD_QUESTIONS[field].why }));
+    .map((field) => ({
+      field,
+      question: FIELD_QUESTIONS[field].question,
+      why_material: FIELD_QUESTIONS[field].why,
+      boundary: "MATERIAL_UNCERTAINTY" as const,
+      recommendation: {
+        answer: fields[field].assumption.statement
+          ?? "Указать фактическое значение; если оно неизвестно, подтвердить недоступность без нуля или догадки.",
+        evidence: [fields[field].limitation ?? "Разрешённые источники не подтвердили значение."],
+        confidence: "LOW" as const,
+      },
+    }));
 }
 
 function economics(fields: BusinessModelContract["fields"]): BusinessModelContract["economics"] {

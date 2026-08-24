@@ -129,6 +129,9 @@ test("builds a complete adaptive Campaign Strategy recommendation from exact lin
   assert.deepEqual(questionnaire.playbook_lineage.rule_ids, ["p0-qualified-result-alignment"]);
   assert.deepEqual(questionnaire.human_decision_gate.unresolved_field_ids, ["period", "weekly_budget"]);
   assert.deepEqual(questionnaire.material_questions.map((item) => item.field_id), ["period", "weekly_budget"]);
+  assert.ok(questionnaire.material_questions.every((item) => item.decision.owner_decision_required === true));
+  assert.ok(questionnaire.material_questions.every((item) => ["LOW", "MEDIUM"].includes(item.decision.confidence)));
+  assert.ok(questionnaire.material_questions.every((item) => item.decision.recommendation.length > 0 && item.decision.evidence.length > 0));
 });
 
 test("sparse or conflicting evidence creates a complete prepared Human Decision Gate and explicit safe fallback", async () => {

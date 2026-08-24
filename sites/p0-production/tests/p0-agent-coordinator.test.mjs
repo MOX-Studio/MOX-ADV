@@ -214,6 +214,40 @@ test("persisted model cost budget stops before any proposed tool can execute", a
   assert.equal(result.budget.usage.cost_microusd, 1_001);
 });
 
+test("owner projection keeps the bounded recommendation separate from the owner decision packet", () => {
+  const packet = {
+    decision_key: "campaign-strategy:weekly_budget",
+    boundary: "CRITICAL_DECISION",
+    question: "Какой недельный предел расходов допустим?",
+    recommendation: {
+      answer: "Задать предел, согласованный с подтверждённой economics.",
+      evidence: ["Технический минимум Директа не является бизнес-бюджетом."],
+      confidence: "LOW",
+      limitations: ["Разрешённые источники не содержат business-owned лимит."],
+    },
+    owner_decision: {
+      required: true,
+      alternatives: ["Принять рекомендацию", "Указать другой предел"],
+      consequences: ["Бюджет ограничивает внешнюю экспозицию."],
+    },
+  };
+  const projection = projectP0AgentRunForOwner({
+    status: "STOPPED",
+    stop_reason: {
+      code: "CRITICAL_DECISION_REQUIRED",
+      message: "Prepared decision.",
+      resumable: true,
+      decision_packet: packet,
+    },
+    observations: [],
+    budget: { usage: { model_calls: 0, tool_calls: 0, input_tokens: 0, output_tokens: 0, elapsed_ms: 0, cost_microusd: 0 } },
+  });
+
+  assert.deepEqual(projection.card.decisionPacket.recommendation, packet.recommendation);
+  assert.deepEqual(projection.card.decisionPacket.owner_decision, packet.owner_decision);
+  assert.notEqual(projection.card.decisionPacket.recommendation, projection.card.decisionPacket.owner_decision);
+});
+
 test("owner projection is bounded business progress without runtime, checkpoint, tool, or retry controls", () => {
   const value = {
     status: "STOPPED",

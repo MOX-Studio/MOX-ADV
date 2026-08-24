@@ -4278,6 +4278,13 @@ test("authoritative application owns the agent objective, typed tool schema, per
   });
   assert.equal(decision.status, "STOP");
   assert.equal(decision.stop_reason.code, "MATERIAL_DECISION_REQUIRED");
+  assert.equal(decision.stop_reason.decision_packet.boundary, "MATERIAL_UNCERTAINTY");
+  assert.equal(decision.stop_reason.decision_packet.decision_key, "context-business-goal");
+  assert.equal(decision.stop_reason.decision_packet.owner_decision.required, true);
+  assert.ok(decision.stop_reason.decision_packet.recommendation.answer.length > 0);
+  assert.ok(decision.stop_reason.decision_packet.recommendation.evidence.length > 0);
+  assert.equal(["LOW", "MEDIUM"].includes(decision.stop_reason.decision_packet.recommendation.confidence), true);
+  assert.notEqual(decision.stop_reason.decision_packet.recommendation, decision.stop_reason.decision_packet.owner_decision);
 
   result = await value.application.command("owner", {
     action: "confirm_context_goal",
@@ -4325,6 +4332,8 @@ test("authoritative application owns the agent objective, typed tool schema, per
   });
   assert.equal(focusDecision.status, "STOP");
   assert.equal(focusDecision.stop_reason.code, "MATERIAL_DECISION_REQUIRED");
+  assert.equal(focusDecision.stop_reason.decision_packet.boundary, "MATERIAL_UNCERTAINTY");
+  assert.ok(focusDecision.stop_reason.decision_packet.recommendation.evidence.length > 0);
 
   result = await value.application.command("owner", {
     action: "save_business_model",
@@ -4344,6 +4353,8 @@ test("authoritative application owns the agent objective, typed tool schema, per
   });
   assert.equal(completed.status, "STOP");
   assert.equal(completed.stop_reason.code, "CRITICAL_DECISION_REQUIRED");
+  assert.equal(completed.stop_reason.decision_packet.boundary, "CRITICAL_DECISION");
+  assert.match(completed.stop_reason.decision_packet.decision_key, /^campaign-strategy:/u);
 });
 
 test("typed owner journey is the narrow five-stage query/action seam and keeps diagnostics outside the owner response", async (t) => {

@@ -40,7 +40,12 @@ test("agent-filled Business Model keeps every material field with provenance, fr
   assert.equal(model.fields.gross_margin_percent.availability, "UNAVAILABLE");
   assert.equal(model.fields.gross_margin_percent.value, null);
   assert.match(model.fields.gross_margin_percent.limitation, /не подтверждено/u);
-  assert.equal(model.questions.some((item) => item.field === "gross_margin_percent"), true);
+  const marginQuestion = model.questions.find((item) => item.field === "gross_margin_percent");
+  assert.ok(marginQuestion);
+  assert.equal(marginQuestion.boundary, "MATERIAL_UNCERTAINTY");
+  assert.equal(marginQuestion.recommendation.confidence, "LOW");
+  assert.ok(marginQuestion.recommendation.answer.length > 0);
+  assert.ok(marginQuestion.recommendation.evidence.length > 0);
   assert.equal(model.questions.some((item) => item.field === "average_sale_value_rub"), false);
   assert.equal(model.economics.status, "MATERIAL_UNCERTAINTY");
   assert.equal(model.economics.target_result_cost_rub, null);

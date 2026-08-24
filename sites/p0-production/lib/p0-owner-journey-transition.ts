@@ -12,12 +12,17 @@ export type OwnerGoalInterviewRecommendation = {
   answer: string;
   rationale: string;
   evidence: string;
-  confidence: string;
+  confidence: "LOW" | "MEDIUM";
 };
 
 export type OwnerGoalInterviewQuestion = {
   key: string;
   prompt: string;
+  materiality: {
+    boundary: "MATERIAL_UNCERTAINTY" | "CRITICAL_DECISION";
+    whyMaterial: string;
+    consequences: string[];
+  };
   recommendation: OwnerGoalInterviewRecommendation;
 };
 
@@ -128,6 +133,20 @@ const FORBIDDEN_OWNER_TEXT = [
   /\bp0_[a-z0-9_]+\b/giu,
 ];
 
+const PROMPT_INJECTION_TEXT = [
+  /\bignore\s+(?:all\s+)?(?:previous|prior)\s+instructions?\b/iu,
+  /\b(?:system|assistant|developer)\s*:\s*/iu,
+  /\b(?:call|invoke|run|execute)\s+(?:the\s+)?(?:shell|browser|tool|command)\b/iu,
+  /\b(?:grant|replace|override)\s+(?:the\s+)?(?:authority|policy|permissions?)\b/iu,
+];
+
+function rejectPromptInjection(value: unknown) {
+  const text = String(value ?? "").normalize("NFKC");
+  if (PROMPT_INJECTION_TEXT.some((pattern) => pattern.test(text))) {
+    fail("P0_OWNER_PROMPT_INJECTION", "Подготовленный вопрос содержит недоверенную инструкцию вместо бизнес-информации.");
+  }
+}
+
 function ownerSafeText(value: unknown, label: string, maximum = 1_000) {
   let text = normalizedText(value, label, maximum);
   for (const pattern of FORBIDDEN_OWNER_TEXT) text = text.replace(pattern, "техническая деталь");
@@ -136,14 +155,37 @@ function ownerSafeText(value: unknown, label: string, maximum = 1_000) {
 }
 
 function normalizedQuestion(question: OwnerGoalInterviewQuestion): OwnerGoalInterviewQuestion {
+  const preparedText = [
+    question.prompt,
+    question.materiality?.whyMaterial,
+    ...(question.materiality?.consequences ?? []),
+    question.recommendation?.answer,
+    question.recommendation?.rationale,
+    question.recommendation?.evidence,
+  ];
+  preparedText.forEach(rejectPromptInjection);
+  if (!["MATERIAL_UNCERTAINTY", "CRITICAL_DECISION"].includes(question.materiality?.boundary)) {
+    fail("P0_OWNER_QUESTION_UNNECESSARY", "Вопрос владельцу допустим только перед существенной неопределённостью или критическим решением.");
+  }
+  if (!Array.isArray(question.materiality?.consequences) || question.materiality.consequences.length < 1) {
+    fail("P0_OWNER_QUESTION_UNNECESSARY", "Существенный вопрос должен раскрывать последствия решения.");
+  }
+  if (!["LOW", "MEDIUM"].includes(question.recommendation?.confidence)) {
+    fail("P0_OWNER_RECOMMENDATION_FALSE_CONFIDENCE", "Неподтверждённая рекомендация не может заявлять высокую или произвольную уверенность.");
+  }
   return {
     key: normalizedText(question.key, "Ключ вопроса", 120),
     prompt: ownerSafeText(question.prompt, "Вопрос"),
+    materiality: {
+      boundary: question.materiality.boundary,
+      whyMaterial: ownerSafeText(question.materiality.whyMaterial, "Существенность"),
+      consequences: question.materiality.consequences.map((item) => ownerSafeText(item, "Последствие")),
+    },
     recommendation: {
       answer: ownerSafeText(question.recommendation?.answer, "Рекомендованный ответ"),
       rationale: ownerSafeText(question.recommendation?.rationale, "Обоснование"),
       evidence: ownerSafeText(question.recommendation?.evidence, "Доказательства"),
-      confidence: ownerSafeText(question.recommendation?.confidence, "Уверенность", 120),
+      confidence: question.recommendation.confidence,
     },
   };
 }
