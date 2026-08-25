@@ -1,0 +1,126 @@
+{
+  "schema_version": "p0-owner-decision-acceptance-v1",
+  "feature_issue": 246,
+  "implemented_tasks": [
+    289,
+    290
+  ],
+  "generated_at": "2026-08-25T11:36:04.213Z",
+  "status": "READY_FOR_OWNER_CHECKPOINT",
+  "task_289_exact_authority": {
+    "incomplete_independent_preflight": "7/9",
+    "authority_before_complete_preflight_blocked": true,
+    "complete_controlled_preflight": "9/9",
+    "exact_bindings": [
+      "ordered Campaign Draft revisions",
+      "Campaign Strategy",
+      "Business Model",
+      "Analytics Evidence",
+      "Direct account and capability snapshot",
+      "claims and assets",
+      "frozen Auction Protocols"
+    ],
+    "material_draft_change_invalidates": true,
+    "account_mismatch_invalidates": true,
+    "capability_change_invalidates": true,
+    "allowed_actions": [
+      "PREPARE_SEPARATE_SUSPENDED_CREATION_STAGE"
+    ],
+    "forbidden_actions": [
+      "START_IMPRESSIONS",
+      "RESUME_CAMPAIGN",
+      "CHANGE_EXACT_PACKAGE",
+      "CHANGE_BOUND_ACCOUNT",
+      "EXPAND_BY_AGENT_OR_MODEL"
+    ],
+    "agent_or_model_may_expand": false
+  },
+  "task_290_owner_decision": {
+    "owner_view": {
+      "status": "Нужно решение",
+      "exact_version": "2 кампании · 9/9 проверок · состав и порядок зафиксированы",
+      "recommendation": "Принять только показанный точный пакет после полной проверки 9/9, если его состав, порядок и ограничения соответствуют решению владельца.",
+      "alternatives": [
+        "Принять точный пакет без внешней записи",
+        "Отклонить пакет и вернуться к редактированию"
+      ],
+      "consequences": [
+        "Принятие фиксирует одноразовое полномочие только для показанных неизменяемых версий.",
+        "Отклонение не выдаёт полномочие и не меняет состояние внешней системы."
+      ],
+      "risks": [
+        "Любое существенное изменение или устаревшая версия аннулирует решение и полномочие.",
+        "Пакет не разрешает показы, расходы или возобновление кампаний.",
+        "Агент и модель не могут расширить состав, аккаунт или разрешённые действия."
+      ],
+      "next_real_stage": "Создание точных кампаний в состоянии SUSPENDED возможно только на следующем отдельно разрешаемом реальном этапе.",
+      "campaigns": [
+        {
+          "order": 1,
+          "campaign": "Брендинг для запуска или малого бизнеса · STRATEGY_BASELINE_FALLBACK",
+          "budget_rub": 11600,
+          "period": {
+            "start_date": "2026-09-01",
+            "end_date": "2026-09-30"
+          }
+        },
+        {
+          "order": 2,
+          "campaign": "Брендинг для запуска или малого бизнеса · Целевое действие",
+          "budget_rub": 11600,
+          "period": {
+            "start_date": "2026-09-01",
+            "end_date": "2026-09-30"
+          }
+        }
+      ],
+      "safety": "Принятие или отклонение записывается без внешних записей, показов и расходов."
+    },
+    "accepted_decision_verified": true,
+    "rejected_decision_verified": true,
+    "rejected_authority_issued": false,
+    "stale_action_blocked_by_revision_bound_handle": true,
+    "immutable_journal_verified_on_restart": true,
+    "external_write_calls": 0,
+    "impressions_started": 0,
+    "spend_started_rub": 0
+  },
+  "evidence_boundary": {
+    "independent_read_only_source": "INDEPENDENT_READ_ONLY_BUSINESS_EVIDENCE",
+    "incomplete_preflight_not_promoted": true,
+    "complete_preflight_evidence_kind": "CONTROLLED_ACCEPTANCE_FIXTURE_DERIVED_FROM_INDEPENDENT_SOURCE",
+    "controlled_fixture_is_current_account_readiness_evidence": false,
+    "browser": {
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "local_dashboard_ui_only": true,
+      "executable_test": "tests/e2e/test_p0_production_candidate.py"
+    },
+    "contract": [
+      "tests/package-owner-decision.test.mjs",
+      "tests/package-owner-decision-ui.test.mjs",
+      "tests/p0-application-contract.test.mjs"
+    ]
+  },
+  "no_write_proof": {
+    "provider_mutations": [],
+    "external_write_calls": 0,
+    "production_write_attempts": 0,
+    "impressions_started": 0,
+    "spend_started_rub": 0,
+    "browser_cabinets_used": false
+  },
+  "human_checkpoint": {
+    "issue": 249,
+    "required": true,
+    "verdict": "PENDING_HUMAN_VERDICT",
+    "implementation_may_claim_acceptance": false,
+    "acceptance_checks": [
+      "Владелец лично проверяет точный пакет и принимает либо отклоняет его одним явным решением.",
+      "После существенного изменения прежнее решение и полномочие становятся недействительными.",
+      "Контрольная точка подтверждает отсутствие записи во внешнюю рабочую систему, показов, расходов и полномочия на показы."
+    ]
+  }
+}
