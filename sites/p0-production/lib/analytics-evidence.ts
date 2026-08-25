@@ -21,9 +21,10 @@ import {
   type CompetitorMatrixRowInput,
 } from "./competitor-research.ts";
 
-export const ANALYTICS_EVIDENCE_SCHEMA = "p0-analytics-evidence-v5";
-export const ANALYTICS_EVIDENCE_CONTRACT_VERSION = "5.0.0";
-const LEGACY_ANALYTICS_EVIDENCE_SCHEMAS = new Set(["p0-analytics-evidence-v1", "p0-analytics-evidence-v2", "p0-analytics-evidence-v3", "p0-analytics-evidence-v4"]);
+export const ANALYTICS_EVIDENCE_SCHEMA = "p0-analytics-evidence-v6";
+export const ANALYTICS_EVIDENCE_CONTRACT_VERSION = "6.0.0";
+export const ANALYTICS_EVIDENCE_DOMAIN_MANIFEST_SCHEMA = "p0-analytics-domain-manifest-v1";
+const LEGACY_ANALYTICS_EVIDENCE_SCHEMAS = new Set(["p0-analytics-evidence-v1", "p0-analytics-evidence-v2", "p0-analytics-evidence-v3", "p0-analytics-evidence-v4", "p0-analytics-evidence-v5"]);
 const CANONICALIZATION_VERSION = "mox-canonical-json-v1";
 const NORMALIZER_VERSION = "mox-evidence-normalizer-v2";
 const REDACTION_VERSION = "mox-artifact-redaction-v1";
@@ -150,6 +151,30 @@ export type EvidenceGap = {
   limitations: string[];
 };
 
+export type AnalyticsEvidenceDomain = "BUSINESS_MODEL" | "DIRECT" | "METRIKA" | "WORDSTAT" | "COST" | "COMPETITORS";
+
+export type AnalyticsEvidenceDomainEntry = {
+  domain: AnalyticsEvidenceDomain;
+  artifact_paths: string[];
+  status: EvidenceSourceStatus;
+  source_ids: string[];
+  claim_indexes: number[];
+  evidence_indexes: number[];
+  conflict_indexes: number[];
+  gap_indexes: number[];
+  freshness: {
+    current: number;
+    aging: number;
+    stale: number;
+    unknown: number;
+  };
+};
+
+export type AnalyticsEvidenceDomainManifest = {
+  schema_version: typeof ANALYTICS_EVIDENCE_DOMAIN_MANIFEST_SCHEMA;
+  domains: AnalyticsEvidenceDomainEntry[];
+};
+
 export type AnalyticsEvidenceBundle = {
   schema_version: typeof ANALYTICS_EVIDENCE_SCHEMA;
   contract_version: typeof ANALYTICS_EVIDENCE_CONTRACT_VERSION;
@@ -184,6 +209,7 @@ export type AnalyticsEvidenceBundle = {
   conflicts: EvidenceConflict[];
   gaps: EvidenceGap[];
   material_uncertainties: string[];
+  domain_manifest: AnalyticsEvidenceDomainManifest;
   competitor_matrix: CompetitorMatrix | null;
   product_catalog: OfferCatalog;
   focus_opportunities: FocusOpportunitySet;
@@ -208,6 +234,7 @@ export type AnalyticsEvidenceBundle = {
     evidence_sha256: string;
     conflicts_sha256: string;
     gaps_sha256: string;
+    domain_manifest_sha256: string;
     competitor_matrix_sha256: string;
     product_catalog_sha256: string;
     focus_opportunities_sha256: string;
@@ -1541,10 +1568,15 @@ export async function buildAnalyticsEvidence({
   }
   conflicts.sort((left, right) => compareText(left.conflict_id, right.conflict_id));
   const conflictedPredicates = new Set(conflicts.filter((item) => item.resolution.startsWith("UNRESOLVED")).map((item) => item.predicate));
+  const evidenceById = new Map(evidence.map((item) => [item.evidence_id, item]));
   for (const claim of claims) {
     if (conflictedPredicates.has(claim.predicate)) {
       (claim.confidence as ClaimConfidence).consistency = "conflicted";
       (claim.confidence as ClaimConfidence).uncertainty = [...claim.confidence.uncertainty, "Unresolved conflicting evidence."];
+    }
+    const linkedEvidence = claim.evidence_ids.map((evidenceId) => evidenceById.get(evidenceId)).filter((item): item is EvidenceRecord => Boolean(item));
+    if (!linkedEvidence.length || linkedEvidence.length !== claim.evidence_ids.length) {
+      fail("CLAIM_PROVENANCE_INCOMPLETE", `Claim ${claim.claim_id} должен ссылаться на существующий Evidence Record.`);
     }
     const claimBody = { ...claim } as Record<string, unknown>;
     delete claimBody.claim_id;
@@ -1813,6 +1845,99 @@ export async function buildAnalyticsEvidence({
     }),
   ]);
 
+  const sourceIds = new Set(sources.map((source) => source.source_id));
+  const claimIndexes = new Map(claims.map((claim, index) => [claim, index]));
+  const evidenceIndexes = new Map(evidence.map((item, index) => [item, index]));
+  const conflictIndexes = new Map(conflicts.map((conflict, index) => [conflict, index]));
+  const gapIndexes = new Map(gaps.map((gap, index) => [gap, index]));
+  const makeDomainEntry = (input: {
+    domain: AnalyticsEvidenceDomain;
+    artifactPaths: string[];
+    status: EvidenceSourceStatus;
+    sourceIds: string[];
+    claimFilter: (claim: EvidenceClaim) => boolean;
+    gapFilter: (gap: EvidenceGap) => boolean;
+  }): AnalyticsEvidenceDomainEntry => {
+    const domainClaims = claims.filter(input.claimFilter);
+    const claimIds = new Set(domainClaims.map((claim) => claim.claim_id));
+    const domainEvidence = evidence.filter((item) => item.claim_links.some((link) => claimIds.has(link.claim_id)));
+    const domainGaps = gaps.filter(input.gapFilter);
+    const domainConflicts = conflicts.filter((conflict) => conflict.claim_ids.some((claimId) => claimIds.has(claimId)));
+    const freshness = { current: 0, aging: 0, stale: 0, unknown: 0 };
+    for (const claim of domainClaims) freshness[claim.confidence.freshness] += 1;
+    const domainSources = input.sourceIds.filter((sourceId) => sourceIds.has(sourceId)).sort(compareText);
+    return {
+      domain: input.domain,
+      artifact_paths: input.artifactPaths,
+      status: input.status,
+      source_ids: domainSources,
+      claim_indexes: domainClaims.map((claim) => claimIndexes.get(claim)!).sort((left, right) => left - right),
+      evidence_indexes: domainEvidence.map((item) => evidenceIndexes.get(item)!).sort((left, right) => left - right),
+      conflict_indexes: domainConflicts.map((conflict) => conflictIndexes.get(conflict)!).sort((left, right) => left - right),
+      gap_indexes: domainGaps.map((gap) => gapIndexes.get(gap)!).sort((left, right) => left - right),
+      freshness,
+    };
+  };
+  const businessClaims = claims.filter((claim) => claim.subject === "business_model" || claim.subject.startsWith("offer:"));
+  const businessStatus: EvidenceSourceStatus = businessClaims.length === 0
+    ? "UNAVAILABLE"
+    : missingQuestions.length || businessClaims.some((claim) => claim.confidence.coverage !== "complete_for_scope" || claim.confidence.consistency === "conflicted")
+      ? "PARTIAL"
+      : "VERIFIED";
+  const domainManifest: AnalyticsEvidenceDomainManifest = {
+    schema_version: ANALYTICS_EVIDENCE_DOMAIN_MANIFEST_SCHEMA,
+    domains: [
+      makeDomainEntry({
+        domain: "BUSINESS_MODEL",
+        artifactPaths: ["product_catalog", "focus_opportunities"],
+        status: businessStatus,
+        sourceIds: ["first-party-web", "owner-confirmed"],
+        claimFilter: (claim) => claim.subject === "business_model" || claim.subject.startsWith("offer:"),
+        gapFilter: (gap) => gap.code === "BUSINESS_MODEL_EVIDENCE_MISSING",
+      }),
+      makeDomainEntry({
+        domain: "DIRECT",
+        artifactPaths: ["claims", "evidence"],
+        status: directStatus,
+        sourceIds: ["direct"],
+        claimFilter: (claim) => claim.subject === "current_direct_account",
+        gapFilter: (gap) => gap.code === "CURRENT_DIRECT_INVENTORY_UNAVAILABLE",
+      }),
+      makeDomainEntry({
+        domain: "METRIKA",
+        artifactPaths: ["claims", "evidence"],
+        status: metrikaStatus,
+        sourceIds: ["metrika"],
+        claimFilter: (claim) => claim.subject === "metrika_goal",
+        gapFilter: (gap) => gap.code === "METRIKA_REPORT_UNAVAILABLE",
+      }),
+      makeDomainEntry({
+        domain: "WORDSTAT",
+        artifactPaths: ["market_evidence.frequency"],
+        status: wordstatStatus,
+        sourceIds: ["wordstat"],
+        claimFilter: (claim) => claim.subject === "market_demand",
+        gapFilter: (gap) => gap.source_id === "wordstat",
+      }),
+      makeDomainEntry({
+        domain: "COST",
+        artifactPaths: ["prelaunch_cost"],
+        status: marketEvidence.cost.status === "AVAILABLE" ? "VERIFIED" : "UNAVAILABLE",
+        sourceIds: ["direct"],
+        claimFilter: (claim) => claim.subject === "prelaunch_cost",
+        gapFilter: (gap) => gap.code === "PRELAUNCH_COST_UNAVAILABLE",
+      }),
+      makeDomainEntry({
+        domain: "COMPETITORS",
+        artifactPaths: ["competitor_matrix"],
+        status: competitorStatus,
+        sourceIds: ["competitors"],
+        claimFilter: (claim) => claim.subject.startsWith("competitor:"),
+        gapFilter: (gap) => gap.source_id === "competitors",
+      }),
+    ],
+  };
+
   const statuses = sources.map((source) => source.status);
   const materialConflictBlockers = conflicts
     .filter((item) => item.material && item.resolution.startsWith("UNRESOLVED"))
@@ -1866,6 +1991,7 @@ export async function buildAnalyticsEvidence({
       evidence,
       conflicts,
       gaps,
+      domain_manifest: domainManifest,
       competitor_matrix: competitorMatrix,
       product_catalog: productFocus.catalog,
       focus_opportunities: productFocus.focus_opportunities,
@@ -1876,6 +2002,7 @@ export async function buildAnalyticsEvidence({
     evidence_sha256: await contentHash(evidence),
     conflicts_sha256: await contentHash(conflicts),
     gaps_sha256: await contentHash(gaps),
+    domain_manifest_sha256: await contentHash(domainManifest),
     competitor_matrix_sha256: await contentHash(competitorMatrix),
     product_catalog_sha256: await contentHash(productFocus.catalog),
     focus_opportunities_sha256: await contentHash(productFocus.focus_opportunities),
@@ -1908,6 +2035,7 @@ export async function buildAnalyticsEvidence({
     conflicts,
     gaps,
     material_uncertainties: materialUncertainties,
+    domain_manifest: domainManifest,
     competitor_matrix: competitorMatrix,
     product_catalog: productFocus.catalog,
     focus_opportunities: productFocus.focus_opportunities,
@@ -1942,11 +2070,21 @@ export async function verifyAnalyticsEvidenceSnapshot(snapshot: AnalyticsEvidenc
       if (manifestHash !== await contentHash(body)) return false;
     }
     const claimIds = new Set(current.claims.map((claim) => claim.claim_id));
+    const sourceIds = new Set(current.sources.map((source) => source.source_id));
     for (const claim of current.claims) {
       const body = { ...claim } as Record<string, unknown>;
       delete body.claim_id;
       delete body.claim_hash;
       if (claim.claim_hash !== await contentHash(body)) return false;
+      if (candidate.schema_version === ANALYTICS_EVIDENCE_SCHEMA) {
+        const linkedEvidence = current.evidence.filter((item) => claim.evidence_ids.includes(item.evidence_id));
+        if (!linkedEvidence.length || linkedEvidence.length !== claim.evidence_ids.length) return false;
+        if (linkedEvidence.some((item) => !sourceIds.has(item.source_id)
+          || !["fresh", "aging", "stale", "unknown"].includes(item.freshness.status)
+          || !Array.isArray(item.limitations))) return false;
+        if (!["current", "aging", "stale", "unknown"].includes(claim.confidence.freshness)
+          || !Array.isArray(claim.confidence.uncertainty)) return false;
+      }
     }
     for (const evidenceRecord of current.evidence) {
       if (evidenceRecord.claim_links.some((link) => !claimIds.has(link.claim_id))) return false;
@@ -1970,6 +2108,67 @@ export async function verifyAnalyticsEvidenceSnapshot(snapshot: AnalyticsEvidenc
     if (current.hashes.evidence_sha256 !== await contentHash(current.evidence)) return false;
     if (current.hashes.conflicts_sha256 !== await contentHash(current.conflicts)) return false;
     if (current.hashes.gaps_sha256 !== await contentHash(current.gaps)) return false;
+    const hasDomainManifest = Object.hasOwn(current as unknown as Record<string, unknown>, "domain_manifest");
+    if (candidate.schema_version === ANALYTICS_EVIDENCE_SCHEMA && !hasDomainManifest) return false;
+    if (hasDomainManifest) {
+      const requiredDomains: AnalyticsEvidenceDomain[] = ["BUSINESS_MODEL", "DIRECT", "METRIKA", "WORDSTAT", "COST", "COMPETITORS"];
+      if (current.domain_manifest.schema_version !== ANALYTICS_EVIDENCE_DOMAIN_MANIFEST_SCHEMA) return false;
+      if (canonicalizeEvidence(current.domain_manifest.domains.map((entry) => entry.domain)) !== canonicalizeEvidence(requiredDomains)) return false;
+      const expectedArtifactPaths: Record<AnalyticsEvidenceDomain, string[]> = {
+        BUSINESS_MODEL: ["product_catalog", "focus_opportunities"],
+        DIRECT: ["claims", "evidence"],
+        METRIKA: ["claims", "evidence"],
+        WORDSTAT: ["market_evidence.frequency"],
+        COST: ["prelaunch_cost"],
+        COMPETITORS: ["competitor_matrix"],
+      };
+      const expectedSourceIds: Record<AnalyticsEvidenceDomain, string[]> = {
+        BUSINESS_MODEL: ["first-party-web", "owner-confirmed"],
+        DIRECT: ["direct"],
+        METRIKA: ["metrika"],
+        WORDSTAT: ["wordstat"],
+        COST: ["direct"],
+        COMPETITORS: ["competitors"],
+      };
+      const claimBelongsToDomain = (domain: AnalyticsEvidenceDomain, claim: EvidenceClaim) => domain === "BUSINESS_MODEL"
+        ? claim.subject === "business_model" || claim.subject.startsWith("offer:")
+        : domain === "DIRECT" ? claim.subject === "current_direct_account"
+          : domain === "METRIKA" ? claim.subject === "metrika_goal"
+            : domain === "WORDSTAT" ? claim.subject === "market_demand"
+              : domain === "COST" ? claim.subject === "prelaunch_cost"
+                : claim.subject.startsWith("competitor:");
+      const gapBelongsToDomain = (domain: AnalyticsEvidenceDomain, gap: EvidenceGap) => domain === "BUSINESS_MODEL"
+        ? gap.code === "BUSINESS_MODEL_EVIDENCE_MISSING"
+        : domain === "DIRECT" ? gap.code === "CURRENT_DIRECT_INVENTORY_UNAVAILABLE"
+          : domain === "METRIKA" ? gap.code === "METRIKA_REPORT_UNAVAILABLE"
+            : domain === "WORDSTAT" ? gap.source_id === "wordstat"
+              : domain === "COST" ? gap.code === "PRELAUNCH_COST_UNAVAILABLE"
+                : gap.source_id === "competitors";
+      for (const domain of current.domain_manifest.domains) {
+        const expectedClaimIndexes = current.claims.flatMap((claim, index) => claimBelongsToDomain(domain.domain, claim) ? [index] : []);
+        const expectedClaimIds = new Set(expectedClaimIndexes.map((index) => current.claims[index].claim_id));
+        const expectedEvidenceIndexes = current.evidence.flatMap((item, index) => item.claim_links.some((link) => expectedClaimIds.has(link.claim_id)) ? [index] : []);
+        const expectedConflictIndexes = current.conflicts.flatMap((conflict, index) => conflict.claim_ids.some((claimId) => expectedClaimIds.has(claimId)) ? [index] : []);
+        const expectedGapIndexes = current.gaps.flatMap((gap, index) => gapBelongsToDomain(domain.domain, gap) ? [index] : []);
+        const expectedFreshness = { current: 0, aging: 0, stale: 0, unknown: 0 };
+        for (const index of expectedClaimIndexes) expectedFreshness[current.claims[index].confidence.freshness] += 1;
+        const sourceStatus = current.sources.find((source) => source.source_id === expectedSourceIds[domain.domain][0])?.status ?? "UNAVAILABLE";
+        const expectedStatus: EvidenceSourceStatus = domain.domain === "BUSINESS_MODEL"
+          ? expectedClaimIndexes.length === 0 ? "UNAVAILABLE"
+            : expectedGapIndexes.length || expectedClaimIndexes.some((index) => current.claims[index].confidence.coverage !== "complete_for_scope" || current.claims[index].confidence.consistency === "conflicted") ? "PARTIAL" : "VERIFIED"
+          : domain.domain === "COST" ? current.prelaunch_cost.status === "AVAILABLE" ? "VERIFIED" : "UNAVAILABLE"
+            : sourceStatus;
+        if (canonicalizeEvidence(domain.artifact_paths) !== canonicalizeEvidence(expectedArtifactPaths[domain.domain])) return false;
+        if (canonicalizeEvidence(domain.source_ids) !== canonicalizeEvidence(expectedSourceIds[domain.domain])) return false;
+        if (canonicalizeEvidence(domain.claim_indexes) !== canonicalizeEvidence(expectedClaimIndexes)) return false;
+        if (canonicalizeEvidence(domain.evidence_indexes) !== canonicalizeEvidence(expectedEvidenceIndexes)) return false;
+        if (canonicalizeEvidence(domain.conflict_indexes) !== canonicalizeEvidence(expectedConflictIndexes)) return false;
+        if (canonicalizeEvidence(domain.gap_indexes) !== canonicalizeEvidence(expectedGapIndexes)) return false;
+        if (canonicalizeEvidence(domain.freshness) !== canonicalizeEvidence(expectedFreshness)) return false;
+        if (domain.status !== expectedStatus) return false;
+      }
+      if (current.hashes.domain_manifest_sha256 !== await contentHash(current.domain_manifest)) return false;
+    }
     const hasCompetitorMatrix = Object.hasOwn(current as unknown as Record<string, unknown>, "competitor_matrix");
     if (candidate.schema_version === ANALYTICS_EVIDENCE_SCHEMA && !hasCompetitorMatrix) return false;
     if (hasCompetitorMatrix && current.hashes.competitor_matrix_sha256 !== await contentHash(current.competitor_matrix)) return false;
@@ -1999,6 +2198,7 @@ export async function verifyAnalyticsEvidenceSnapshot(snapshot: AnalyticsEvidenc
       evidence: current.evidence,
       conflicts: current.conflicts,
       gaps: current.gaps,
+      ...(hasDomainManifest ? { domain_manifest: current.domain_manifest } : {}),
       ...(hasCompetitorMatrix ? { competitor_matrix: current.competitor_matrix } : {}),
       ...(hasProductFocus ? {
         product_catalog: current.product_catalog,

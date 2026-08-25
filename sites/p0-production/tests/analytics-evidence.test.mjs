@@ -12,7 +12,7 @@ import {
   FOCUS_OPPORTUNITY_SCHEMA,
   OFFER_CATALOG_SCHEMA,
 } from "../lib/business-model.ts";
-import { buildDemandCostResearchPlan, collectOfficialWordstatBatch } from "../lib/market-evidence.ts";
+import { buildDemandCostResearchPlan, collectOfficialWordstatBatch, unavailableWordstatBatch } from "../lib/market-evidence.ts";
 
 function fixture({ sampled = false, sensitive = false, lag = 0, missing = [], competitors = [] } = {}) {
   return {
@@ -206,6 +206,7 @@ test("builds a deeply immutable content-addressed snapshot with stable IDs, comp
     "claims_sha256",
     "competitor_matrix_sha256",
     "conflicts_sha256",
+    "domain_manifest_sha256",
     "evidence_sha256",
     "focus_opportunities_sha256",
     "gaps_sha256",
@@ -229,6 +230,44 @@ test("builds a deeply immutable content-addressed snapshot with stable IDs, comp
     metrika_counter_id: "123",
     metrika_goal_id: "456",
   });
+});
+
+test("indexes every P0 analytics domain and gives every material claim direct source, freshness, confidence and limitation lineage", async () => {
+  const result = await buildAnalyticsEvidence(fixture({ competitors: [competitorObservation()] }));
+
+  assert.equal(result.domain_manifest.schema_version, "p0-analytics-domain-manifest-v1");
+  assert.deepEqual(result.domain_manifest.domains.map((domain) => domain.domain), [
+    "BUSINESS_MODEL",
+    "DIRECT",
+    "METRIKA",
+    "WORDSTAT",
+    "COST",
+    "COMPETITORS",
+  ]);
+  assert.deepEqual(result.domain_manifest.domains.map((domain) => domain.artifact_paths), [
+    ["product_catalog", "focus_opportunities"],
+    ["claims", "evidence"],
+    ["claims", "evidence"],
+    ["market_evidence.frequency"],
+    ["prelaunch_cost"],
+    ["competitor_matrix"],
+  ]);
+  assert.ok(result.claims.length > 0);
+  assert.ok(result.claims.every((claim) => ["current", "aging", "stale", "unknown"].includes(claim.confidence.freshness)));
+  assert.ok(result.claims.every((claim) => Array.isArray(claim.confidence.uncertainty)));
+  assert.ok(result.claims.every((claim) => claim.evidence_ids.length > 0));
+  assert.ok(result.claims.every((claim) => claim.evidence_ids.every((evidenceId) => result.evidence.some((record) => record.evidence_id === evidenceId
+    && result.sources.some((source) => source.source_id === record.source_id)
+    && ["fresh", "aging", "stale", "unknown"].includes(record.freshness.status)
+    && Array.isArray(record.limitations)))));
+  assert.ok(result.domain_manifest.domains.every((domain) => domain.source_ids.length > 0));
+  assert.ok(result.domain_manifest.domains.every((domain) => domain.claim_indexes.every((index) => result.claims[index])));
+  assert.ok(result.domain_manifest.domains.every((domain) => domain.evidence_indexes.every((index) => result.evidence[index])));
+  assert.equal(await verifyAnalyticsEvidenceSnapshot(result), true);
+
+  const corrupted = structuredClone(result);
+  corrupted.domain_manifest.domains.find((domain) => domain.domain === "DIRECT").claim_indexes = [];
+  assert.equal(await verifyAnalyticsEvidenceSnapshot(corrupted), false);
 });
 
 test("persists a materially distinct offer catalog and separate focus dimensions inside the immutable evidence snapshot", async () => {
@@ -374,6 +413,12 @@ test("persists official scoped demand and qualified cost inside the content-addr
   assert.equal(snapshot.market_evidence.cost.selected_observation_id, "history-1");
   assert.equal(snapshot.market_evidence.cost.candidate_dispositions[0].disposition, "SELECTED");
   assert.equal(snapshot.prelaunch_cost.selected_observation_id, "history-1");
+  const wordstatDomain = snapshot.domain_manifest.domains.find((domain) => domain.domain === "WORDSTAT");
+  const costDomain = snapshot.domain_manifest.domains.find((domain) => domain.domain === "COST");
+  assert.equal(wordstatDomain?.status, "VERIFIED");
+  assert.equal(costDomain?.status, "VERIFIED");
+  assert.ok(wordstatDomain?.claim_indexes.length > 0);
+  assert.ok(costDomain?.claim_indexes.length > 0);
   assert.equal(snapshot.sources.find((source) => source.source_id === "wordstat")?.status, "VERIFIED");
   assert.ok(snapshot.evidence.some((record) => record.source_kind === "wordstat_api"));
   const wordstatRecord = snapshot.evidence.find((record) => record.source_kind === "wordstat_api");
@@ -399,6 +444,36 @@ test("persists official scoped demand and qualified cost inside the content-addr
   assert.ok(staleSnapshot.gaps.some((gap) => gap.code === "PRELAUNCH_COST_UNAVAILABLE"
     && gap.limitations.includes("STALE_COST_OBSERVATION:history-1")));
   assert.equal(await verifyAnalyticsEvidenceSnapshot(staleSnapshot), true);
+
+  const unavailableInput = structuredClone(input);
+  unavailableInput.context.market_evidence_input.wordstat_batch = await unavailableWordstatBatch(
+    "Квота Wordstat исчерпана.",
+    "2026-08-21T10:04:00.000Z",
+    "WORDSTAT_QUOTA_EXHAUSTED",
+  );
+  const unavailableSnapshot = await buildAnalyticsEvidence(unavailableInput);
+  const unavailableDomain = unavailableSnapshot.domain_manifest.domains.find((domain) => domain.domain === "WORDSTAT");
+  assert.equal(unavailableDomain?.status, "UNAVAILABLE");
+  assert.equal(unavailableDomain?.claim_indexes.length, 0);
+  assert.ok(unavailableDomain?.gap_indexes.some((index) => unavailableSnapshot.gaps[index]?.code === "WORDSTAT_QUOTA_EXHAUSTED"));
+  assert.equal(await verifyAnalyticsEvidenceSnapshot(unavailableSnapshot), true);
+
+  for (const [name, token, fetcher, expectedCode] of [
+    ["quota", "fixture-only", async () => new Response("{}", { status: 429, headers: { "retry-after": "60" } }), "WORDSTAT_QUOTA_EXHAUSTED"],
+    ["authority", "", async () => { throw new Error("fetch must not run without authority"); }, "WORDSTAT_AUTHORITY_UNAVAILABLE"],
+  ]) {
+    const degradedInput = structuredClone(input);
+    degradedInput.context.market_evidence_input.wordstat_batch = await collectOfficialWordstatBatch({
+      token,
+      clientId: "fixture-client",
+      seeds: researchPlan.seeds,
+    }, fetcher, () => "2026-08-21T10:04:00.000Z");
+    const degradedSnapshot = await buildAnalyticsEvidence(degradedInput);
+    const degradedDomain = degradedSnapshot.domain_manifest.domains.find((domain) => domain.domain === "WORDSTAT");
+    assert.equal(degradedDomain?.status, "UNAVAILABLE", name);
+    assert.ok(degradedDomain?.gap_indexes.some((index) => degradedSnapshot.gaps[index]?.code === expectedCode), name);
+    assert.equal(await verifyAnalyticsEvidenceSnapshot(degradedSnapshot), true, name);
+  }
 });
 
 test("keeps first-party public and owner-confirmed provenance in separate source manifests and Evidence Records", async () => {
@@ -725,6 +800,11 @@ test("keeps conflicts, source status, confidence dimensions and missing evidence
   assert.equal(result.recommendation_status, "BLOCKED_UNKNOWN");
   assert.ok(result.conflicts.some((item) => item.material && item.resolution === "UNRESOLVED_OWNER_DECISION"));
   assert.ok(result.gaps.some((item) => item.code === "BUSINESS_MODEL_EVIDENCE_MISSING" && item.material));
+  const businessDomain = result.domain_manifest.domains.find((domain) => domain.domain === "BUSINESS_MODEL");
+  assert.equal(businessDomain?.status, "PARTIAL");
+  assert.ok(businessDomain?.conflict_indexes.length > 0);
+  assert.ok(businessDomain?.gap_indexes.length > 0);
+  assert.ok(businessDomain?.gap_indexes.some((index) => result.gaps[index]?.description.includes("Какое предложение")));
   assert.deepEqual(Object.keys(result.confidence).sort(), [
     "consistency",
     "coverage",
