@@ -9,7 +9,19 @@ import {
   redactSensitiveEvidenceText,
   verifyAnalyticsEvidenceSnapshot,
   type AnalyticsEvidenceBundle,
+  type AnalyticsEvidenceDomain,
 } from "./analytics-evidence.ts";
+import {
+  ANALYTICS_EVIDENCE_DOMAINS,
+  emptyAnalyticsEvidenceLifecycle,
+  invalidateAnalyticsEvidenceSnapshot,
+  migrateAnalyticsEvidenceLifecycle,
+  recordAnalyticsEvidenceSnapshot,
+  verifyAnalyticsEvidenceLifecycle,
+  type AnalyticsEvidenceCollectionTrigger,
+  type AnalyticsEvidenceInputLineage,
+  type AnalyticsEvidenceLifecycle,
+} from "./analytics-evidence-lifecycle.ts";
 import {
   BUSINESS_MODEL_FIELD_ORDER,
   BUSINESS_MODEL_SCHEMA,
@@ -166,9 +178,9 @@ import {
 } from "./measurement-destination-readiness.ts";
 
 export const P0_APPLICATION_CONTRACT = "mox-adv.p0.application";
-export const P0_APPLICATION_CONTRACT_VERSION = "1.28.0";
-export const P0_DOCUMENT_SCHEMA = "p0-application-document-v16";
-const P0_LEGACY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4", "p0-application-document-v5", "p0-application-document-v6", "p0-application-document-v7", "p0-application-document-v8", "p0-application-document-v9", "p0-application-document-v10", "p0-application-document-v11", "p0-application-document-v12", "p0-application-document-v13", "p0-application-document-v14", "p0-application-document-v15"]);
+export const P0_APPLICATION_CONTRACT_VERSION = "1.29.0";
+export const P0_DOCUMENT_SCHEMA = "p0-application-document-v17";
+const P0_LEGACY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4", "p0-application-document-v5", "p0-application-document-v6", "p0-application-document-v7", "p0-application-document-v8", "p0-application-document-v9", "p0-application-document-v10", "p0-application-document-v11", "p0-application-document-v12", "p0-application-document-v13", "p0-application-document-v14", "p0-application-document-v15", "p0-application-document-v16"]);
 const P0_PRE_PACKAGE_AUTHORITY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4"]);
 export const P0_CONTEXT_SCHEMA = "p0-context-v2";
 const P0_LEGACY_CONTEXT_SCHEMA = "p0-context-v1";
@@ -377,6 +389,7 @@ export type P0Document = {
   business_model: BusinessModel | null;
   product_focus: ProductFocusState | null;
   analytics_evidence_snapshot: AnalyticsEvidenceBundle | null;
+  analytics_evidence_lifecycle: AnalyticsEvidenceLifecycle;
   strategy_questionnaire: StrategyQuestionnaire | null;
   strategy: CampaignStrategyRevision | Record<string, unknown> | null;
   measurement_destination_readiness: MeasurementDestinationReadiness | null;
@@ -731,6 +744,7 @@ function emptyDocument(): P0Document {
     business_model: null,
     product_focus: null,
     analytics_evidence_snapshot: null,
+    analytics_evidence_lifecycle: emptyAnalyticsEvidenceLifecycle(),
     strategy_questionnaire: null,
     strategy: null,
     measurement_destination_readiness: null,
@@ -1643,6 +1657,86 @@ function previousLineage(state: P0Document) {
   };
 }
 
+function analyticsEvidenceInputLineage(state: P0Document): AnalyticsEvidenceInputLineage {
+  const ownerContract = state.business_model?.owner_contract;
+  return {
+    context_revision_id: state.context_state?.context_revision_id ?? null,
+    context_material_fingerprint: state.context_state?.material_fingerprint ?? null,
+    business_model_revision_id: ownerContract?.model_revision_id ?? null,
+    business_model_material_fingerprint: ownerContract?.material_fingerprint ?? null,
+  };
+}
+
+function analyticsEvidenceDependentOutputs(state: P0Document) {
+  const outputs: Array<[string, unknown]> = [
+    ["campaign_strategy", state.strategy],
+    ["measurement_destination_readiness", state.measurement_destination_readiness],
+    ["landing_advisory_run", state.landing_advisory_run],
+    ["recommendation_set", state.recommendation_set],
+    ["campaign_drafts", state.draft],
+    ["shortlist", state.shortlist],
+    ["package_review", state.package_review],
+    ["human_decision_gate", state.human_decision_gate],
+    ["package_execution", state.package_execution],
+    ["external_write_intent", state.external_write_intent],
+  ];
+  return outputs.filter(([, value]) => value !== null && value !== undefined).map(([name]) => name);
+}
+
+async function persistAnalyticsEvidenceSnapshot(
+  state: P0Document,
+  snapshot: AnalyticsEvidenceBundle,
+  input: {
+    recordedAt: string;
+    trigger: Exclude<AnalyticsEvidenceCollectionTrigger, "LEGACY_MIGRATION">;
+    changedDomains?: AnalyticsEvidenceDomain[];
+    invalidatedOutputs?: string[];
+  },
+) {
+  state.analytics_evidence_lifecycle = await recordAnalyticsEvidenceSnapshot({
+    lifecycle: state.analytics_evidence_lifecycle,
+    currentSnapshot: state.analytics_evidence_snapshot,
+    nextSnapshot: snapshot,
+    recordedAt: input.recordedAt,
+    trigger: input.trigger,
+    changedDomains: input.changedDomains ?? ANALYTICS_EVIDENCE_DOMAINS,
+    inputLineage: analyticsEvidenceInputLineage(state),
+    invalidatedOutputs: input.invalidatedOutputs ?? analyticsEvidenceDependentOutputs(state),
+  });
+  state.analytics_evidence_snapshot = snapshot;
+}
+
+async function clearAnalyticsEvidenceSnapshot(
+  state: P0Document,
+  input: {
+    invalidatedAt: string;
+    trigger: Exclude<AnalyticsEvidenceCollectionTrigger, "INITIAL_COLLECTION" | "LEGACY_MIGRATION">;
+    changedDomains?: AnalyticsEvidenceDomain[];
+    invalidatedOutputs?: string[];
+  },
+) {
+  state.analytics_evidence_lifecycle = await invalidateAnalyticsEvidenceSnapshot({
+    lifecycle: state.analytics_evidence_lifecycle,
+    currentSnapshot: state.analytics_evidence_snapshot,
+    invalidatedAt: input.invalidatedAt,
+    trigger: input.trigger,
+    changedDomains: input.changedDomains ?? ANALYTICS_EVIDENCE_DOMAINS,
+    inputLineage: analyticsEvidenceInputLineage(state),
+    invalidatedOutputs: input.invalidatedOutputs ?? analyticsEvidenceDependentOutputs(state),
+  });
+  state.analytics_evidence_snapshot = null;
+}
+
+function analyticsEvidenceCollectionTrigger(
+  state: P0Document,
+  replacement: Exclude<AnalyticsEvidenceCollectionTrigger, "INITIAL_COLLECTION" | "LEGACY_MIGRATION">,
+): Exclude<AnalyticsEvidenceCollectionTrigger, "LEGACY_MIGRATION"> {
+  if (state.analytics_evidence_lifecycle.pending_replacement) {
+    return state.analytics_evidence_lifecycle.pending_replacement.trigger;
+  }
+  return state.analytics_evidence_lifecycle.versions.length ? replacement : "INITIAL_COLLECTION";
+}
+
 function invalidationRecord(state: P0Document, invalidatedAt: string): P0ContextState["last_material_change"] {
   return {
     affected_steps: ["campaign_strategy", "recommendation_set", "campaign_drafts", "shortlist", "confirmation"],
@@ -1797,9 +1891,14 @@ async function applyPendingOwnerGoalInterviewAnswer(state: P0Document, appliedAt
     if (previousValue !== pending.answer) {
       context.last_material_change = invalidationRecord(state, appliedAt);
       state.last_cascade = cascadeRecord(state, "CONTEXT", appliedAt, ["campaign_strategy", "recommendation_set", "campaign_drafts", "shortlist", "confirmation"]);
+      const invalidatedOutputs = analyticsEvidenceDependentOutputs(state);
+      await clearAnalyticsEvidenceSnapshot(state, {
+        invalidatedAt: appliedAt,
+        trigger: "CONTEXT_MATERIAL_CHANGE",
+        invalidatedOutputs,
+      });
       await invalidateDecisionAuthority(state, "CONTEXT_MATERIAL_CHANGE", "Owner interview materially corrected the confirmed business goal.", appliedAt);
       invalidateContextDownstream(state);
-      state.analytics_evidence_snapshot = null;
     }
     context.status = "GOAL_CONFIRMED";
     context.business_goal_decision = {
@@ -1833,7 +1932,12 @@ async function applyPendingOwnerGoalInterviewAnswer(state: P0Document, appliedAt
         model.missing_questions = model.owner_contract.questions.map((item) => item.question);
       }
       model.source = "REAL_SITE_RESEARCH_PLUS_OWNER_CONFIRMATION";
-      state.analytics_evidence_snapshot = null;
+      const invalidatedOutputs = analyticsEvidenceDependentOutputs(state);
+      await clearAnalyticsEvidenceSnapshot(state, {
+        invalidatedAt: appliedAt,
+        trigger: "MODEL_MATERIAL_CHANGE",
+        invalidatedOutputs,
+      });
       state.product_focus = null;
       state.strategy_questionnaire = null;
       invalidateStrategyDownstream(state);
@@ -2227,13 +2331,22 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
   } else if (state.owner_goal_interview_pending_answer) {
     lineageError("pending owner goal interview answer существует без snapshot.");
   }
-  if (await applyPendingOwnerGoalInterviewAnswer(state, updatedAt)) changed = true;
   const legacyModel = record(state.business_model);
   if (!state.analytics_evidence_snapshot && legacyModel.analysis_evidence) {
     state.analytics_evidence_snapshot = legacyModel.analysis_evidence as AnalyticsEvidenceBundle;
     delete legacyModel.analysis_evidence;
     changed = true;
   }
+  if (!Object.hasOwn(raw, "analytics_evidence_lifecycle")) {
+    if (!legacyDocument) lineageError("same-schema document field analytics_evidence_lifecycle отсутствует.");
+    state.analytics_evidence_lifecycle = await migrateAnalyticsEvidenceLifecycle({
+      snapshot: state.analytics_evidence_snapshot,
+      recordedAt: updatedAt,
+      inputLineage: analyticsEvidenceInputLineage(state),
+    });
+    changed = true;
+  }
+  if (await applyPendingOwnerGoalInterviewAnswer(state, updatedAt)) changed = true;
 
   if (state.context_state) {
     if (record(state.context_state).schema_version === P0_LEGACY_CONTEXT_SCHEMA) {
@@ -2325,6 +2438,9 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
   if (state.analytics_evidence_snapshot && !await verifyAnalyticsEvidenceSnapshot(state.analytics_evidence_snapshot)) {
     lineageError("Analytics Evidence Snapshot hash verification failed.");
   }
+  if (!await verifyAnalyticsEvidenceLifecycle(state.analytics_evidence_lifecycle, state.analytics_evidence_snapshot)) {
+    lineageError("Analytics Evidence lifecycle, version lineage или replacement semantics не прошли проверку.");
+  }
   if (state.business_model && state.business_model.owner_contract?.schema_version !== BUSINESS_MODEL_SCHEMA) {
     if (!legacyDocument) lineageError("same-schema Business Model contract отсутствует или имеет неизвестную версию.");
     const legacyModel = state.business_model;
@@ -2363,8 +2479,13 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
     legacyModel.economics = "Material Uncertainty: legacy target cost не является подтверждённой economics.";
     legacyModel.missing_questions = ownerContract.questions.map((item) => item.question);
     state.last_cascade = cascadeRecord(state, "MODEL", updatedAt, ["campaign_strategy", "recommendation_set", "campaign_drafts", "shortlist", "confirmation"]);
+    const invalidatedOutputs = analyticsEvidenceDependentOutputs(state);
+    await clearAnalyticsEvidenceSnapshot(state, {
+      invalidatedAt: updatedAt,
+      trigger: "MODEL_MATERIAL_CHANGE",
+      invalidatedOutputs,
+    });
     await invalidateDecisionAuthority(state, "MODEL_MATERIAL_CHANGE", "Legacy Business Model lacked confirmed economics and requires owner revalidation.", updatedAt);
-    state.analytics_evidence_snapshot = null;
     state.product_focus = null;
     state.strategy_questionnaire = null;
     invalidateStrategyDownstream(state);
@@ -2476,8 +2597,13 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
     }
   }
   if (modelChanged && model) {
+    const invalidatedOutputs = analyticsEvidenceDependentOutputs(state);
+    await clearAnalyticsEvidenceSnapshot(state, {
+      invalidatedAt: updatedAt,
+      trigger: "MODEL_MATERIAL_CHANGE",
+      invalidatedOutputs,
+    });
     state.product_focus = null;
-    state.analytics_evidence_snapshot = null;
     state.strategy_questionnaire = null;
     state.last_cascade = cascadeRecord(state, "MODEL", updatedAt, ["campaign_strategy", "recommendation_set", "campaign_drafts", "shortlist", "confirmation"]);
     await invalidateDecisionAuthority(state, "MODEL_MATERIAL_CHANGE", "Legacy Model normalization changed material Campaign Strategy lineage.", updatedAt);
@@ -2903,6 +3029,9 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
       }
       changed = true;
     }
+  }
+  if (!await verifyAnalyticsEvidenceLifecycle(state.analytics_evidence_lifecycle, state.analytics_evidence_snapshot)) {
+    lineageError("Analytics Evidence lifecycle изменился с потерей version lineage или replacement semantics.");
   }
   return { state, changed };
 }
@@ -4276,6 +4405,12 @@ export class P0Application {
           const capabilityChanged = previousContext
             && JSON.stringify(directCapabilityMaterialFacts(previousContext.facts.direct.capability_snapshot))
               !== JSON.stringify(providerMaterialFacts(context).direct.capability_snapshot);
+          const invalidatedOutputs = analyticsEvidenceDependentOutputs(state);
+          await clearAnalyticsEvidenceSnapshot(state, {
+            invalidatedAt: timestamp,
+            trigger: "CONTEXT_MATERIAL_CHANGE",
+            invalidatedOutputs,
+          });
           await invalidateDecisionAuthority(
             state,
             capabilityChanged ? "ACCOUNT_OR_CAPABILITY_LINEAGE_CHANGED" : "CONTEXT_MATERIAL_CHANGE",
@@ -4310,7 +4445,6 @@ export class P0Application {
           last_material_change: lastMaterialChange,
         };
         state.business_model = null;
-        state.analytics_evidence_snapshot = null;
         invalidateContextDownstream(state);
       }
     } else if (action === "confirm_context_goal") {
@@ -4330,6 +4464,12 @@ export class P0Application {
       if (changedConfirmedGoal) {
         state.context_state.last_material_change = invalidationRecord(state, timestamp);
         state.last_cascade = cascadeRecord(state, "CONTEXT", timestamp, ["campaign_strategy", "recommendation_set", "campaign_drafts", "shortlist", "confirmation"]);
+        const invalidatedOutputs = analyticsEvidenceDependentOutputs(state);
+        await clearAnalyticsEvidenceSnapshot(state, {
+          invalidatedAt: timestamp,
+          trigger: "CONTEXT_MATERIAL_CHANGE",
+          invalidatedOutputs,
+        });
         await invalidateDecisionAuthority(state, "CONTEXT_MATERIAL_CHANGE", "Confirmed Context goal changed materially.", timestamp);
         invalidateContextDownstream(state);
       }
@@ -4351,18 +4491,22 @@ export class P0Application {
           ? await confirmedContextMaterialFingerprint(state.context_state.research_fingerprint, goal)
           : state.context_state.material_fingerprint,
       };
-      if (!state.business_model) {
-        state.business_model = await inferModel(state.site_analysis, context);
-        state.analytics_evidence_snapshot = await this.buildModelEvidence(
+      if (!state.business_model) state.business_model = await inferModel(state.site_analysis, context);
+      if (!state.analytics_evidence_snapshot) {
+        const snapshot = await this.buildModelEvidence(
           key,
           state.site_analysis,
           state.business_model,
           context,
           timestamp,
         );
+        await persistAnalyticsEvidenceSnapshot(state, snapshot, {
+          recordedAt: timestamp,
+          trigger: analyticsEvidenceCollectionTrigger(state, "CONTEXT_MATERIAL_CHANGE"),
+        });
         state.product_focus = await createProductFocusState({
-          artifacts: productFocusArtifacts(state.analytics_evidence_snapshot),
-          analyticsEvidenceSnapshotId: state.analytics_evidence_snapshot.snapshot_id,
+          artifacts: productFocusArtifacts(snapshot),
+          analyticsEvidenceSnapshotId: snapshot.snapshot_id,
           selectedAt: timestamp,
         });
       }
@@ -4404,6 +4548,7 @@ export class P0Application {
       const context = sanitizeContext(await this.adapters.readContext({ owner_key: key }));
       this.assertResearchContextPreflight(context, modelApprovedAt);
       this.assertPersistedBindings(state, context);
+      const invalidatedAnalyticsOutputs = materialModelChange ? analyticsEvidenceDependentOutputs(state) : [];
       if (materialModelChange && (state.strategy || state.draft || state.shortlist)) {
         state.last_cascade = cascadeRecord(state, "MODEL", modelApprovedAt, ["campaign_strategy", "recommendation_set", "campaign_drafts", "shortlist", "confirmation"]);
         await invalidateDecisionAuthority(state, "MODEL_MATERIAL_CHANGE", "Material Model evidence or owner-confirmed facts changed.", modelApprovedAt);
@@ -4483,14 +4628,19 @@ export class P0Application {
             ? [`${field}: ${revisedOwnerContract.fields[field].assumption.statement}`]
             : []);
         state.business_model.missing_questions = revisedOwnerContract.questions.map((item) => item.question);
-        state.analytics_evidence_snapshot = await this.buildModelEvidence(
+        const snapshot = await this.buildModelEvidence(
           key,
           state.site_analysis,
           state.business_model,
           context,
           modelApprovedAt,
         );
-        const focusArtifacts = productFocusArtifacts(state.analytics_evidence_snapshot);
+        await persistAnalyticsEvidenceSnapshot(state, snapshot, {
+          recordedAt: modelApprovedAt,
+          trigger: analyticsEvidenceCollectionTrigger(state, "MODEL_MATERIAL_CHANGE"),
+          invalidatedOutputs: invalidatedAnalyticsOutputs,
+        });
+        const focusArtifacts = productFocusArtifacts(snapshot);
         const editedCatalogOffer = focusArtifacts.catalog.offers.find((offer) =>
           offer.material_axes.offer === confirmedValues.product
           && offer.material_axes.audience === confirmedValues.audience
@@ -4504,28 +4654,28 @@ export class P0Application {
             ? await reviseProductFocusState({
                 previous: state.product_focus,
                 artifacts: focusArtifacts,
-                analyticsEvidenceSnapshotId: state.analytics_evidence_snapshot.snapshot_id,
+                analyticsEvidenceSnapshotId: snapshot.snapshot_id,
                 selectedOfferId,
                 selectedAt: modelApprovedAt,
                 ownerEdited: focusCandidateChanged,
               })
             : await createProductFocusState({
                 artifacts: focusArtifacts,
-                analyticsEvidenceSnapshotId: state.analytics_evidence_snapshot.snapshot_id,
+                analyticsEvidenceSnapshotId: snapshot.snapshot_id,
                 selectedAt: modelApprovedAt,
                 ownerConfirmed: true,
               });
         } else {
           const initialFocus = await createProductFocusState({
             artifacts: focusArtifacts,
-            analyticsEvidenceSnapshotId: state.analytics_evidence_snapshot.snapshot_id,
+            analyticsEvidenceSnapshotId: snapshot.snapshot_id,
             selectedAt: modelApprovedAt,
           });
           state.product_focus = editedCatalogOffer
             ? await reviseProductFocusState({
                 previous: initialFocus,
                 artifacts: focusArtifacts,
-                analyticsEvidenceSnapshotId: state.analytics_evidence_snapshot.snapshot_id,
+                analyticsEvidenceSnapshotId: snapshot.snapshot_id,
                 selectedOfferId: editedCatalogOffer.offer_id,
                 selectedAt: modelApprovedAt,
                 ownerEdited: true,
@@ -4535,7 +4685,7 @@ export class P0Application {
         state.strategy_questionnaire = await buildStrategyQuestionnaire({
           contextState: state.context_state as unknown as Record<string, unknown>,
           model: state.business_model as unknown as Record<string, unknown>,
-          analyticsEvidence: state.analytics_evidence_snapshot as unknown as Record<string, unknown>,
+          analyticsEvidence: snapshot as unknown as Record<string, unknown>,
           productFocus: state.product_focus as unknown as Record<string, unknown>,
           playbookReleases: await this.playbookReleases(),
           generatedAt: modelApprovedAt,
@@ -4569,11 +4719,13 @@ export class P0Application {
       this.assertResearchContextPreflight(context, selectedAt);
       this.assertPersistedBindings(state, context);
       const focusChanged = state.product_focus.selected_offer_id !== focusOfferId;
-      if (focusChanged && (state.strategy || state.recommendation_set || state.draft || state.shortlist || state.package_review || state.human_decision_gate)) {
-        state.last_cascade = cascadeRecord(state, "MODEL", selectedAt, ["campaign_strategy", "recommendation_set", "campaign_drafts", "shortlist", "confirmation"]);
-        await invalidateDecisionAuthority(state, "MODEL_MATERIAL_CHANGE", "Owner selected a materially different Product Focus revision.", selectedAt);
-        invalidateStrategyDownstream(state);
-      }
+      if (focusChanged) {
+        const invalidatedAnalyticsOutputs = analyticsEvidenceDependentOutputs(state);
+        if (state.strategy || state.recommendation_set || state.draft || state.shortlist || state.package_review || state.human_decision_gate) {
+          state.last_cascade = cascadeRecord(state, "MODEL", selectedAt, ["campaign_strategy", "recommendation_set", "campaign_drafts", "shortlist", "confirmation"]);
+          await invalidateDecisionAuthority(state, "MODEL_MATERIAL_CHANGE", "Owner selected a materially different Product Focus revision.", selectedAt);
+          invalidateStrategyDownstream(state);
+        }
       const reference = selectedOffer.evidence_refs[0];
       const selectedValues = {
         product: selectedOffer.material_axes.offer,
@@ -4604,21 +4756,26 @@ export class P0Application {
       state.business_model.customer_context = String(state.business_model.owner_contract.fields.customer_context.value ?? "");
       state.business_model.qualified_outcome = String(state.business_model.owner_contract.fields.qualified_outcome.value ?? "");
       state.business_model.missing_questions = state.business_model.owner_contract.questions.map((item) => item.question);
-      state.analytics_evidence_snapshot = await this.buildModelEvidence(
+      const snapshot = await this.buildModelEvidence(
         key,
         state.site_analysis,
         state.business_model,
         context,
         selectedAt,
       );
-      const focusArtifacts = productFocusArtifacts(state.analytics_evidence_snapshot);
+      await persistAnalyticsEvidenceSnapshot(state, snapshot, {
+        recordedAt: selectedAt,
+        trigger: analyticsEvidenceCollectionTrigger(state, "PRODUCT_FOCUS_CHANGE"),
+        invalidatedOutputs: invalidatedAnalyticsOutputs,
+      });
+      const focusArtifacts = productFocusArtifacts(snapshot);
       if (!focusArtifacts.catalog.offers.some((offer) => offer.offer_id === focusOfferId)) {
         fail("P0_FOCUS_LINEAGE_STALE", "Selected focus material axes changed while rebuilding evidence.");
       }
       state.product_focus = await reviseProductFocusState({
         previous: state.product_focus,
         artifacts: focusArtifacts,
-        analyticsEvidenceSnapshotId: state.analytics_evidence_snapshot.snapshot_id,
+        analyticsEvidenceSnapshotId: snapshot.snapshot_id,
         selectedOfferId: focusOfferId,
         selectedAt,
       });
@@ -4626,11 +4783,12 @@ export class P0Application {
         state.strategy_questionnaire = await buildStrategyQuestionnaire({
           contextState: state.context_state as unknown as Record<string, unknown>,
           model: state.business_model as unknown as Record<string, unknown>,
-          analyticsEvidence: state.analytics_evidence_snapshot as unknown as Record<string, unknown>,
+          analyticsEvidence: snapshot as unknown as Record<string, unknown>,
           productFocus: state.product_focus as unknown as Record<string, unknown>,
           playbookReleases: await this.playbookReleases(),
           generatedAt: selectedAt,
         });
+      }
       }
     } else if (action === "refresh_competitor_research") {
       if (!state.site_analysis || !state.business_model || !state.analytics_evidence_snapshot || !state.product_focus) {
@@ -4656,6 +4814,7 @@ export class P0Application {
       const competitorChanged = JSON.stringify(state.analytics_evidence_snapshot.competitor_matrix)
         !== JSON.stringify(refreshedEvidence.competitor_matrix);
       if (competitorChanged) {
+        const invalidatedAnalyticsOutputs = analyticsEvidenceDependentOutputs(state);
         state.last_cascade = cascadeRecord(
           state,
           "MODEL",
@@ -4668,7 +4827,12 @@ export class P0Application {
           "Bounded public competitor evidence changed Analytics Evidence lineage.",
           refreshedAt,
         );
-        state.analytics_evidence_snapshot = refreshedEvidence;
+        await persistAnalyticsEvidenceSnapshot(state, refreshedEvidence, {
+          recordedAt: refreshedAt,
+          trigger: analyticsEvidenceCollectionTrigger(state, "COMPETITOR_EVIDENCE_REFRESH"),
+          changedDomains: ["COMPETITORS"],
+          invalidatedOutputs: invalidatedAnalyticsOutputs,
+        });
         const focusArtifacts = productFocusArtifacts(refreshedEvidence);
         const selectedOfferId = state.product_focus.selected_offer_id;
         if (!selectedOfferId || !focusArtifacts.catalog.offers.some((offer) => offer.offer_id === selectedOfferId)) {
