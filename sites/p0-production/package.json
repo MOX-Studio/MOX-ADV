@@ -1,5 +1,5 @@
 {
-  "name": "mox-adv-p0-sites",
+  "name": "mox-adv-p0-production",
   "version": "1.0.0",
   "private": true,
   "engines": {
@@ -30,7 +30,6 @@
     "@cloudflare/workers-types": "^4.20260702.1",
     "@eslint/js": "9.39.4",
     "@next/eslint-plugin-next": "16.2.6",
-    "@openai/sites-vite-plugin": "0.1.0",
     "@tailwindcss/postcss": "4.2.1",
     "@types/json-bigint": "^1.0.4",
     "@types/node": "22.19.19",

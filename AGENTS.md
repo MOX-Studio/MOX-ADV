@@ -20,6 +20,10 @@ See `docs/agents/domain.md`.
 Use the planning-only sequence `Wayfinder → to-spec → to-tickets → /ready`; Ready executes one frontier ticket per fresh session in a temporary local `/worktree` branch, then lands it on the originating branch and closes the worktree.
 See `docs/agents/delivery-workflow.md`.
 
+### Development and publishing
+
+Use local development by default. Publish only when the user explicitly requests it, and use the repository's existing Vercel configuration and project for that release.
+
 ### Integration interaction boundaries
 
 - Work with Yandex Direct and Yandex Metrica exclusively through their APIs; their browser-based personal cabinets are out of bounds.

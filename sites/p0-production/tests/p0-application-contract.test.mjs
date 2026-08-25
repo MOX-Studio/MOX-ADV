@@ -2282,7 +2282,7 @@ test("compare-and-swap rejects a stale tab without changing the persisted docume
   assert.equal(current.state.site_analysis.url, "https://owner.example/");
 });
 
-test("legacy Sites state without grounded economics migrates fail-closed and cannot bypass current eligibility", async (t) => {
+test("legacy application state without grounded economics migrates fail-closed and cannot bypass current eligibility", async (t) => {
   const { directory, store } = await fixture();
   t.after(() => rm(directory, { recursive: true, force: true }));
   const legacy = {

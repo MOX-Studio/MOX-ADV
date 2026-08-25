@@ -113,11 +113,9 @@ function record(value: unknown): Record<string, unknown> {
 }
 
 export function userKey(request: Request) {
-  const authenticated = request.headers.get("oai-authenticated-user-id")?.trim();
-  if (authenticated) return authenticated;
   const hostname = new URL(request.url).hostname;
   if (hostname === "localhost" || hostname === "127.0.0.1") return "local-preview";
-  throw new Error("Для production-модуля требуется вход через GPT Sites.");
+  throw new Error("Для production-модуля требуется отдельный адаптер идентификации пользователя.");
 }
 
 function directWriteConfig() {
@@ -306,7 +304,7 @@ async function readCurrencyLimits() {
   const runtime = runtimeEnv();
   const token = runtime.YANDEX_DIRECT_OAUTH_TOKEN;
   const account = runtime.YANDEX_DIRECT_CLIENT_LOGIN;
-  if (!token || !account) throw new Error("Direct read credentials не настроены в Sites.");
+  if (!token || !account) throw new Error("Direct read credentials не настроены в среде выполнения.");
   const response = await fetch("https://api.direct.yandex.com/json/v501/dictionaries", {
     method: "POST",
     headers: {
@@ -364,7 +362,7 @@ async function readDirectAudit(ownerKey: string, binding: DirectAuditBinding): P
   const runtime = runtimeEnv();
   const token = runtime.YANDEX_DIRECT_OAUTH_TOKEN ?? "";
   const account = runtime.YANDEX_DIRECT_CLIENT_LOGIN ?? "";
-  if (!token || !account) throw new Error("Direct read credentials не настроены в Sites.");
+  if (!token || !account) throw new Error("Direct read credentials не настроены в среде выполнения.");
   if (account !== binding.api_account || !binding.matched) {
     throw new Error("Direct audit account не совпадает с exact advertiser binding.");
   }
@@ -424,7 +422,7 @@ async function readMetrika() {
   const goal = runtime.YANDEX_METRICA_GOAL_ID;
   const campaign = runtime.YANDEX_DIRECT_CAMPAIGN_ID;
   if (!token || !counter || !goal || !campaign) {
-    throw new Error("Metrika production bindings не настроены в Sites.");
+    throw new Error("Metrika production bindings не настроены в среде выполнения.");
   }
   const dimension = "ym:s:lastDirectClickOrder";
   // The report uses an explicit inclusive window and excludes the current provisional day.
@@ -874,7 +872,7 @@ async function readCompetitorResearch() {
 
 async function ensureTables() {
   const db = runtimeEnv().DB;
-  if (!db) throw new Error("Sites D1 binding DB недоступен.");
+  if (!db) throw new Error("Локальный D1 binding DB недоступен.");
   await db.prepare(
     "CREATE TABLE IF NOT EXISTS p0_state (user_key TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, value_json TEXT NOT NULL)",
   ).run();

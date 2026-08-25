@@ -172,7 +172,7 @@ async function fetchPage(
       credentials: "omit",
       referrerPolicy: "no-referrer",
       headers: {
-        "User-Agent": "MOX-ADV-GPT-Sites/1.0",
+        "User-Agent": "MOX-ADV-P0/1.0",
         Accept: "text/html,application/xhtml+xml",
       },
       redirect: "manual",
