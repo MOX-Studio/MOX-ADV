@@ -4,6 +4,8 @@ import { cleanText } from "./text.ts";
 export const STRATEGY_QUESTIONNAIRE_SCHEMA = "p0-strategy-questionnaire-v2";
 export const STRATEGY_QUESTIONNAIRE_CONTRACT_VERSION = "2.1.0";
 export const CAMPAIGN_STRATEGY_SCHEMA = "p0-campaign-strategy-v2";
+export const CAMPAIGN_STRATEGY_REVIEW_SCHEMA = "p0-campaign-strategy-review-v1";
+export const CAMPAIGN_STRATEGY_CONFIRMATION_SCHEMA = "p0-campaign-strategy-confirmation-v1";
 
 export const STRATEGY_FIELD_ORDER = [
   "business_goal",
@@ -121,7 +123,7 @@ export type StrategyQuestionnaire = {
   fields: StrategyQuestionnaireField[];
 };
 
-export type CampaignStrategyRevision = {
+export type CampaignStrategyCandidate = {
   schema_version: typeof CAMPAIGN_STRATEGY_SCHEMA;
   strategy_revision_id: string;
   questionnaire_id: string;
@@ -137,10 +139,40 @@ export type CampaignStrategyRevision = {
   target_result_cost_uncertainty: string | null;
   answers: Array<{ field_id: StrategyFieldId; value: StrategyAnswerValue | null }>;
   material_fingerprint: string;
+  lineage: { previous_strategy_revision_id: string | null };
+};
+
+export type CampaignStrategyReview = {
+  schema_version: typeof CAMPAIGN_STRATEGY_REVIEW_SCHEMA;
+  review_id: string;
+  status: "REVIEW_REQUIRED" | "CHANGES_REQUESTED";
+  prepared_at: string;
+  rejected_at: string | null;
+  candidate: CampaignStrategyCandidate;
+};
+
+export type CampaignStrategyOwnerConfirmation = {
+  schema_version: typeof CAMPAIGN_STRATEGY_CONFIRMATION_SCHEMA;
+  confirmation_id: string;
+  decision: "APPROVED";
+  review_id: string | null;
+  confirmed_at: string;
+  confirmed_by: "OWNER";
+  exact_lineage: {
+    context_revision_id: string;
+    business_model_revision_id: string;
+    product_focus_revision_id: string;
+    analytics_evidence_snapshot_id: string;
+    strategy_revision_id: string;
+    strategy_material_fingerprint: string;
+  };
+};
+
+export type CampaignStrategyRevision = CampaignStrategyCandidate & {
   approved_at: string;
   approved_by: "OWNER";
-  approval_command: "APPROVE_CAMPAIGN_STRATEGY";
-  lineage: { previous_strategy_revision_id: string | null };
+  approval_command: "APPROVE_CAMPAIGN_STRATEGY" | "CONFIRM_EXACT_CAMPAIGN_STRATEGY";
+  owner_confirmation: CampaignStrategyOwnerConfirmation;
 };
 
 function record(value: unknown): Record<string, unknown> {
@@ -574,6 +606,94 @@ export function missingStrategyDecisions(answers: Record<StrategyFieldId, Strate
 
 export async function strategyAnswersFingerprint(answers: Record<StrategyFieldId, StrategyAnswerValue | null>) {
   return sha256(STRATEGY_FIELD_ORDER.map((fieldId) => ({ field_id: fieldId, value: answers[fieldId] })));
+}
+
+export async function buildCampaignStrategyReview(input: {
+  candidate: CampaignStrategyCandidate;
+  preparedAt: string;
+}): Promise<CampaignStrategyReview> {
+  const reviewDigest = await sha256(input.candidate);
+  return {
+    schema_version: CAMPAIGN_STRATEGY_REVIEW_SCHEMA,
+    review_id: `campaign-strategy-review:${reviewDigest.slice("sha256:".length, "sha256:".length + 24)}`,
+    status: "REVIEW_REQUIRED",
+    prepared_at: input.preparedAt,
+    rejected_at: null,
+    candidate: structuredClone(input.candidate),
+  };
+}
+
+export function rejectCampaignStrategyReview(review: CampaignStrategyReview, rejectedAt: string): CampaignStrategyReview {
+  return {
+    ...structuredClone(review),
+    status: "CHANGES_REQUESTED",
+    rejected_at: rejectedAt,
+  };
+}
+
+export async function verifyCampaignStrategyReview(review: CampaignStrategyReview) {
+  if (review.schema_version !== CAMPAIGN_STRATEGY_REVIEW_SCHEMA
+    || !["REVIEW_REQUIRED", "CHANGES_REQUESTED"].includes(review.status)
+    || !review.review_id
+    || review.candidate.schema_version !== CAMPAIGN_STRATEGY_SCHEMA
+    || !review.candidate.strategy_revision_id
+    || JSON.stringify(review.candidate.answers.map((answer) => answer.field_id)) !== JSON.stringify(STRATEGY_FIELD_ORDER)) return false;
+  const answers = Object.fromEntries(review.candidate.answers.map((answer) => [answer.field_id, answer.value]));
+  const [reviewDigest, materialFingerprint] = await Promise.all([
+    sha256(review.candidate),
+    strategyAnswersFingerprint(answers as Record<StrategyFieldId, StrategyAnswerValue | null>),
+  ]);
+  return review.review_id === `campaign-strategy-review:${reviewDigest.slice("sha256:".length, "sha256:".length + 24)}`
+    && review.candidate.material_fingerprint === materialFingerprint;
+}
+
+export async function buildCampaignStrategyOwnerConfirmation(input: {
+  candidate: CampaignStrategyCandidate;
+  reviewId: string | null;
+  confirmedAt: string;
+  approvalCommand: CampaignStrategyRevision["approval_command"];
+}): Promise<CampaignStrategyOwnerConfirmation> {
+  const exactLineage = {
+    context_revision_id: input.candidate.context_revision_id,
+    business_model_revision_id: input.candidate.business_model_revision_id,
+    product_focus_revision_id: input.candidate.product_focus_revision_id,
+    analytics_evidence_snapshot_id: input.candidate.analytics_evidence_snapshot_id,
+    strategy_revision_id: input.candidate.strategy_revision_id,
+    strategy_material_fingerprint: input.candidate.material_fingerprint,
+  };
+  const identity = {
+    decision: "APPROVED" as const,
+    review_id: input.reviewId,
+    confirmed_at: input.confirmedAt,
+    confirmed_by: "OWNER" as const,
+    approval_command: input.approvalCommand,
+    exact_lineage: exactLineage,
+  };
+  const digest = await sha256(identity);
+  return {
+    schema_version: CAMPAIGN_STRATEGY_CONFIRMATION_SCHEMA,
+    confirmation_id: `campaign-strategy-confirmation:${digest.slice("sha256:".length, "sha256:".length + 24)}`,
+    decision: "APPROVED",
+    review_id: input.reviewId,
+    confirmed_at: input.confirmedAt,
+    confirmed_by: "OWNER",
+    exact_lineage: exactLineage,
+  };
+}
+
+export async function verifyCampaignStrategyOwnerConfirmation(strategy: CampaignStrategyRevision) {
+  const confirmation = strategy.owner_confirmation;
+  if (confirmation?.schema_version !== CAMPAIGN_STRATEGY_CONFIRMATION_SCHEMA
+    || confirmation.decision !== "APPROVED"
+    || confirmation.confirmed_at !== strategy.approved_at
+    || confirmation.confirmed_by !== strategy.approved_by) return false;
+  const expected = await buildCampaignStrategyOwnerConfirmation({
+    candidate: strategy,
+    reviewId: confirmation.review_id,
+    confirmedAt: confirmation.confirmed_at,
+    approvalCommand: strategy.approval_command,
+  });
+  return JSON.stringify(confirmation) === JSON.stringify(expected);
 }
 
 const LEGACY_FIELDS: Record<StrategyFieldId, string> = {

@@ -115,12 +115,19 @@ import {
 import {
   CAMPAIGN_STRATEGY_SCHEMA,
   STRATEGY_QUESTIONNAIRE_SCHEMA,
+  buildCampaignStrategyOwnerConfirmation,
+  buildCampaignStrategyReview,
   buildStrategyQuestionnaire,
   missingStrategyDecisions,
   normalizeStrategyAnswers,
+  rejectCampaignStrategyReview,
   strategyAnswerValue,
   strategyAnswersFingerprint,
+  verifyCampaignStrategyOwnerConfirmation,
+  verifyCampaignStrategyReview,
   verifyStrategyQuestionnaireIdentity,
+  type CampaignStrategyCandidate,
+  type CampaignStrategyReview,
   type CampaignStrategyRevision,
   type StrategyQuestionnaire,
 } from "./campaign-strategy.ts";
@@ -178,9 +185,9 @@ import {
 } from "./measurement-destination-readiness.ts";
 
 export const P0_APPLICATION_CONTRACT = "mox-adv.p0.application";
-export const P0_APPLICATION_CONTRACT_VERSION = "1.29.0";
-export const P0_DOCUMENT_SCHEMA = "p0-application-document-v17";
-const P0_LEGACY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4", "p0-application-document-v5", "p0-application-document-v6", "p0-application-document-v7", "p0-application-document-v8", "p0-application-document-v9", "p0-application-document-v10", "p0-application-document-v11", "p0-application-document-v12", "p0-application-document-v13", "p0-application-document-v14", "p0-application-document-v15", "p0-application-document-v16"]);
+export const P0_APPLICATION_CONTRACT_VERSION = "1.30.0";
+export const P0_DOCUMENT_SCHEMA = "p0-application-document-v18";
+const P0_LEGACY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4", "p0-application-document-v5", "p0-application-document-v6", "p0-application-document-v7", "p0-application-document-v8", "p0-application-document-v9", "p0-application-document-v10", "p0-application-document-v11", "p0-application-document-v12", "p0-application-document-v13", "p0-application-document-v14", "p0-application-document-v15", "p0-application-document-v16", "p0-application-document-v17"]);
 const P0_PRE_PACKAGE_AUTHORITY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4"]);
 export const P0_CONTEXT_SCHEMA = "p0-context-v2";
 const P0_LEGACY_CONTEXT_SCHEMA = "p0-context-v1";
@@ -391,6 +398,7 @@ export type P0Document = {
   analytics_evidence_snapshot: AnalyticsEvidenceBundle | null;
   analytics_evidence_lifecycle: AnalyticsEvidenceLifecycle;
   strategy_questionnaire: StrategyQuestionnaire | null;
+  strategy_review: CampaignStrategyReview | null;
   strategy: CampaignStrategyRevision | Record<string, unknown> | null;
   measurement_destination_readiness: MeasurementDestinationReadiness | null;
   landing_advisory_run: LandingAdvisoryRun | null;
@@ -638,6 +646,19 @@ export const P0_COMMAND_TRUTH_TABLE = {
   refresh_competitor_research: (state: P0Document) => Boolean(
     state.site_analysis && state.business_model && state.analytics_evidence_snapshot && state.product_focus && packageNotDispatched(state),
   ),
+  review_strategy: (state: P0Document) => (
+    state.business_model?.source === "REAL_SITE_RESEARCH_PLUS_OWNER_CONFIRMATION"
+    && state.product_focus?.decision_status === "OWNER_SELECTED"
+    && Boolean(state.product_focus.selected_offer_id)
+    && state.strategy_questionnaire?.schema_version === STRATEGY_QUESTIONNAIRE_SCHEMA
+    && packageNotDispatched(state)
+  ),
+  reject_strategy_review: (state: P0Document) => Boolean(
+    state.strategy_review?.status === "REVIEW_REQUIRED" && packageNotDispatched(state),
+  ),
+  confirm_strategy_review: (state: P0Document) => Boolean(
+    state.strategy_review?.status === "REVIEW_REQUIRED" && packageNotDispatched(state),
+  ),
   approve_strategy: (state: P0Document) => (
     state.business_model?.source === "REAL_SITE_RESEARCH_PLUS_OWNER_CONFIRMATION"
     && state.product_focus?.decision_status === "OWNER_SELECTED"
@@ -746,6 +767,7 @@ function emptyDocument(): P0Document {
     analytics_evidence_snapshot: null,
     analytics_evidence_lifecycle: emptyAnalyticsEvidenceLifecycle(),
     strategy_questionnaire: null,
+    strategy_review: null,
     strategy: null,
     measurement_destination_readiness: null,
     landing_advisory_run: null,
@@ -1840,6 +1862,7 @@ function persistedDecisionContext(state: P0Document): P0Context {
 function invalidateContextDownstream(state: P0Document) {
   state.product_focus = null;
   state.strategy_questionnaire = null;
+  state.strategy_review = null;
   state.strategy = null;
   state.measurement_destination_readiness = null;
   state.landing_advisory_run = null;
@@ -1855,6 +1878,7 @@ function invalidateContextDownstream(state: P0Document) {
 }
 
 function invalidateStrategyDownstream(state: P0Document) {
+  state.strategy_review = null;
   state.strategy = null;
   state.measurement_destination_readiness = null;
   state.landing_advisory_run = null;
@@ -2421,7 +2445,7 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
     })));
     changed = true;
   }
-  for (const key of ["context_state", "site_analysis", "business_model", "product_focus", "analytics_evidence_snapshot", "strategy_questionnaire", "strategy", "measurement_destination_readiness", "landing_advisory_run", "recommendation_set", "draft", "shortlist", "package_review", "human_decision_gate", "package_execution", "last_decision_invalidation", "external_write_intent", "campaign", "recommendation_recalculation", "last_cascade"] as const) {
+  for (const key of ["context_state", "site_analysis", "business_model", "product_focus", "analytics_evidence_snapshot", "strategy_questionnaire", "strategy_review", "strategy", "measurement_destination_readiness", "landing_advisory_run", "recommendation_set", "draft", "shortlist", "package_review", "human_decision_gate", "package_execution", "last_decision_invalidation", "external_write_intent", "campaign", "recommendation_recalculation", "last_cascade"] as const) {
     if (!(key in state)) {
       if (!legacyDocument) lineageError(`same-schema document field ${key} отсутствует.`);
       state[key] = null as never;
@@ -2666,6 +2690,30 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
     }
   }
 
+  if (state.strategy_review) {
+    if (!state.context_state || !model || !state.analytics_evidence_snapshot || !state.product_focus || !state.strategy_questionnaire) {
+      lineageError("Strategy review потеряла Context, Model, Product Focus, Evidence или questionnaire.");
+    }
+    if (state.strategy || state.recommendation_set || state.draft || state.shortlist || state.package_review || state.human_decision_gate) {
+      lineageError("Неподтверждённая Strategy review не может сохранять прежнее подтверждение или Campaign Drafts.");
+    }
+    const candidate = state.strategy_review.candidate;
+    if (!await verifyCampaignStrategyReview(state.strategy_review)
+      || candidate.questionnaire_id !== state.strategy_questionnaire.questionnaire_id
+      || candidate.questionnaire_contract_version !== state.strategy_questionnaire.contract_version
+      || candidate.context_revision_id !== state.context_state.context_revision_id
+      || candidate.context_material_fingerprint !== state.context_state.material_fingerprint
+      || candidate.business_model_revision_id !== model.owner_contract.model_revision_id
+      || candidate.analytics_evidence_snapshot_id !== state.analytics_evidence_snapshot.snapshot_id
+      || candidate.product_focus_revision_id !== state.product_focus.focus_revision_id
+      || candidate.direct_capability_snapshot_id !== state.context_state.facts.direct.capability_snapshot.snapshot_id
+      || JSON.stringify(candidate.playbook_lineage) !== JSON.stringify(state.strategy_questionnaire.playbook_lineage)
+      || JSON.stringify(candidate.recommendation) !== JSON.stringify(state.strategy_questionnaire.recommendation)
+      || candidate.target_result_cost_uncertainty !== state.strategy_questionnaire.recommendation.economics.uncertainty) {
+      lineageError("Strategy review не соответствует точным текущим версиям Model, Focus, Evidence и Strategy.");
+    }
+  }
+
   if (state.recommendation_set) {
     if (!Object.hasOwn(state.recommendation_set, "field_registry")) {
       state.recommendation_set.field_registry = DIRECT_V501_DRAFT_FIELD_REGISTRY;
@@ -2726,6 +2774,19 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
       if (!state.context_state || !state.analytics_evidence_snapshot || !state.strategy_questionnaire) {
         lineageError("Campaign Strategy revision потеряла Context, questionnaire или Analytics Evidence Snapshot.");
       }
+      const confirmedStrategy = strategy as CampaignStrategyRevision;
+      if (!confirmedStrategy.owner_confirmation) {
+        if (!legacyDocument) lineageError("same-schema Campaign Strategy owner confirmation отсутствует.");
+        confirmedStrategy.owner_confirmation = await buildCampaignStrategyOwnerConfirmation({
+          candidate: confirmedStrategy,
+          reviewId: null,
+          confirmedAt: String(confirmedStrategy.approved_at ?? updatedAt),
+          approvalCommand: confirmedStrategy.approval_command === "CONFIRM_EXACT_CAMPAIGN_STRATEGY"
+            ? "CONFIRM_EXACT_CAMPAIGN_STRATEGY"
+            : "APPROVE_CAMPAIGN_STRATEGY",
+        });
+        changed = true;
+      }
       if (
         strategy.questionnaire_id !== state.strategy_questionnaire.questionnaire_id
         || strategy.context_revision_id !== state.context_state.context_revision_id
@@ -2749,6 +2810,13 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
       const persistedAnswers = Object.fromEntries(persistedAnswerRows.map((answer) => [answer.field_id, answer.value]));
       if (await strategyAnswersFingerprint(persistedAnswers as never) !== strategy.material_fingerprint) {
         lineageError("Campaign Strategy material fingerprint verification failed.");
+      }
+      if (!await verifyCampaignStrategyOwnerConfirmation(confirmedStrategy)
+        || confirmedStrategy.owner_confirmation.exact_lineage.business_model_revision_id !== model.owner_contract.model_revision_id
+        || confirmedStrategy.owner_confirmation.exact_lineage.product_focus_revision_id !== state.product_focus?.focus_revision_id
+        || confirmedStrategy.owner_confirmation.exact_lineage.analytics_evidence_snapshot_id !== state.analytics_evidence_snapshot.snapshot_id
+        || confirmedStrategy.owner_confirmation.exact_lineage.strategy_revision_id !== confirmedStrategy.strategy_revision_id) {
+        lineageError("Campaign Strategy owner confirmation не связана с точными версиями Model, Focus, Evidence и Strategy.");
       }
     }
     if (!strategy.strategy_revision_id) {
@@ -4855,11 +4923,97 @@ export class P0Application {
         });
         invalidateStrategyDownstream(state);
       }
-    } else if (action === "approve_strategy") {
-      if (payload.confirmation !== "APPROVE_CAMPAIGN_STRATEGY") {
+    } else if (action === "review_strategy") {
+      if (!state.business_model || !state.context_state || !state.analytics_evidence_snapshot || !state.product_focus || !state.strategy_questionnaire) {
+        fail("P0_PREREQUISITE_MISSING", "Проверка Strategy требует текущие Model, Focus, Evidence и questionnaire.");
+      }
+      const questionnaire = state.strategy_questionnaire;
+      if (
+        questionnaire.context_revision_id !== state.context_state.context_revision_id
+        || questionnaire.context_material_fingerprint !== state.context_state.material_fingerprint
+        || questionnaire.business_model_revision_id !== state.business_model.owner_contract.model_revision_id
+        || questionnaire.analytics_evidence_snapshot_id !== state.analytics_evidence_snapshot.snapshot_id
+        || questionnaire.product_focus_revision_id !== state.product_focus.focus_revision_id
+        || questionnaire.direct_capability_snapshot_id !== state.context_state.facts.direct.capability_snapshot.snapshot_id
+      ) {
+        fail("P0_STRATEGY_LINEAGE_STALE", "Strategy questionnaire устарел после существенного изменения Model, Focus или Evidence.");
+      }
+      const normalizedAnswers = normalizeStrategyAnswers(payload.answers, (input, maximum) => artifactText(input, maximum));
+      const missing = missingStrategyDecisions(normalizedAnswers);
+      if (missing.length) fail("P0_STRATEGY_DECISION_REQUIRED", `Campaign Strategy требует решения владельца: ${missing[0]}.`);
+      const period = normalizedAnswers.period as { start_date: string; end_date: string };
+      if (!isValidIsoCalendarDate(period.start_date) || !isValidIsoCalendarDate(period.end_date) || period.start_date > period.end_date) {
+        fail("P0_STRATEGY_PERIOD_INVALID", "Период Campaign Strategy должен содержать допустимые даты в правильном порядке.");
+      }
+      normalizedAnswers.landing_page = normalizePublicHttpsUrl(String(normalizedAnswers.landing_page)).toString();
+      const limits = await this.adapters.readCurrencyLimits();
+      validateWeeklyBudgetRub(normalizedAnswers.weekly_budget, limits.minimum_weekly_budget_rub);
+      const materialFingerprint = await strategyAnswersFingerprint(normalizedAnswers);
+      const confirmedStrategy = state.strategy as CampaignStrategyRevision | null;
+      if (confirmedStrategy?.material_fingerprint === materialFingerprint) {
+        state.strategy_review = null;
+      } else {
+        const preparedAt = this.adapters.now();
+        const previousStrategyRevisionId = confirmedStrategy?.strategy_revision_id
+          ?? state.strategy_review?.candidate.lineage.previous_strategy_revision_id
+          ?? null;
+        const candidate: CampaignStrategyCandidate = {
+          schema_version: CAMPAIGN_STRATEGY_SCHEMA,
+          strategy_revision_id: `campaign-strategy-r${persistedRevision + 1}`,
+          questionnaire_id: questionnaire.questionnaire_id,
+          questionnaire_contract_version: questionnaire.contract_version,
+          context_revision_id: state.context_state.context_revision_id,
+          context_material_fingerprint: state.context_state.material_fingerprint,
+          business_model_revision_id: state.business_model.owner_contract.model_revision_id,
+          analytics_evidence_snapshot_id: state.analytics_evidence_snapshot.snapshot_id,
+          product_focus_revision_id: questionnaire.product_focus_revision_id,
+          direct_capability_snapshot_id: questionnaire.direct_capability_snapshot_id,
+          playbook_lineage: structuredClone(questionnaire.playbook_lineage),
+          recommendation: structuredClone(questionnaire.recommendation),
+          target_result_cost_uncertainty: questionnaire.recommendation.economics.uncertainty,
+          answers: questionnaire.fields.map((field) => ({ field_id: field.field_id, value: normalizedAnswers[field.field_id]! })),
+          material_fingerprint: materialFingerprint,
+          lineage: { previous_strategy_revision_id: previousStrategyRevisionId },
+        };
+        const review = await buildCampaignStrategyReview({ candidate, preparedAt });
+        const cascade = {
+          ...cascadeRecord(state, "STRATEGY", preparedAt, ["recommendation_set", "campaign_drafts", "shortlist", "confirmation"]),
+          recomputation_status: "REQUIRED" as const,
+        };
+        const invalidatesConfirmation = Boolean(
+          confirmedStrategy || state.recommendation_set || state.draft || state.shortlist
+          || state.package_review || state.human_decision_gate || state.strategy_review,
+        );
+        if (invalidatesConfirmation) {
+          await invalidateDecisionAuthority(state, "STRATEGY_MATERIAL_CHANGE", "Material Campaign Strategy review invalidated the previous exact owner confirmation.", preparedAt);
+        }
+        invalidateStrategyDownstream(state);
+        state.strategy_review = review;
+        state.last_cascade = cascade;
+      }
+    } else if (action === "reject_strategy_review") {
+      if (!state.strategy_review || payload.review_id !== state.strategy_review.review_id) {
+        fail("P0_STRATEGY_REVIEW_STALE", "Показанная версия Strategy больше не является текущей. Обновите страницу.");
+      }
+      state.strategy_review = rejectCampaignStrategyReview(state.strategy_review, this.adapters.now());
+    } else if (action === "approve_strategy" || action === "confirm_strategy_review") {
+      const exactReview = action === "confirm_strategy_review" ? state.strategy_review : null;
+      if (action === "approve_strategy" && state.strategy_review) {
+        fail("P0_STRATEGY_REVIEW_CONFIRMATION_REQUIRED", "Подготовленную версию нужно подтвердить на отдельном шаге проверки.");
+      }
+      if (action === "confirm_strategy_review") {
+        if (payload.confirmation !== "CONFIRM_EXACT_CAMPAIGN_STRATEGY"
+          || !exactReview
+          || exactReview.status !== "REVIEW_REQUIRED"
+          || payload.review_id !== exactReview.review_id
+          || payload.strategy_revision_id !== exactReview.candidate.strategy_revision_id
+          || !await verifyCampaignStrategyReview(exactReview)) {
+          fail("P0_STRATEGY_REVIEW_STALE", "Подтверждение не совпадает с точной текущей версией Strategy.");
+        }
+      } else if (payload.confirmation !== "APPROVE_CAMPAIGN_STRATEGY") {
         fail("P0_STRATEGY_APPROVAL_REQUIRED", "Нужно одним точным подтверждением утвердить всю Campaign Strategy.");
       }
-      if (!state.business_model || !state.context_state || !state.analytics_evidence_snapshot || !state.strategy_questionnaire) {
+      if (!state.business_model || !state.context_state || !state.analytics_evidence_snapshot || !state.product_focus || !state.strategy_questionnaire) {
         fail("P0_PREREQUISITE_MISSING", "Сначала подтвердите Model и подготовьте Strategy questionnaire.");
       }
       const questionnaire = state.strategy_questionnaire;
@@ -4868,11 +5022,30 @@ export class P0Application {
         || questionnaire.context_material_fingerprint !== state.context_state.material_fingerprint
         || questionnaire.business_model_revision_id !== state.business_model.owner_contract.model_revision_id
         || questionnaire.analytics_evidence_snapshot_id !== state.analytics_evidence_snapshot.snapshot_id
+        || questionnaire.product_focus_revision_id !== state.product_focus.focus_revision_id
+        || questionnaire.direct_capability_snapshot_id !== state.context_state.facts.direct.capability_snapshot.snapshot_id
       ) {
         fail("P0_STRATEGY_LINEAGE_STALE", "Strategy questionnaire устарел после material Context или Model change.");
       }
+      if (exactReview && (
+        exactReview.candidate.questionnaire_id !== questionnaire.questionnaire_id
+        || exactReview.candidate.questionnaire_contract_version !== questionnaire.contract_version
+        || exactReview.candidate.context_revision_id !== state.context_state.context_revision_id
+        || exactReview.candidate.context_material_fingerprint !== state.context_state.material_fingerprint
+        || exactReview.candidate.business_model_revision_id !== state.business_model.owner_contract.model_revision_id
+        || exactReview.candidate.analytics_evidence_snapshot_id !== state.analytics_evidence_snapshot.snapshot_id
+        || exactReview.candidate.product_focus_revision_id !== state.product_focus.focus_revision_id
+        || exactReview.candidate.direct_capability_snapshot_id !== state.context_state.facts.direct.capability_snapshot.snapshot_id
+        || JSON.stringify(exactReview.candidate.playbook_lineage) !== JSON.stringify(questionnaire.playbook_lineage)
+        || JSON.stringify(exactReview.candidate.recommendation) !== JSON.stringify(questionnaire.recommendation)
+      )) {
+        fail("P0_STRATEGY_REVIEW_STALE", "Проверяемая Strategy потеряла точную связь с Model, Focus или Evidence.");
+      }
+      const exactReviewAnswers = exactReview
+        ? Object.fromEntries(exactReview.candidate.answers.map((answer) => [answer.field_id, answer.value]))
+        : payload.answers;
       const normalizedAnswers = normalizeStrategyAnswers(
-        payload.answers,
+        exactReviewAnswers,
         (input, maximum) => artifactText(input, maximum),
       );
       const missing = missingStrategyDecisions(normalizedAnswers);
@@ -4887,6 +5060,9 @@ export class P0Application {
       const limits = await this.adapters.readCurrencyLimits();
       validateWeeklyBudgetRub(normalizedAnswers.weekly_budget, limits.minimum_weekly_budget_rub);
       const materialFingerprint = await strategyAnswersFingerprint(normalizedAnswers);
+      if (exactReview && materialFingerprint !== exactReview.candidate.material_fingerprint) {
+        fail("P0_STRATEGY_REVIEW_STALE", "Содержимое проверяемой Strategy изменилось после подготовки точной версии.");
+      }
       const existingStrategy = state.strategy;
       if (existingStrategy?.material_fingerprint !== materialFingerprint) {
         const approvedAt = this.adapters.now();
@@ -4908,32 +5084,40 @@ export class P0Application {
         }
         persistedRevision = pendingRow.revision;
         try {
+          const candidate: CampaignStrategyCandidate = exactReview
+            ? structuredClone(exactReview.candidate)
+            : {
+                schema_version: CAMPAIGN_STRATEGY_SCHEMA,
+                strategy_revision_id: `campaign-strategy-r${persistedRevision + 1}`,
+                questionnaire_id: questionnaire.questionnaire_id,
+                questionnaire_contract_version: questionnaire.contract_version,
+                context_revision_id: state.context_state.context_revision_id,
+                context_material_fingerprint: state.context_state.material_fingerprint,
+                business_model_revision_id: state.business_model.owner_contract.model_revision_id,
+                analytics_evidence_snapshot_id: state.analytics_evidence_snapshot.snapshot_id,
+                product_focus_revision_id: questionnaire.product_focus_revision_id,
+                direct_capability_snapshot_id: questionnaire.direct_capability_snapshot_id,
+                playbook_lineage: structuredClone(questionnaire.playbook_lineage),
+                recommendation: structuredClone(questionnaire.recommendation),
+                target_result_cost_uncertainty: questionnaire.recommendation.economics.uncertainty,
+                answers: questionnaire.fields.map((field) => ({ field_id: field.field_id, value: normalizedAnswers[field.field_id]! })),
+                material_fingerprint: materialFingerprint,
+                lineage: { previous_strategy_revision_id: existingStrategy ? String(existingStrategy.strategy_revision_id ?? "") || null : null },
+              };
+          const approvalCommand = exactReview ? "CONFIRM_EXACT_CAMPAIGN_STRATEGY" as const : "APPROVE_CAMPAIGN_STRATEGY" as const;
           state.strategy = {
-            schema_version: CAMPAIGN_STRATEGY_SCHEMA,
-            strategy_revision_id: `campaign-strategy-r${persistedRevision + 1}`,
-            questionnaire_id: questionnaire.questionnaire_id,
-            questionnaire_contract_version: questionnaire.contract_version,
-            context_revision_id: state.context_state.context_revision_id,
-            context_material_fingerprint: state.context_state.material_fingerprint,
-            business_model_revision_id: state.business_model.owner_contract.model_revision_id,
-            analytics_evidence_snapshot_id: state.analytics_evidence_snapshot.snapshot_id,
-            product_focus_revision_id: questionnaire.product_focus_revision_id,
-            direct_capability_snapshot_id: questionnaire.direct_capability_snapshot_id,
-            playbook_lineage: structuredClone(questionnaire.playbook_lineage),
-            recommendation: structuredClone(questionnaire.recommendation),
-            target_result_cost_uncertainty: questionnaire.recommendation.economics.uncertainty,
-            answers: questionnaire.fields.map((field) => ({
-              field_id: field.field_id,
-              value: normalizedAnswers[field.field_id]!,
-            })),
-            material_fingerprint: materialFingerprint,
+            ...candidate,
             approved_at: approvedAt,
             approved_by: "OWNER",
-            approval_command: "APPROVE_CAMPAIGN_STRATEGY",
-            lineage: {
-              previous_strategy_revision_id: existingStrategy ? String(existingStrategy.strategy_revision_id ?? "") || null : null,
-            },
+            approval_command: approvalCommand,
+            owner_confirmation: await buildCampaignStrategyOwnerConfirmation({
+              candidate,
+              reviewId: exactReview?.review_id ?? null,
+              confirmedAt: approvedAt,
+              approvalCommand,
+            }),
           };
+          state.strategy_review = null;
           state.measurement_destination_readiness = await this.buildMeasurementDestinationReadiness(key, state);
           state.recommendation_set = await buildCampaignRecommendationSet({
             model: state.business_model as unknown as Record<string, unknown>,

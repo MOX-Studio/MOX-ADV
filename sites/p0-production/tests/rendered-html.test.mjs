@@ -68,6 +68,24 @@ test("goal interview renders recommendations, corrections, saved answers and acc
   assert.match(ownerStyles, /\.owner-interview\b/u);
 });
 
+test("owner gets a separate exact Strategy review with explicit confirm, reject and edit paths", () => {
+  for (const label of [
+    "Проверка точной версии стратегии",
+    "Полная стратегия рядом с основаниями",
+    "Альтернативы",
+    "Ограничения и доказательства",
+    "Вернуться к редактированию",
+    "Подтвердить точную версию",
+    "Изменить стратегию",
+  ]) {
+    assert.match(clientSource, new RegExp(label, "u"));
+  }
+  assert.match(ownerSource, /confirm_strategy_review/u);
+  assert.match(ownerSource, /reject_strategy_review/u);
+  assert.match(ownerSource, /review_strategy/u);
+  assert.match(ownerStyles, /\.owner-strategy-review\b/u);
+});
+
 test("owner Direct report omits the guidance cards below its verified details", () => {
   assert.match(clientSource, /owner-direct-details/u);
   assert.doesNotMatch(clientSource, /owner-direct-guidance/u);

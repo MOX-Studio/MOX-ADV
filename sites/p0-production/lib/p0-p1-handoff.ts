@@ -31,6 +31,7 @@ import {
 import {
   CAMPAIGN_STRATEGY_SCHEMA,
   strategyAnswersFingerprint,
+  verifyCampaignStrategyOwnerConfirmation,
   type CampaignStrategyRevision,
 } from "./campaign-strategy.ts";
 
@@ -196,7 +197,9 @@ async function verifyStrategy(strategy: CampaignStrategyRevision, model: Busines
     || !strategy.strategy_revision_id
     || !Array.isArray(strategy.answers)
     || strategy.approved_by !== "OWNER"
-    || strategy.approval_command !== "APPROVE_CAMPAIGN_STRATEGY") return false;
+    || !["APPROVE_CAMPAIGN_STRATEGY", "CONFIRM_EXACT_CAMPAIGN_STRATEGY"].includes(strategy.approval_command)) return false;
+  if (strategy.approval_command === "CONFIRM_EXACT_CAMPAIGN_STRATEGY"
+    && !await verifyCampaignStrategyOwnerConfirmation(strategy)) return false;
   const answers = Object.fromEntries(strategy.answers.map((answer) => [answer.field_id, answer.value]));
   return strategy.material_fingerprint === await strategyAnswersFingerprint(answers as never);
 }

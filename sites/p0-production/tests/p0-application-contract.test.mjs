@@ -305,7 +305,7 @@ function adapters(overrides = {}) {
   return {
     now() {
       tick += 1;
-      return `2026-08-21T10:00:${String(tick).padStart(2, "0")}.000Z`;
+      return new Date(Date.parse("2026-08-21T10:00:00.000Z") + tick * 1_000).toISOString();
     },
     async readContext() {
       return context();
@@ -1367,6 +1367,102 @@ test("the authoritative contract persists the fixed Strategy questionnaire and f
   assert.equal(result.state.strategy.lineage.previous_strategy_revision_id, null);
   assert.equal(result.state.recommendation_set.strategy_revision_id, result.state.strategy.strategy_revision_id);
   assert.equal(result.state.recommendation_set.analytics_evidence_snapshot_id, result.state.analytics_evidence_snapshot.snapshot_id);
+});
+
+test("separate Strategy review records one exact owner confirmation and invalidates it before material edits can reopen Drafts", async (t) => {
+  const { directory, application } = await fixture();
+  t.after(() => rm(directory, { recursive: true, force: true }));
+
+  let result = await application.command("owner", { action: "analyze_site", expected_revision: 0, url: "https://owner.example/" });
+  result = await application.command("owner", {
+    action: "confirm_context_goal",
+    expected_revision: result.revision,
+    confirmation: "CONFIRM_CONTEXT_GOAL",
+    goal: result.state.context_state.provisional_business_goal.value,
+  });
+  result = await application.command("owner", {
+    action: "save_business_model",
+    expected_revision: result.revision,
+    value: ownerModel(result.state),
+  });
+
+  result = await application.command("owner", {
+    action: "review_strategy",
+    expected_revision: result.revision,
+    answers: strategyAnswers(result.state),
+  });
+  const firstReview = structuredClone(result.state.strategy_review);
+  assert.equal(firstReview.status, "REVIEW_REQUIRED");
+  assert.equal(result.state.strategy, null);
+  assert.equal(result.state.recommendation_set, null);
+  assert.equal(firstReview.candidate.business_model_revision_id, result.state.business_model.owner_contract.model_revision_id);
+  assert.equal(firstReview.candidate.product_focus_revision_id, result.state.product_focus.focus_revision_id);
+  assert.equal(firstReview.candidate.analytics_evidence_snapshot_id, result.state.analytics_evidence_snapshot.snapshot_id);
+  await assert.rejects(
+    application.command("owner", {
+      action: "confirm_strategy_review",
+      expected_revision: result.revision,
+      confirmation: "CONFIRM_EXACT_CAMPAIGN_STRATEGY",
+      review_id: "stale-review",
+      strategy_revision_id: firstReview.candidate.strategy_revision_id,
+    }),
+    (error) => error instanceof P0ApplicationError && error.code === "P0_STRATEGY_REVIEW_STALE",
+  );
+
+  result = await application.command("owner", {
+    action: "reject_strategy_review",
+    expected_revision: result.revision,
+    review_id: firstReview.review_id,
+  });
+  assert.equal(result.state.strategy_review.status, "CHANGES_REQUESTED");
+  result = await application.command("owner", {
+    action: "review_strategy",
+    expected_revision: result.revision,
+    answers: strategyAnswers(result.state, { core_message: "Исправленная стратегия для проверки" }),
+  });
+  assert.notEqual(result.state.strategy_review.review_id, firstReview.review_id);
+  const acceptedReview = structuredClone(result.state.strategy_review);
+  result = await application.command("owner", {
+    action: "confirm_strategy_review",
+    expected_revision: result.revision,
+    confirmation: "CONFIRM_EXACT_CAMPAIGN_STRATEGY",
+    review_id: acceptedReview.review_id,
+    strategy_revision_id: acceptedReview.candidate.strategy_revision_id,
+  });
+  assert.equal(result.state.strategy_review, null);
+  assert.equal(result.state.strategy.strategy_revision_id, acceptedReview.candidate.strategy_revision_id);
+  assert.equal(result.state.strategy.approval_command, "CONFIRM_EXACT_CAMPAIGN_STRATEGY");
+  assert.equal(result.state.strategy.owner_confirmation.review_id, acceptedReview.review_id);
+  assert.equal(result.state.strategy.owner_confirmation.exact_lineage.strategy_revision_id, result.state.strategy.strategy_revision_id);
+  assert.equal(result.state.strategy.owner_confirmation.exact_lineage.business_model_revision_id, result.state.business_model.owner_contract.model_revision_id);
+  assert.equal(result.state.strategy.owner_confirmation.exact_lineage.product_focus_revision_id, result.state.product_focus.focus_revision_id);
+  assert.equal(result.state.strategy.owner_confirmation.exact_lineage.analytics_evidence_snapshot_id, result.state.analytics_evidence_snapshot.snapshot_id);
+  assert.ok(result.state.recommendation_set);
+
+  const oldConfirmation = structuredClone(result.state.strategy.owner_confirmation);
+  result = await application.command("owner", {
+    action: "review_strategy",
+    expected_revision: result.revision,
+    answers: strategyAnswers(result.state, { core_message: "Новая существенная версия стратегии" }),
+  });
+  assert.equal(result.state.strategy, null);
+  assert.equal(result.state.recommendation_set, null);
+  assert.equal(result.state.shortlist, null);
+  assert.equal(result.workflow.current_step, 2);
+  assert.equal(result.state.last_cascade.recomputation_status, "REQUIRED");
+  assert.equal(result.state.last_cascade.previous_lineage.strategy_revision_id, oldConfirmation.exact_lineage.strategy_revision_id);
+  assert.equal(result.state.strategy_review.candidate.lineage.previous_strategy_revision_id, oldConfirmation.exact_lineage.strategy_revision_id);
+  assert.notEqual(result.state.strategy_review.review_id, oldConfirmation.review_id);
+  await assert.rejects(
+    application.command("owner", {
+      action: "confirm_strategy_review",
+      expected_revision: result.revision,
+      confirmation: "CONFIRM_EXACT_CAMPAIGN_STRATEGY",
+      review_id: oldConfirmation.review_id,
+      strategy_revision_id: oldConfirmation.exact_lineage.strategy_revision_id,
+    }),
+    (error) => error instanceof P0ApplicationError && error.code === "P0_STRATEGY_REVIEW_STALE",
+  );
 });
 
 test("rejects a corrupted persisted Strategy questionnaire before it can change field order or approval metadata", async (t) => {
@@ -4879,7 +4975,42 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
     }),
   });
   ownerResponses.push(projection);
+  assert.equal(projection.journey.currentStage, "strategy");
+  assert.equal(projection.primaryAction, null);
+  assert.equal(projection.campaignStrategy.ownerReview.status, "Готова к подтверждению");
+  assert.equal(projection.campaignStrategy.ownerReview.summary.map((item) => item.label).join(","), "Цель,Бюджет,Измерение,Неопределённость");
+  assert.equal(projection.campaignStrategy.ownerReview.decisions.length, STRATEGY_FIELD_ORDER.length);
+  assert.ok(projection.campaignStrategy.ownerReview.confirmHandle?.startsWith("act_"));
+  assert.ok(projection.campaignStrategy.ownerReview.rejectHandle?.startsWith("act_"));
+  assert.match(projection.campaignStrategy.ownerReview.exactBinding, /моделью бизнеса.+рекламным фокусом.+доказательств/iu);
+  const staleConfirmationHandle = projection.campaignStrategy.ownerReview.confirmHandle;
+
+  projection = await journey.submit(ownerKey, {
+    handle: projection.campaignStrategy.ownerReview.rejectHandle,
+    values: {},
+  });
+  ownerResponses.push(projection);
+  assert.equal(projection.journey.currentStage, "strategy");
+  assert.equal(projection.campaignStrategy.ownerReview.status, "Возвращена к редактированию");
+  assert.equal(projection.primaryAction.label, "Проверить исправленную стратегию");
+  await assert.rejects(
+    journey.submit(ownerKey, { handle: staleConfirmationHandle, values: {} }),
+    (error) => error instanceof P0ApplicationError && error.code === "P0_OWNER_ACTION_STALE",
+  );
+
+  projection = await journey.submit(ownerKey, {
+    handle: projection.primaryAction.handle,
+    values: values(projection),
+  });
+  ownerResponses.push(projection);
+  assert.equal(projection.campaignStrategy.ownerReview.status, "Готова к подтверждению");
+  projection = await journey.submit(ownerKey, {
+    handle: projection.campaignStrategy.ownerReview.confirmHandle,
+    values: {},
+  });
+  ownerResponses.push(projection);
   assert.equal(projection.journey.currentStage, "campaigns");
+  assert.equal(projection.campaignStrategy.ownerReview.status, "Подтверждена");
   assert.ok(projection.campaignOptions.length >= 1);
   assert.match(projection.appliedPractice.practice, /качественный результат|проверяемую практику/iu);
   assert.match(projection.appliedPractice.limitation, /не обещание результата/iu);
@@ -4906,14 +5037,51 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
   assert.equal(projection.campaignOptions.every((campaign) => /^Редакция \d+$/u.test(campaign.editor.versionLabel)), true);
   assert.equal(projection.campaignOptions.every((campaign) => campaign.editor.publicationHandle?.startsWith("act_") && campaign.editor.protocolHandle?.startsWith("act_")), true);
   assert.equal(projection.primaryAction.fields.length >= 2, true);
-  const campaignOrderFields = projection.primaryAction.fields.filter((field) => field.key.startsWith("campaign_"));
-  const ownerShortlistOrder = {
+  let campaignOrderFields = projection.primaryAction.fields.filter((field) => field.key.startsWith("campaign_"));
+  const initialShortlistOrder = {
     ...values(projection),
-    ...Object.fromEntries(campaignOrderFields.map((field, index) => [field.key, index < 2 ? String(2 - index) : "0"])),
+    ...Object.fromEntries(campaignOrderFields.map((field, index) => [field.key, index < 2 ? String(index + 1) : "0"])),
   };
   projection = await journey.submit(ownerKey, {
     handle: projection.primaryAction.handle,
-    values: ownerShortlistOrder,
+    values: initialShortlistOrder,
+  });
+  ownerResponses.push(projection);
+  assert.equal(projection.journey.currentStage, "campaigns");
+  assert.equal(projection.primaryAction.label, "Проверить состав и порядок набора");
+
+  campaignOrderFields = projection.primaryAction.fields.filter((field) => field.key.startsWith("campaign_"));
+  projection = await journey.submit(ownerKey, {
+    handle: projection.primaryAction.handle,
+    values: {
+      ...values(projection),
+      ...Object.fromEntries(campaignOrderFields.map((field, index) => [field.key, index === 1 ? "1" : "0"])),
+    },
+  });
+  ownerResponses.push(projection);
+  assert.equal(projection.journey.currentStage, "campaigns");
+  assert.equal(projection.primaryAction.fields.find((field) => field.key === campaignOrderFields[0].key).value, 0);
+
+  campaignOrderFields = projection.primaryAction.fields.filter((field) => field.key.startsWith("campaign_"));
+  projection = await journey.submit(ownerKey, {
+    handle: projection.primaryAction.handle,
+    values: {
+      ...values(projection),
+      ...Object.fromEntries(campaignOrderFields.map((field, index) => [field.key, index < 2 ? String(2 - index) : "0"])),
+    },
+  });
+  ownerResponses.push(projection);
+  assert.equal(projection.journey.currentStage, "campaigns");
+  campaignOrderFields = projection.primaryAction.fields.filter((field) => field.key.startsWith("campaign_"));
+  assert.deepEqual(campaignOrderFields.slice(0, 2).map((field) => Number(field.value)), [2, 1]);
+  const expectedPackageOrder = [...campaignOrderFields]
+    .filter((field) => Number(field.value) > 0)
+    .sort((left, right) => Number(left.value) - Number(right.value))
+    .map((field) => field.label);
+
+  projection = await journey.submit(ownerKey, {
+    handle: projection.primaryAction.handle,
+    values: values(projection),
   });
   ownerResponses.push(projection);
   assert.equal(projection.journey.currentStage, "review");
@@ -4924,8 +5092,7 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
   assert.match(projection.packageSummary.orderedPackageBudget, /₽/u);
   assert.equal(projection.packageSummary.budgetAlignment.classification, "Ограниченный тест");
   assert.match(projection.packageSummary.budgetAlignment.explanation, /арифметик|не прогноз/iu);
-  assert.deepEqual(projection.packageSummary.campaignBudgets.map((campaign) => campaign.name),
-    projection.campaignOptions.filter((campaign) => campaign.selected).map((campaign) => campaign.name));
+  assert.deepEqual(projection.packageSummary.campaignBudgets.map((campaign) => campaign.name), expectedPackageOrder);
   assert.equal(projection.packageSummary.campaignCount, 2);
   assert.equal(projection.primaryAction.label, "Подтвердить точный пакет");
   projection = await journey.submit(ownerKey, {

@@ -109,6 +109,39 @@
 .owner-model-questions ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .owner-model-questions li { display: grid; gap: 2px; font-size: 7px; }
 .owner-model-questions li span { color: var(--owner-muted); }
+.owner-strategy-review { margin-top: 16px; padding: 17px; border: 2px solid var(--owner-green); border-radius: 10px; background: #f8fcf9; }
+.owner-strategy-review[data-review-status="Возвращена к редактированию"] { border-color: #d39b49; background: #fffaf2; }
+.owner-strategy-review > header { display: flex; gap: 18px; justify-content: space-between; align-items: flex-start; }
+.owner-strategy-review > header h3 { margin: 5px 0 4px; font-size: 18px; }
+.owner-strategy-review > header p { max-width: 720px; margin: 0; color: var(--owner-muted); font-size: 8px; line-height: 1.5; }
+.owner-strategy-review > header > strong { flex: 0 0 auto; padding: 7px 9px; border-radius: 999px; color: var(--owner-green-dark); background: var(--owner-soft); font-size: 7px; white-space: nowrap; }
+.owner-strategy-exactness { margin: 12px 0 0; padding: 10px 12px; border-left: 3px solid var(--owner-green); border-radius: 6px; color: var(--owner-green-dark); background: white; font-size: 8px; line-height: 1.5; }
+.owner-strategy-review-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; margin-top: 11px; }
+.owner-strategy-review-summary article { min-width: 0; padding: 11px; border: 1px solid var(--owner-line); border-radius: 7px; background: white; }
+.owner-strategy-review-summary span, .owner-strategy-review-summary strong { display: block; }
+.owner-strategy-review-summary span { color: var(--owner-green-dark); font-size: 6px; font-weight: 850; text-transform: uppercase; }
+.owner-strategy-review-summary strong { margin-top: 6px; font-size: 10px; overflow-wrap: anywhere; }
+.owner-strategy-review-summary p { margin: 5px 0 0; color: var(--owner-muted); font-size: 6px; line-height: 1.45; }
+.owner-strategy-review-decisions { margin-top: 13px; }
+.owner-strategy-review-decisions > h4, .owner-strategy-review-boundaries h4 { margin: 0 0 8px; font-size: 10px; }
+.owner-strategy-review-decisions > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.owner-strategy-review-decisions article { min-width: 0; padding: 10px; border: 1px solid var(--owner-line); border-radius: 7px; background: white; }
+.owner-strategy-review-decisions article header { display: flex; gap: 8px; justify-content: space-between; }
+.owner-strategy-review-decisions article header strong { font-size: 8px; }
+.owner-strategy-review-decisions article header span { color: var(--owner-green-dark); font-size: 6px; font-weight: 800; }
+.owner-strategy-review-decisions article p { margin: 6px 0; font-size: 8px; font-weight: 750; line-height: 1.4; overflow-wrap: anywhere; }
+.owner-strategy-review-decisions article small { color: var(--owner-muted); font-size: 6px; line-height: 1.4; }
+.owner-strategy-review-boundaries { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 11px; }
+.owner-strategy-review-boundaries section { padding: 11px; border-radius: 7px; background: white; }
+.owner-strategy-review-boundaries ul { display: grid; gap: 5px; margin: 0; padding-left: 16px; }
+.owner-strategy-review-boundaries li { color: var(--owner-muted); font-size: 7px; line-height: 1.45; }
+.owner-strategy-review > footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 13px; padding-top: 12px; border-top: 1px solid var(--owner-line); }
+.owner-strategy-review > footer button, .owner-strategy-version-editor > button, .owner-strategy-version-editor form footer button { min-height: 38px; padding: 0 13px; border: 1px solid var(--owner-green); border-radius: 7px; color: var(--owner-green-dark); background: white; font-size: 8px; font-weight: 850; }
+.owner-strategy-review > footer .owner-strategy-confirm, .owner-strategy-version-editor form footer button[type="submit"] { color: white; background: var(--owner-green); }
+.owner-strategy-version-editor { margin-top: 13px; padding-top: 12px; border-top: 1px solid var(--owner-line); }
+.owner-strategy-version-editor form { margin-top: 10px; padding: 12px; border-radius: 8px; background: white; }
+.owner-strategy-version-editor form > p { margin: 0; color: var(--owner-muted); font-size: 8px; line-height: 1.5; }
+.owner-strategy-version-editor form footer { display: flex; gap: 7px; justify-content: flex-end; margin-top: 11px; }
 .owner-demand-cost { min-width: 0; margin-top: 18px; padding: 18px; border: 1px solid var(--owner-line); border-radius: 10px; background: #fbfdfb; }
 .owner-demand-cost > header { display: flex; gap: 16px; justify-content: space-between; align-items: flex-start; }
 .owner-demand-cost > header h2 { margin: 5px 0 0; font-size: 21px; }

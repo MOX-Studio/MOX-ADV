@@ -165,6 +165,45 @@ export default function P0Client() {
     }
   }
 
+  async function submitStrategyDecision(handle: string) {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const next = await request("/api/p0", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ handle, values: {} }),
+      });
+      setProjection(next);
+      setSelectedStage(next.journey.currentStage);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitStrategyEdit(event: FormEvent<HTMLFormElement>, handle: string, fields: OwnerActionField[]) {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const next = await request("/api/p0", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ handle, values: actionValues(event.currentTarget, fields) }),
+      });
+      setProjection(next);
+      setSelectedStage(next.journey.currentStage);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!projection) {
     return <div className={styles.prototype}>
       <Header />
@@ -241,6 +280,12 @@ export default function P0Client() {
             <p className="owner-cost-semantics"><b>Разделение стоимости:</b> стоимость перехода отражает аукционный CPC по ключевой фразе; целевая стоимость результата относится к бизнес-экономике. Ни одно из значений не является прогнозом эффективности.</p>
             {projection.campaignStrategy.materialQuestions.length > 0 && <div className="owner-model-questions"><h3>Только существенные вопросы</h3><ul>{projection.campaignStrategy.materialQuestions.map((item) => <li key={item.field}><strong>{item.field}: {item.question}</strong><span>{item.recommendation} {item.consequences}</span></li>)}</ul></div>}
             {projection.campaignStrategy.decisionGate && <article className="owner-card human-decision-gate"><span>РЕШЕНИЕ ВЛАДЕЛЬЦА</span><h3>{projection.campaignStrategy.decisionGate.recommendation}</h3><p><b>Основание:</b> {projection.campaignStrategy.decisionGate.evidence}</p><p><b>Уверенность:</b> {projection.campaignStrategy.decisionGate.confidence}</p><p><b>Альтернативы:</b> {projection.campaignStrategy.decisionGate.alternatives}</p><p><b>Последствия:</b> {projection.campaignStrategy.decisionGate.consequences}</p></article>}
+            {projection.campaignStrategy.ownerReview && <StrategyOwnerReview
+              review={projection.campaignStrategy.ownerReview}
+              busy={busy}
+              onDecision={submitStrategyDecision}
+              onEdit={submitStrategyEdit}
+            />}
           </section>}
 
           {activeStage === "findings" && activeStageStatus !== "upcoming" && projection.demandCostResearch && <section className="owner-demand-cost" aria-labelledby="owner-demand-cost-title">
@@ -357,7 +402,51 @@ export default function P0Client() {
   </div>;
 }
 
+type StrategyOwnerReviewProjection = NonNullable<NonNullable<OwnerJourneyProjection["campaignStrategy"]>["ownerReview"]>;
+
 type CampaignOptionProjection = OwnerJourneyProjection["campaignOptions"][number];
+
+function StrategyOwnerReview({
+  review,
+  busy,
+  onDecision,
+  onEdit,
+}: {
+  review: StrategyOwnerReviewProjection;
+  busy: boolean;
+  onDecision: (handle: string) => Promise<void>;
+  onEdit: (event: FormEvent<HTMLFormElement>, handle: string, fields: OwnerActionField[]) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  return <section className="owner-strategy-review" data-review-status={review.status} aria-labelledby="owner-strategy-review-title">
+    <header>
+      <div><p className="owner-eyebrow">ОТДЕЛЬНЫЙ ШАГ ВЛАДЕЛЬЦА</p><h3 id="owner-strategy-review-title">Проверка точной версии стратегии</h3><p>Сначала проверьте весь бизнес-смысл и доказательства. Только отдельное подтверждение откроет черновики кампаний.</p></div>
+      <strong>{review.versionLabel} · {review.status}</strong>
+    </header>
+    <p className="owner-strategy-exactness">{review.exactBinding}</p>
+    <div className="owner-strategy-review-summary">{review.summary.map((item) => <article key={item.label}><span>{item.label}</span><strong>{item.value}</strong><p>{item.explanation}</p></article>)}</div>
+    <section className="owner-strategy-review-decisions" aria-labelledby="owner-strategy-decisions-title">
+      <h4 id="owner-strategy-decisions-title">Полная стратегия рядом с основаниями</h4>
+      <div>{review.decisions.map((item) => <article key={item.label}><header><strong>{item.label}</strong><span>{item.confidence}</span></header><p>{item.value}</p><small>{item.evidence}</small></article>)}</div>
+    </section>
+    <div className="owner-strategy-review-boundaries">
+      <section><h4>Альтернативы</h4><ul>{review.alternatives.map((item) => <li key={item}>{item}</li>)}</ul></section>
+      <section><h4>Ограничения и доказательства</h4><ul>{review.limitations.map((item) => <li key={item}>{item}</li>)}</ul></section>
+    </div>
+    {(review.rejectHandle || review.confirmHandle) && <footer>
+      {review.rejectHandle && <button type="button" onClick={() => onDecision(review.rejectHandle!)} disabled={busy}>Вернуться к редактированию</button>}
+      {review.confirmHandle && <button type="button" className="owner-strategy-confirm" onClick={() => onDecision(review.confirmHandle!)} disabled={busy}>{busy ? "Подтверждаю…" : "Подтвердить точную версию"}</button>}
+    </footer>}
+    {review.editorHandle && <div className="owner-strategy-version-editor">
+      <button type="button" onClick={() => setEditing((value) => !value)} aria-expanded={editing}>{editing ? "Закрыть редактор стратегии" : "Изменить стратегию"}</button>
+      {editing && <form onSubmit={(event) => onEdit(event, review.editorHandle!, review.editorFields)}>
+        <p>Существенное сохранение сразу отменит это подтверждение и закроет черновики до новой отдельной проверки. Нормализация без изменения смысла сохранит текущую версию.</p>
+        <div className="owner-fields">{review.editorFields.map((field) => <OwnerField key={field.key} field={field} />)}</div>
+        <footer><button type="button" onClick={(event) => { event.currentTarget.form?.reset(); setEditing(false); }}>Отменить правки</button><button type="submit" disabled={busy}>{busy ? "Сохраняю…" : "Сохранить и проверить новую версию"}</button></footer>
+      </form>}
+    </div>}
+  </section>;
+}
 
 function CampaignOption({
   campaign,

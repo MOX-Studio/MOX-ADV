@@ -544,11 +544,128 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                     "40000",
                     page.get_by_label("Целевая стоимость результата, ₽").input_value(),
                 )
-                page.get_by_role("button", name="Утвердить стратегию", exact=True).click()
+                page.get_by_role(
+                    "button", name="Перейти к проверке стратегии", exact=True
+                ).click()
+                strategy_review = page.get_by_role(
+                    "region", name="Проверка точной версии стратегии", exact=True
+                )
+                strategy_review.wait_for()
+                review_text = strategy_review.inner_text()
+                for expected in [
+                    "ЦЕЛЬ",
+                    "БЮДЖЕТ",
+                    "ИЗМЕРЕНИЕ",
+                    "НЕОПРЕДЕЛЁННОСТЬ",
+                    "Полная стратегия рядом с основаниями",
+                    "Альтернативы",
+                    "Ограничения и доказательства",
+                ]:
+                    self.assertIn(expected, review_text)
+                self.assertIn("Москва", review_text)
+                self.assertRegex(review_text, r"50[\s\u00a0]000 ₽")
+                self.assertIn("Точная основная цель Метрики", review_text)
+                self.assertIn("Подтверждение стратегии не разрешает публикацию", review_text)
+                self.assertEqual(12, strategy_review.locator(".owner-strategy-review-decisions article").count())
+                checkpoint("Стратегия")
+
+                strategy_review.get_by_role(
+                    "button", name="Вернуться к редактированию", exact=True
+                ).click()
+                page.get_by_role(
+                    "button", name="Проверить исправленную стратегию", exact=True
+                ).wait_for()
+                self.assertEqual("50000", page.get_by_label("Бюджет на неделю, ₽").input_value())
+                page.get_by_role(
+                    "button", name="Проверить исправленную стратегию", exact=True
+                ).click()
+                strategy_review = page.get_by_role(
+                    "region", name="Проверка точной версии стратегии", exact=True
+                )
+                strategy_review.get_by_role(
+                    "button", name="Подтвердить точную версию", exact=True
+                ).wait_for()
+
+                stale_page = browser.new_page(viewport=VIEWPORT)
+                stale_page.goto(base_url, wait_until="networkidle")
+                stale_review = stale_page.get_by_role(
+                    "region", name="Проверка точной версии стратегии", exact=True
+                )
+                stale_review.get_by_role(
+                    "button", name="Вернуться к редактированию", exact=True
+                ).click()
+                stale_page.get_by_role(
+                    "button", name="Проверить исправленную стратегию", exact=True
+                ).wait_for()
+                strategy_review.get_by_role(
+                    "button", name="Подтвердить точную версию", exact=True
+                ).click()
+                stale_error = page.locator(".owner-error")
+                stale_error.wait_for()
+                self.assertIn("Обновите страницу и повторите текущее бизнес-решение", stale_error.inner_text())
+                page.wait_for_timeout(100)
+                self.assertTrue(any("Failed to load resource" in message for message in console_errors))
+                console_errors.clear()
+                stale_page.close()
+
+                page.reload(wait_until="networkidle")
+                page.get_by_role(
+                    "button", name="Проверить исправленную стратегию", exact=True
+                ).click()
+                strategy_review = page.get_by_role(
+                    "region", name="Проверка точной версии стратегии", exact=True
+                )
+                strategy_review.get_by_role(
+                    "button", name="Подтвердить точную версию", exact=True
+                ).wait_for()
+                strategy_review.get_by_role(
+                    "button", name="Подтвердить точную версию", exact=True
+                ).click()
                 page.get_by_role(
                     "heading", name="Пока нет честно жизнеспособных кампаний", exact=True
                 ).wait_for()
                 self.assertGreaterEqual(page.locator(".owner-campaigns article").count(), 2)
+
+                page.get_by_label("Путь подготовки рекламных кампаний").get_by_role(
+                    "button", name=re.compile(r"^Стратегия")
+                ).click()
+                approved_review = page.get_by_role(
+                    "region", name="Проверка точной версии стратегии", exact=True
+                )
+                self.assertIn("Подтверждена", approved_review.inner_text())
+                approved_review.get_by_role(
+                    "button", name="Изменить стратегию", exact=True
+                ).click()
+                approved_review.get_by_label("Главное сообщение").fill(
+                    "Приглашаем промышленные компании обсудить участие и получить расчёт"
+                )
+                approved_review.get_by_role(
+                    "button", name="Сохранить и проверить новую версию", exact=True
+                ).click()
+                page.locator('[aria-current="step"] strong').get_by_text(
+                    "Стратегия", exact=True
+                ).wait_for()
+                page.get_by_role(
+                    "region", name="Проверка точной версии стратегии", exact=True
+                ).get_by_role(
+                    "button", name="Подтвердить точную версию", exact=True
+                ).wait_for()
+                page.get_by_label("Путь подготовки рекламных кампаний").get_by_role(
+                    "button", name=re.compile(r"^Кампании")
+                ).click()
+                self.assertTrue(page.get_by_text("ЭТАП ЕЩЁ НЕ ОТКРЫТ", exact=True).is_visible())
+                self.assertEqual(0, page.locator(".owner-campaigns").count())
+                page.get_by_label("Путь подготовки рекламных кампаний").get_by_role(
+                    "button", name=re.compile(r"^Стратегия")
+                ).click()
+                page.get_by_role(
+                    "region", name="Проверка точной версии стратегии", exact=True
+                ).get_by_role(
+                    "button", name="Подтвердить точную версию", exact=True
+                ).click()
+                page.get_by_role(
+                    "heading", name="Пока нет честно жизнеспособных кампаний", exact=True
+                ).wait_for()
                 self.assertTrue(page.get_by_text(re.compile(r"TESTABLE_WITH_GAPS")).first.is_visible())
                 self.assertTrue(page.get_by_text(re.compile(r"только сравнительный приоритет, не прогноз")).first.is_visible())
                 protocol_previews = page.get_by_label("Заранее зафиксированный протокол теста")
@@ -670,6 +787,52 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                     "button", name="Проверить состав и порядок набора", exact=True
                 ).wait_for()
 
+                selection_form = page.locator("form.owner-action")
+                order_inputs = selection_form.locator('input[name^="campaign_"]')
+                campaign_count = order_inputs.count()
+                self.assertGreaterEqual(campaign_count, 2)
+                campaign_names = [
+                    order_inputs.nth(index).locator("xpath=ancestor::label").locator("span").inner_text()
+                    for index in range(campaign_count)
+                ]
+
+                page.get_by_role(
+                    "button", name="Проверить состав и порядок набора", exact=True
+                ).click()
+                page.get_by_role(
+                    "button", name="Проверить состав и порядок набора", exact=True
+                ).wait_for()
+
+                order_inputs = page.locator('form.owner-action input[name^="campaign_"]')
+                order_inputs.nth(0).fill("0")
+                for index in range(1, campaign_count):
+                    order_inputs.nth(index).fill(str(index))
+                page.get_by_role(
+                    "button", name="Проверить состав и порядок набора", exact=True
+                ).click()
+                page.get_by_role(
+                    "button", name="Проверить состав и порядок набора", exact=True
+                ).wait_for()
+                self.assertEqual(
+                    "0",
+                    page.locator('form.owner-action input[name="campaign_1"]').input_value(),
+                )
+                checkpoint("Кампании")
+
+                order_inputs = page.locator('form.owner-action input[name^="campaign_"]')
+                for index in range(campaign_count):
+                    order_inputs.nth(index).fill(str(campaign_count - index))
+                page.get_by_role(
+                    "button", name="Проверить состав и порядок набора", exact=True
+                ).click()
+                page.get_by_role(
+                    "button", name="Проверить состав и порядок набора", exact=True
+                ).wait_for()
+                for index in range(campaign_count):
+                    self.assertEqual(
+                        str(campaign_count - index),
+                        page.locator(f'form.owner-action input[name="campaign_{index + 1}"]').input_value(),
+                    )
                 page.get_by_role(
                     "button", name="Проверить состав и порядок набора", exact=True
                 ).click()
@@ -677,6 +840,14 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                     "heading", name=re.compile(r"\d+ кампании к созданию")
                 ).wait_for()
                 self.assertTrue(page.get_by_text("9/9 бизнес-проверок пройдено", exact=True).is_visible())
+                package_campaigns = page.get_by_role(
+                    "heading", name="Бюджеты и периоды выбранных тестов", exact=True
+                ).locator("xpath=following-sibling::ol[1]").locator("li strong")
+                self.assertEqual(campaign_count, package_campaigns.count())
+                self.assertEqual(
+                    list(reversed(campaign_names)),
+                    [package_campaigns.nth(index).inner_text() for index in range(campaign_count)],
+                )
                 checkpoint("Проверка и создание")
 
                 page.get_by_role(

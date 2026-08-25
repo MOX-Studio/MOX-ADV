@@ -187,6 +187,19 @@ export type OwnerJourneyProjection = {
       alternatives: string;
       consequences: string;
     };
+    ownerReview: null | {
+      status: "Готова к подтверждению" | "Возвращена к редактированию" | "Подтверждена";
+      versionLabel: string;
+      exactBinding: string;
+      summary: Array<{ label: string; value: string; explanation: string }>;
+      decisions: Array<{ label: string; value: string; evidence: string; confidence: string }>;
+      alternatives: string[];
+      limitations: string[];
+      confirmHandle: string | null;
+      rejectHandle: string | null;
+      editorHandle: string | null;
+      editorFields: OwnerActionField[];
+    };
   } | null;
   appliedPractice: {
     practice: string;
@@ -334,7 +347,7 @@ type ActionKind =
   | "confirm-goal"
   | "confirm-business-model"
   | "select-focus"
-  | "approve-strategy"
+  | "review-strategy"
   | "revalidate-draft"
   | "revalidate-auction-protocol"
   | "prepare-package"
@@ -578,7 +591,8 @@ export function projectDirectAuditForOwner(snapshot: unknown): OwnerJourneyProje
 }
 
 function answerValue(state: InternalState, fieldId: string): unknown {
-  const answers = list(record(state.strategy).answers);
+  const strategySource = state.strategy ?? record(state.strategy_review).candidate;
+  const answers = list(record(strategySource).answers);
   return record(answers.find((answer) => record(answer).field_id === fieldId)).value;
 }
 
@@ -861,10 +875,15 @@ export function ownerActionDescriptor(view: InternalView): InternalActionDescrip
     };
   }
   if (!state.strategy) {
+    if (state.strategy_review?.status === "REVIEW_REQUIRED") return null;
     return {
-      kind: "approve-strategy",
-      label: "Утвердить стратегию",
-      description: "Одно решение фиксирует полный бизнес-смысл стратегии.",
+      kind: "review-strategy",
+      label: state.strategy_review?.status === "CHANGES_REQUESTED"
+        ? "Проверить исправленную стратегию"
+        : "Перейти к проверке стратегии",
+      description: state.strategy_review?.status === "CHANGES_REQUESTED"
+        ? "Исправьте сохранённые значения и снова откройте отдельную проверку точной версии."
+        : "Сначала сохраните полную версию. Подтверждение будет отдельным следующим решением.",
       fields: strategyFields(state),
     };
   }
@@ -918,7 +937,7 @@ export function ownerActionDescriptor(view: InternalView): InternalActionDescrip
       return {
         kind: "prepare-package",
         label: "Проверить состав и порядок набора",
-        description: "Агент предложил порядок. Укажите 0, чтобы исключить вариант, или поменяйте номера; заблокированные кампании недоступны.",
+        description: "Агент предложил порядок. Укажите 0, чтобы исключить вариант, или поменяйте номера; заблокированные кампании недоступны. Сначала изменения сохраняются, затем повторное действие без новых изменений открывает точный пакет.",
         fields: [
           ...candidates.map((candidate, index) => ({
             key: `campaign_${index + 1}`,
@@ -977,6 +996,36 @@ async function actionHandle(ownerKey: string, view: InternalView, descriptor: In
     target: descriptor.target ?? null,
   });
   return opaqueHandle(material);
+}
+
+async function strategyReviewActionHandle(
+  ownerKey: string,
+  view: InternalView,
+  kind: "confirm" | "reject" | "edit",
+) {
+  return opaqueHandle({
+    ownerKey,
+    state: view.revision,
+    kind: `campaign-strategy-review-${kind}`,
+    review: view.state.strategy_review?.review_id ?? null,
+    strategy: record(view.state.strategy).strategy_revision_id ?? null,
+  });
+}
+
+async function matchingStrategyReviewAction(ownerKey: string, view: InternalView, handle: string) {
+  const review = view.state.strategy_review;
+  if (review?.status === "REVIEW_REQUIRED") {
+    if (allowed(view, "confirm_strategy_review") && handle === await strategyReviewActionHandle(ownerKey, view, "confirm")) {
+      return { kind: "confirm" as const, review };
+    }
+    if (allowed(view, "reject_strategy_review") && handle === await strategyReviewActionHandle(ownerKey, view, "reject")) {
+      return { kind: "reject" as const, review };
+    }
+  }
+  if (view.state.strategy && allowed(view, "review_strategy") && handle === await strategyReviewActionHandle(ownerKey, view, "edit")) {
+    return { kind: "edit" as const, review: null };
+  }
+  return null;
 }
 
 const BUSINESS_MODEL_LABELS: Record<string, string> = {
@@ -1380,7 +1429,26 @@ const STRATEGY_FIELD_LABELS: Record<string, string> = {
   core_message: "Основное сообщение",
 };
 
-function campaignStrategyProjection(state: InternalState): OwnerJourneyProjection["campaignStrategy"] {
+function ownerStrategyValue(fieldId: string, value: unknown) {
+  if (fieldId === "period") {
+    const period = record(value);
+    return period.start_date && period.end_date
+      ? `${ownerText(period.start_date, "", 20)} — ${ownerText(period.end_date, "", 20)}`
+      : "Период не указан";
+  }
+  if (["weekly_budget", "target_result_cost"].includes(fieldId)) {
+    return Number(value) > 0 ? `${Number(value).toLocaleString("ru-RU")} ₽` : "Не указано";
+  }
+  return ownerText(value);
+}
+
+function ownerStrategyVersionLabel(value: unknown) {
+  const match = /-r(\d+)$/u.exec(String(value ?? ""));
+  return `Версия ${match ? Number(match[1]) : 1}`;
+}
+
+async function campaignStrategyProjection(ownerKey: string, view: InternalView): Promise<OwnerJourneyProjection["campaignStrategy"]> {
+  const state = view.state;
   const questionnaire = record(state.strategy_questionnaire);
   const recommendation = record(questionnaire.recommendation);
   if (!Object.keys(recommendation).length) return null;
@@ -1424,6 +1492,66 @@ function campaignStrategyProjection(state: InternalState): OwnerJourneyProjectio
   });
   const gate = record(questionnaire.human_decision_gate);
   const approved = Boolean(state.strategy);
+  const review = state.strategy_review;
+  const strategySource = state.strategy ?? review?.candidate ?? null;
+  const strategyAnswers = new Map(list(record(strategySource).answers).map((value) => {
+    const answer = record(value);
+    return [String(answer.field_id), answer.value] as const;
+  }));
+  const reviewFields = list(questionnaire.fields).map(record);
+  const ownerReview: NonNullable<OwnerJourneyProjection["campaignStrategy"]>["ownerReview"] = strategySource ? {
+    status: approved ? "Подтверждена" : review?.status === "CHANGES_REQUESTED" ? "Возвращена к редактированию" : "Готова к подтверждению",
+    versionLabel: ownerStrategyVersionLabel(record(strategySource).strategy_revision_id),
+    exactBinding: "Эта версия одновременно связана с текущими моделью бизнеса, рекламным фокусом и снимком доказательств. Изменение любого из них отменяет подтверждение и снова закрывает переход к кампаниям.",
+    summary: [
+      {
+        label: "Цель",
+        value: ownerStrategyValue("business_goal", strategyAnswers.get("business_goal")),
+        explanation: "Определяет бизнес-результат, ради которого создаются кампании.",
+      },
+      {
+        label: "Бюджет",
+        value: ownerStrategyValue("weekly_budget", strategyAnswers.get("weekly_budget")),
+        explanation: "Недельная граница расходов; подтверждение стратегии само по себе не разрешает расходы.",
+      },
+      {
+        label: "Измерение",
+        value: record(recommendation.measurement).value === "EXACT_METRIKA_PRIMARY_GOAL" ? "Точная основная цель Метрики" : "Проверка измерения до запуска",
+        explanation: ownerText(record(recommendation.measurement).rationale, "Измерение проверяется до создания кампаний."),
+      },
+      {
+        label: "Неопределённость",
+        value: economics.uncertainty ? "Существенная" : prelaunchCost.status === "QUALIFIED_RANGE" ? "Ограниченная диапазоном" : "Есть ограничения до запуска",
+        explanation: ownerText(economics.uncertainty ?? prelaunchCost.uncertainty, "Неопределённость не скрывается прогнозом эффективности."),
+      },
+    ],
+    decisions: reviewFields.map((field) => ({
+      label: ownerText(STRATEGY_FIELD_LABELS[String(field.field_id)], "Существенное поле"),
+      value: ownerStrategyValue(String(field.field_id), strategyAnswers.get(String(field.field_id))),
+      evidence: `${ownerText(field.source_category, "Источник не указан")} · ${ownerText(field.explanation, "Основание требует проверки")}`,
+      confidence: ownerText(field.status, "нужно проверить"),
+    })),
+    alternatives: list(gate.alternatives).map((item) => ownerText(item)).filter(Boolean).length
+      ? list(gate.alternatives).map((item) => ownerText(item)).filter(Boolean)
+      : ["Подтвердить точную показанную версию", "Вернуться к редактированию без открытия черновиков кампаний"],
+    limitations: [...new Set([
+      ...list(gate.evidence).map((item) => ownerText(item)),
+      ...list(gate.consequences).map((item) => ownerText(item)),
+      ownerText(economics.uncertainty, "", 600),
+      ownerText(prelaunchCost.uncertainty, "", 600),
+      "Подтверждение стратегии не разрешает публикацию, показы или расходы.",
+    ].filter(Boolean))].slice(0, 8),
+    confirmHandle: review?.status === "REVIEW_REQUIRED" && allowed(view, "confirm_strategy_review")
+      ? await strategyReviewActionHandle(ownerKey, view, "confirm")
+      : null,
+    rejectHandle: review?.status === "REVIEW_REQUIRED" && allowed(view, "reject_strategy_review")
+      ? await strategyReviewActionHandle(ownerKey, view, "reject")
+      : null,
+    editorHandle: approved && allowed(view, "review_strategy")
+      ? await strategyReviewActionHandle(ownerKey, view, "edit")
+      : null,
+    editorFields: approved ? strategyFields(state) : [],
+  } : null;
   return {
     status: approved || (!questions.length && !Object.keys(gate).length) ? "Готова к решению" : "Нужны существенные решения",
     recommendations: [
@@ -1452,6 +1580,7 @@ function campaignStrategyProjection(state: InternalState): OwnerJourneyProjectio
       alternatives: list(gate.alternatives).map((item) => ownerText(item)).join(" · "),
       consequences: list(gate.consequences).map((item) => ownerText(item)).join(" · "),
     } : null,
+    ownerReview,
   };
 }
 
@@ -1892,7 +2021,7 @@ function cards(
   }
   for (const item of unknowns.slice(0, 3)) result.push({ kind: "problem", title: "Существенное неизвестное", body: item });
   const descriptor = ownerActionDescriptor(view);
-  const gateKinds: ActionKind[] = ["confirm-goal", "confirm-business-model", "select-focus", "approve-strategy", "authorize-and-create", "authorize-correction"];
+  const gateKinds: ActionKind[] = ["confirm-goal", "confirm-business-model", "select-focus", "review-strategy", "authorize-and-create", "authorize-correction"];
   if (descriptor && gateKinds.includes(descriptor.kind)) {
     const current = recommendation(view, stage);
     const correctionDecision = descriptor.kind === "authorize-correction";
@@ -1981,7 +2110,7 @@ async function project(
     analyticsSummary: projectAnalyticsEvidenceForOwner(view.state.analytics_evidence_snapshot),
     demandCostResearch: projectDemandCostResearchForOwner(view.state.analytics_evidence_snapshot),
     businessModel: businessModelProjection(view.state),
-    campaignStrategy: campaignStrategyProjection(view.state),
+    campaignStrategy: await campaignStrategyProjection(ownerKey, view),
     appliedPractice: appliedPractice(view.state),
     businessReadiness: businessReadinessProjection(view.state),
     materialUnknowns: unknowns,
@@ -2149,6 +2278,23 @@ function required(values: Record<string, unknown>, key: string) {
   return value;
 }
 
+function ownerStrategyAnswers(values: Record<string, unknown>) {
+  return {
+    business_goal: required(values, "businessGoal"),
+    campaign_focus: required(values, "campaignFocus"),
+    advertised_offer: required(values, "offer"),
+    target_audience: required(values, "audience"),
+    qualified_result: required(values, "qualifiedResult"),
+    exclusions: required(values, "exclusions"),
+    geography: required(values, "geography"),
+    period: { start_date: required(values, "periodStart"), end_date: required(values, "periodEnd") },
+    landing_page: required(values, "landingPage"),
+    weekly_budget: required(values, "weeklyBudget"),
+    target_result_cost: values.targetResultCost,
+    core_message: required(values, "message"),
+  };
+}
+
 function normalizedFirstPartyHost(value: unknown) {
   try {
     return new URL(String(value ?? "")).hostname.toLowerCase().replace(/^www\./u, "");
@@ -2253,6 +2399,44 @@ export class P0OwnerJourney {
           expected_revision: view.revision,
           confirmation: "CONFIRM_CONTEXT_GOAL",
           goal: view.state.context_state.business_goal_decision.value,
+        });
+      }
+      const agent = this.agentProjection ? await this.agentProjection(ownerKey) : null;
+      if (agent) view = await this.application.query(ownerKey);
+      const access = accessState && this.accessReadiness ? this.accessReadiness.project(accessState) : null;
+      return project(ownerKey, view, agent, access);
+    }
+    const strategyReviewAction = await matchingStrategyReviewAction(ownerKey, view, submission.handle);
+    if (strategyReviewAction) {
+      const values = record(submission.values);
+      if (strategyReviewAction.kind === "edit") {
+        const answers = ownerStrategyAnswers(values);
+        if (strategyLandingRequiresContextReanalysis(view.state, answers.landing_page)) {
+          view = await this.application.command(ownerKey, {
+            action: "analyze_site",
+            expected_revision: view.revision,
+            url: answers.landing_page,
+          });
+        } else {
+          view = await this.application.command(ownerKey, {
+            action: "review_strategy",
+            expected_revision: view.revision,
+            answers,
+          });
+        }
+      } else if (strategyReviewAction.kind === "reject") {
+        view = await this.application.command(ownerKey, {
+          action: "reject_strategy_review",
+          expected_revision: view.revision,
+          review_id: strategyReviewAction.review.review_id,
+        });
+      } else {
+        view = await this.application.command(ownerKey, {
+          action: "confirm_strategy_review",
+          expected_revision: view.revision,
+          confirmation: "CONFIRM_EXACT_CAMPAIGN_STRATEGY",
+          review_id: strategyReviewAction.review.review_id,
+          strategy_revision_id: strategyReviewAction.review.candidate.strategy_revision_id,
         });
       }
       const agent = this.agentProjection ? await this.agentProjection(ownerKey) : null;
@@ -2397,29 +2581,12 @@ export class P0OwnerJourney {
         confirmation: "SELECT_PRODUCT_FOCUS",
         focus_offer_id: required(values, "focusOffer"),
       });
-    } else if (descriptor.kind === "approve-strategy") {
-      const landingPage = required(values, "landingPage");
-      if (strategyLandingRequiresContextReanalysis(view.state, landingPage)) {
-        await command({ action: "analyze_site", url: landingPage });
+    } else if (descriptor.kind === "review-strategy") {
+      const answers = ownerStrategyAnswers(values);
+      if (strategyLandingRequiresContextReanalysis(view.state, answers.landing_page)) {
+        await command({ action: "analyze_site", url: answers.landing_page });
       } else {
-        await command({
-          action: "approve_strategy",
-          confirmation: "APPROVE_CAMPAIGN_STRATEGY",
-          answers: {
-            business_goal: required(values, "businessGoal"),
-            campaign_focus: required(values, "campaignFocus"),
-            advertised_offer: required(values, "offer"),
-            target_audience: required(values, "audience"),
-            qualified_result: required(values, "qualifiedResult"),
-            exclusions: required(values, "exclusions"),
-            geography: required(values, "geography"),
-            period: { start_date: required(values, "periodStart"), end_date: required(values, "periodEnd") },
-            landing_page: landingPage,
-            weekly_budget: required(values, "weeklyBudget"),
-            target_result_cost: values.targetResultCost,
-            core_message: required(values, "message"),
-          },
-        });
+        await command({ action: "review_strategy", answers });
       }
     } else if (descriptor.kind === "revalidate-draft") {
       await command({ action: "revalidate_draft", draft_id: descriptor.target });
@@ -2443,6 +2610,8 @@ export class P0OwnerJourney {
         throw new P0ApplicationError("P0_OWNER_SHORTLIST_ORDER_INVALID", "Каждая выбранная кампания должна иметь отдельное положительное место.");
       }
       const desiredIds = desired.map((candidate) => candidate.draft_id);
+      const currentIds = (view.state.shortlist?.selections ?? []).map((selection) => selection.draft_id);
+      const shortlistChanged = JSON.stringify(currentIds) !== JSON.stringify(desiredIds);
       for (const selected of [...(view.state.shortlist?.selections ?? [])]) {
         if (!desiredIds.includes(selected.draft_id)) await command({ action: "remove_from_shortlist", draft_id: selected.draft_id });
       }
@@ -2451,8 +2620,11 @@ export class P0OwnerJourney {
         if (currentControl?.status === "REMOVED") await command({ action: "restore_to_shortlist", draft_id: candidate.draft_id });
         else if (currentControl?.status === "AVAILABLE") await command({ action: "add_to_shortlist", draft_id: candidate.draft_id });
       }
-      if (desiredIds.length > 1) await command({ action: "reorder_shortlist", ordered_draft_ids: desiredIds });
-      if (allowed(view, "review_package")) await command({ action: "review_package" });
+      const persistedIds = (view.state.shortlist?.selections ?? []).map((selection) => selection.draft_id);
+      if (desiredIds.length > 1 && JSON.stringify(persistedIds) !== JSON.stringify(desiredIds)) {
+        await command({ action: "reorder_shortlist", ordered_draft_ids: desiredIds });
+      }
+      if (!shortlistChanged && allowed(view, "review_package")) await command({ action: "review_package" });
     } else if (descriptor.kind === "review-package") {
       await command({ action: "review_package" });
     } else if (descriptor.kind === "edit-package") {
