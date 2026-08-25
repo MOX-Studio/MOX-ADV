@@ -8,6 +8,8 @@ export const SHORTLIST_SCHEMA = "p0-shortlist-v3";
 export const PACKAGE_REVIEW_SCHEMA = "p0-package-review-v3";
 export const HUMAN_DECISION_GATE_SCHEMA = "p0-human-decision-gate-v3";
 export const DECISION_INVALIDATION_SCHEMA = "p0-decision-invalidation-v1";
+export const PACKAGE_OWNER_DECISION_SCHEMA = "p0-package-owner-decision-v1";
+export const PACKAGE_AUTHORITY_GRANT_SCHEMA = "p0-package-authority-grant-v1";
 export const PACKAGE_CONFIRMATION_TOKEN = "CONFIRM_EXACT_SHORTLIST_PACKAGE";
 export const INDEPENDENT_EXECUTION_DISCLOSURE = "Каждая выбранная кампания будет отправляться, сдерживаться, модерироваться и оцениваться независимо. Пакет не является одной атомарной внешней транзакцией.";
 
@@ -124,15 +126,68 @@ export type PackageReview = {
   authority: PackageAuthority;
 };
 
+export type PackageAuthorityGrant = {
+  schema_version: typeof PACKAGE_AUTHORITY_GRANT_SCHEMA;
+  grant_id: string;
+  package_review_id: string;
+  package_id: string;
+  issued_at: string;
+  issued_by: "OWNER";
+  status: "ACTIVE_UNCONSUMED";
+  exact_authority: PackageAuthority;
+  permissions: {
+    allowed_actions: ["PREPARE_SEPARATE_SUSPENDED_CREATION_STAGE"];
+    forbidden_actions: [
+      "START_IMPRESSIONS",
+      "RESUME_CAMPAIGN",
+      "CHANGE_EXACT_PACKAGE",
+      "CHANGE_BOUND_ACCOUNT",
+      "EXPAND_BY_AGENT_OR_MODEL",
+    ];
+    impressions_authority: false;
+    spend_authority: false;
+    resume_authority: false;
+    agent_or_model_may_expand: false;
+    external_creation_requires_separate_stage: true;
+  };
+};
+
+export type PackageOwnerDecision = {
+  schema_version: typeof PACKAGE_OWNER_DECISION_SCHEMA;
+  decision_id: string;
+  verdict: "ACCEPTED" | "REJECTED";
+  decided_at: string;
+  decided_by: "OWNER";
+  package_review_id: string;
+  package_id: string;
+  exact_review: PackageReview;
+  explanation: {
+    recommendation: string;
+    alternatives: [string, string];
+    consequences: string[];
+    risks: string[];
+    next_real_stage: string;
+  };
+  authority_grant: PackageAuthorityGrant | null;
+  external_effects: {
+    provider_mutations: 0;
+    external_write_calls: 0;
+    impressions_started: 0;
+    spend_started_rub: 0;
+  };
+};
+
 export type HumanDecisionGate = {
   schema_version: typeof HUMAN_DECISION_GATE_SCHEMA;
   contract_version: "3.0.0";
   gate_id: string;
   package_review_id: string;
   package_id: string;
+  owner_decision_id: string;
   confirmation_token: typeof PACKAGE_CONFIRMATION_TOKEN;
   confirmed_at: string;
   authority: PackageAuthority;
+  authority_grant: PackageAuthorityGrant;
   independent_execution_acknowledged: true;
   external_transactionality_promised: false;
   external_writes_performed: false;
@@ -637,18 +692,114 @@ export async function verifyPackageReview(input: {
   return JSON.stringify(rebuilt) === JSON.stringify(candidate);
 }
 
-export async function buildHumanDecisionGate(review: PackageReview, confirmedAt: string) {
+const OWNER_DECISION_EXPLANATION = {
+  recommendation: "Принять только показанный точный пакет после полной проверки 9/9, если его состав, порядок и ограничения соответствуют решению владельца.",
+  alternatives: [
+    "Принять точный пакет без внешней записи",
+    "Отклонить пакет и вернуться к редактированию",
+  ] as [string, string],
+  consequences: [
+    "Принятие фиксирует одноразовое полномочие только для показанных неизменяемых версий.",
+    "Отклонение не выдаёт полномочие и не меняет состояние внешней системы.",
+  ],
+  risks: [
+    "Любое существенное изменение или устаревшая версия аннулирует решение и полномочие.",
+    "Пакет не разрешает показы, расходы или возобновление кампаний.",
+    "Агент и модель не могут расширить состав, аккаунт или разрешённые действия.",
+  ],
+  next_real_stage: "Создание точных кампаний в состоянии SUSPENDED возможно только на следующем отдельно разрешаемом реальном этапе.",
+};
+
+async function buildPackageAuthorityGrant(review: PackageReview, issuedAt: string): Promise<PackageAuthorityGrant> {
+  const unsigned = {
+    schema_version: PACKAGE_AUTHORITY_GRANT_SCHEMA as typeof PACKAGE_AUTHORITY_GRANT_SCHEMA,
+    package_review_id: review.package_review_id,
+    package_id: review.package_id,
+    issued_at: issuedAt,
+    issued_by: "OWNER" as const,
+    status: "ACTIVE_UNCONSUMED" as const,
+    exact_authority: structuredClone(review.authority),
+    permissions: {
+      allowed_actions: ["PREPARE_SEPARATE_SUSPENDED_CREATION_STAGE"] as ["PREPARE_SEPARATE_SUSPENDED_CREATION_STAGE"],
+      forbidden_actions: [
+        "START_IMPRESSIONS",
+        "RESUME_CAMPAIGN",
+        "CHANGE_EXACT_PACKAGE",
+        "CHANGE_BOUND_ACCOUNT",
+        "EXPAND_BY_AGENT_OR_MODEL",
+      ] as PackageAuthorityGrant["permissions"]["forbidden_actions"],
+      impressions_authority: false as const,
+      spend_authority: false as const,
+      resume_authority: false as const,
+      agent_or_model_may_expand: false as const,
+      external_creation_requires_separate_stage: true as const,
+    },
+  };
+  return { ...unsigned, grant_id: await sha256(unsigned) };
+}
+
+export async function buildPackageOwnerDecision(
+  review: PackageReview,
+  verdict: PackageOwnerDecision["verdict"],
+  decidedAt: string,
+) {
   if (review.business_projection.preflight.status !== "PASS" || review.business_projection.preflight.passed !== 9) {
-    throw new Error("Package authority requires a complete publish preflight 9/9.");
+    throw new Error("Package decision requires a complete publish preflight 9/9.");
   }
+  const authorityGrant = verdict === "ACCEPTED"
+    ? await buildPackageAuthorityGrant(review, decidedAt)
+    : null;
+  const unsigned = {
+    schema_version: PACKAGE_OWNER_DECISION_SCHEMA as typeof PACKAGE_OWNER_DECISION_SCHEMA,
+    verdict,
+    decided_at: decidedAt,
+    decided_by: "OWNER" as const,
+    package_review_id: review.package_review_id,
+    package_id: review.package_id,
+    exact_review: structuredClone(review),
+    explanation: structuredClone(OWNER_DECISION_EXPLANATION),
+    authority_grant: authorityGrant,
+    external_effects: {
+      provider_mutations: 0 as const,
+      external_write_calls: 0 as const,
+      impressions_started: 0 as const,
+      spend_started_rub: 0 as const,
+    },
+  };
+  return { ...unsigned, decision_id: await sha256(unsigned) } satisfies PackageOwnerDecision;
+}
+
+export async function verifyPackageOwnerDecision(
+  decision: PackageOwnerDecision | unknown,
+  currentReview: PackageReview,
+) {
+  const candidate = record(decision) as PackageOwnerDecision;
+  if (candidate.schema_version !== PACKAGE_OWNER_DECISION_SCHEMA
+    || !["ACCEPTED", "REJECTED"].includes(String(candidate.verdict))
+    || candidate.package_review_id !== currentReview.package_review_id
+    || candidate.package_id !== currentReview.package_id
+    || !candidate.decided_at) return false;
+  let rebuilt: PackageOwnerDecision;
+  try {
+    rebuilt = await buildPackageOwnerDecision(currentReview, candidate.verdict, candidate.decided_at);
+  } catch {
+    return false;
+  }
+  return JSON.stringify(rebuilt) === JSON.stringify(candidate);
+}
+
+export async function buildHumanDecisionGate(review: PackageReview, confirmedAt: string) {
+  const ownerDecision = await buildPackageOwnerDecision(review, "ACCEPTED", confirmedAt);
   const unsigned = {
     schema_version: HUMAN_DECISION_GATE_SCHEMA as typeof HUMAN_DECISION_GATE_SCHEMA,
     contract_version: "3.0.0" as const,
     package_review_id: review.package_review_id,
     package_id: review.package_id,
+    owner_decision_id: ownerDecision.decision_id,
     confirmation_token: PACKAGE_CONFIRMATION_TOKEN as typeof PACKAGE_CONFIRMATION_TOKEN,
     confirmed_at: confirmedAt,
     authority: structuredClone(review.authority),
+    authority_grant: structuredClone(ownerDecision.authority_grant!),
     independent_execution_acknowledged: true as const,
     external_transactionality_promised: false as const,
     external_writes_performed: false as const,
