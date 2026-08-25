@@ -4,6 +4,7 @@ import Link from "next/link";
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import styles from "./prototype/prd-149/prototype.module.css";
 import AnalyticsSummaryDisclosure from "./AnalyticsSummaryDisclosure";
+import { OwnerViabilitySummary } from "./OwnerViabilitySummary";
 import type {
   OwnerActionField,
   OwnerJourneyProjection,
@@ -378,7 +379,8 @@ function CampaignOption({
         : <span>Редактирование завершено</span>}
     </div>
     {campaign.editor.feedback && <p className="owner-draft-feedback" role="status">{campaign.editor.feedback}</p>}
-    <dl><div><dt>Предложение</dt><dd>{campaign.offer}</dd></div><div><dt>Аудитория</dt><dd>{campaign.audience}</dd></div><div><dt>Куда ведём</dt><dd>{campaign.destination}</dd></div><div><dt>Сравнительный приоритет</dt><dd>{campaign.comparativeScore}</dd></div><div><dt>Покрытие доказательств</dt><dd>{campaign.evidenceCoverage}</dd></div><div><dt>Чувствительность</dt><dd>{campaign.sensitivity}</dd></div></dl>
+    <dl><div><dt>Предложение</dt><dd>{campaign.offer}</dd></div><div><dt>Аудитория</dt><dd>{campaign.audience}</dd></div><div><dt>Куда ведём</dt><dd>{campaign.destination}</dd></div></dl>
+    <OwnerViabilitySummary campaign={campaign} />
     {editing && <section className="owner-draft-editor" aria-label={`Редактор черновика «${campaign.name}»`}>
       <header><div><span>РУЧНОЕ РЕДАКТИРОВАНИЕ</span><h4>Точная сохранённая редакция кампании</h4></div><strong>Без технических идентификаторов</strong></header>
       <p>Каждая форма изменяет только эту кампанию. Существенная правка создаёт новую редакцию; отмена возвращает сохранённые значения.</p>
@@ -428,7 +430,6 @@ function CampaignOption({
       <p><b>Происхождение:</b> {campaign.publishPreview.creativeProvenance.family} · {campaign.publishPreview.creativeProvenance.source} · {campaign.publishPreview.creativeProvenance.rights}</p>
       <p><b>Обязательные оговорки:</b> {campaign.publishPreview.requiredDisclaimers.length ? campaign.publishPreview.requiredDisclaimers.join(" · ") : "Для текущего подтверждённого содержания не требуются"}</p>
     </section>
-    {campaign.reasons.length > 0 && <ul>{campaign.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>}
   </article>;
 }
 

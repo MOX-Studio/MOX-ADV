@@ -195,6 +195,25 @@
 .owner-campaigns dt { color: var(--owner-muted); font-size: 6px; }
 .owner-campaigns dd { margin: 0; font-size: 7px; font-weight: 700; overflow-wrap: anywhere; }
 .owner-campaigns article ul { margin: 9px 0 0; padding-left: 16px; color: var(--owner-danger); font-size: 7px; }
+.owner-viability { margin-top: 10px; padding: 11px; border: 1px solid #9bc8ad; border-radius: 8px; background: #f2faf5; }
+.owner-viability-testable-with-gaps { border-color: #d9b877; background: #fff9ee; }
+.owner-viability-insufficient-evidence, .owner-viability-blocked { border-color: #d8aaa4; background: #fdf1ef; }
+.owner-viability > header { align-items: flex-start; color: var(--owner-ink) !important; }
+.owner-viability > header div { min-width: 0; }
+.owner-viability > header span { color: var(--owner-green-dark); font-size: 5px; font-weight: 900; letter-spacing: .08em; }
+.owner-viability > header h4 { margin: 4px 0 0; font-size: 11px; }
+.owner-viability > header > strong { flex: 0 0 auto; padding: 4px 6px; border-radius: 999px; color: var(--owner-green-dark); background: white; font-size: 5px; }
+.owner-viability-insufficient-evidence > header > strong, .owner-viability-blocked > header > strong { color: var(--owner-danger); }
+.owner-viability-metrics { display: grid; grid-template-columns: 1.25fr .75fr .75fr; gap: 5px; margin-top: 9px; }
+.owner-viability-metrics > div { min-width: 0; padding: 7px; border-radius: 6px; background: white; }
+.owner-viability-metrics span, .owner-viability-metrics b { display: block; overflow-wrap: anywhere; }
+.owner-viability-metrics span { color: var(--owner-muted); font-size: 5px; }
+.owner-viability-metrics b { margin-top: 4px; font-size: 7px; line-height: 1.35; }
+.owner-viability > p, .owner-viability > footer { margin: 8px 0 0; color: var(--owner-muted); font-size: 6px; line-height: 1.5; }
+.owner-viability-reasons { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(19,122,78,.18); }
+.owner-viability-reasons h5 { margin: 0; font-size: 7px; }
+.owner-viability-reasons ol { display: grid; gap: 4px; margin: 6px 0 0; padding-left: 14px; color: var(--owner-ink); font-size: 6px; line-height: 1.4; }
+.owner-viability > footer { font-weight: 750; }
 .owner-draft-version { display: flex; gap: 10px; justify-content: space-between; align-items: flex-start; margin: 9px 0; padding: 10px; border: 1px solid var(--owner-line); border-radius: 7px; background: #f7faf8; }
 .owner-draft-version div { min-width: 0; }
 .owner-draft-version span, .owner-draft-version strong, .owner-draft-version small { display: block; }
