@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import styles from "./prototype/prd-149/prototype.module.css";
+import AnalyticsSummaryDisclosure from "./AnalyticsSummaryDisclosure";
 import type {
   OwnerActionField,
   OwnerJourneyProjection,
@@ -184,6 +185,8 @@ export default function P0Client() {
             onSubmit={submitInterview}
             onKeyDown={keyboardSubmit}
           />}
+
+          {activeStage === "findings" && activeStageStatus !== "upcoming" && projection.analyticsSummary && <AnalyticsSummaryDisclosure summary={projection.analyticsSummary} />}
 
           {activeStage === "findings" && activeStageStatus !== "upcoming" && projection.directReport && <section className="owner-direct-report" data-report-state={projection.directReport.state} aria-labelledby="owner-direct-report-title">
             <header><div><p className="owner-eyebrow">ТЕКУЩЕЕ ПРОДВИЖЕНИЕ В ЯНДЕКС ДИРЕКТЕ</p><h2 id="owner-direct-report-title">Отчёт о текущем продвижении</h2></div><strong>{projection.directReport.status}</strong></header>

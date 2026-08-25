@@ -16,6 +16,10 @@ import {
   type AccessReadinessState,
 } from "./access-readiness.ts";
 import { projectWordstatForPresentation } from "./wordstat-presentation.ts";
+import {
+  projectAnalyticsEvidenceForOwner,
+  type OwnerAnalyticsSummary,
+} from "./analytics-owner-summary.ts";
 
 export const OWNER_JOURNEY_STAGES = [
   { id: "goal", label: "Цель" },
@@ -101,6 +105,7 @@ export type OwnerJourneyProjection = {
     }>;
     limitations: string[];
   } | null;
+  analyticsSummary: OwnerAnalyticsSummary | null;
   demandCostResearch: {
     demand: {
       status: "Доступно" | "Частично" | "Недоступно";
@@ -1772,6 +1777,7 @@ async function project(
     currentRecommendation: recommendation(view, stage),
     directReport: projectDirectAuditForOwner(view.state.analytics_evidence_snapshot),
     competitorMatrix: projectCompetitorMatrixForOwner(view.state),
+    analyticsSummary: projectAnalyticsEvidenceForOwner(view.state.analytics_evidence_snapshot),
     demandCostResearch: projectDemandCostResearchForOwner(view.state.analytics_evidence_snapshot),
     businessModel: businessModelProjection(view.state),
     campaignStrategy: campaignStrategyProjection(view.state),
@@ -1903,6 +1909,7 @@ async function projectAccessOnly(
     },
     directReport: null,
     competitorMatrix: null,
+    analyticsSummary: null,
     demandCostResearch: null,
     businessModel: null,
     campaignStrategy: null,

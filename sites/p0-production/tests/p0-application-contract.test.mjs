@@ -4748,6 +4748,14 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
   assert.equal(projection.goalInterview.confirmedAnswers.length, 2);
   assert.equal(projection.journey.currentStage, "findings");
   assert.equal(projection.introduction, undefined);
+  assert.ok(projection.analyticsSummary);
+  assert.equal(projection.analyticsSummary.findings.length, 6);
+  assert.notEqual(projection.analyticsSummary.status, "Готово к стратегии", "mixed evidence must not claim readiness");
+  assert.equal(projection.analyticsSummary.findings.some((item) => item.status === "Частично" || item.status === "Недоступно"), true);
+  assert.deepEqual(projection.analyticsSummary.remediation.map((item) => item.priority), projection.analyticsSummary.remediation.map((_, index) => index + 1));
+  const analyticsImpactOrder = { "Блокирует допустимость кампаний": 0, "Меняет стратегию": 1, "Снижает уверенность": 2 };
+  assert.equal(projection.analyticsSummary.remediation.every((item, index, items) => index === 0 || analyticsImpactOrder[items[index - 1].impact] <= analyticsImpactOrder[item.impact]), true);
+  assert.doesNotMatch(JSON.stringify(projection.analyticsSummary), /snapshot|schema|provider|sha256|Campaigns\.get|_id/iu);
   assert.equal(projection.competitorMatrix.status, "Частично");
   assert.equal(projection.competitorMatrix.candidates.length, 2);
   assert.equal(projection.competitorMatrix.rows[0].competitor, "Экспо Альфа");
