@@ -1,0 +1,214 @@
+{
+  "schema_version": "p0-viable-campaign-real-business-evidence-v1",
+  "evidence_kind": "INDEPENDENT_READ_ONLY_BUSINESS_EVIDENCE",
+  "scenario_id": "mox-branding-readonly-positive-v1",
+  "observed_at": "2026-08-25T11:36:04.213Z",
+  "freshness": {
+    "status": "CURRENT_AT_CAPTURE",
+    "maximum_age_days": 14
+  },
+  "business": {
+    "name": "MOX Creative Studio",
+    "public_site": "https://mox-studio.ru",
+    "landing_page": "https://mox-studio.ru/branding",
+    "offer": "Брендинг для запуска или малого бизнеса",
+    "target_audience": "Новые компании и небольшие бренды",
+    "qualified_result": "Заявка с квиза Тильда (апрель26)",
+    "business_goal": "Получать заявки на обсуждение проекта брендинга",
+    "core_message": "Брендинг для запуска или малого бизнеса с точным составом после короткого брифа",
+    "exclusions": "Не обещать точную стоимость и состав работ до короткого брифа",
+    "geography": "Москва",
+    "public_price_floor_rub": 250000,
+    "current_target_result_cost_rub": 869,
+    "current_weekly_budget_rub": 11600
+  },
+  "public_first_party": {
+    "source": "FIRST_PARTY_PUBLIC_HTTPS",
+    "url": "https://mox-studio.ru/branding",
+    "observed_at": "2026-08-25T11:27:59.059Z",
+    "response_digest": "sha256:b53eeb137394bac1db1a0f2f179e71f136f19d9773fdc693e87f098396ef225c",
+    "facts": [
+      {
+        "predicate": "offer",
+        "quote": "Брендинг для запуска или малого бизнеса"
+      },
+      {
+        "predicate": "audience",
+        "quote": "Базовый формат для новых компаний и небольших брендов, которым нужен цельный и профессиональный визуальный образ."
+      },
+      {
+        "predicate": "price_floor",
+        "quote": "Стоимость: от 250 000 ₽"
+      },
+      {
+        "predicate": "commercial_process",
+        "quote": "Точную стоимость и состав работ определим после короткого брифа — оставьте заявку."
+      }
+    ]
+  },
+  "direct": {
+    "source": "YANDEX_DIRECT_API_V501",
+    "account_alias": "direct-account-353eb3ce664bb9ed",
+    "account_identity_digest": "sha256:353eb3ce664bb9ed931fdda850508f8e8066afae7d6344f1df255ebc145bf5fb",
+    "binding_response_digest": "sha256:c6ac41e9383c97af40e132acc08eb09c03cc0362a198df59faba55bafb36d5ba",
+    "campaign_response_digest": "sha256:ae2336d99d18671dca0c7917d3c018cfaf73ee606887005976a61f4517625b40",
+    "keyword_response_digest": "sha256:491bacf183be6ca7c940c99d38347d5871ee4a546f9ef49414e5f963f2244729",
+    "keyword_bids_response_digest": "sha256:24bf0bb0c7869b6008210abf8995b3f0cdc9379220ddb57283c1d67db6ddac85",
+    "campaign": {
+      "name": "Конв ! ПОИСК Брендинг МСК",
+      "type": "UNIFIED_CAMPAIGN",
+      "state": "ON",
+      "status": "ACCEPTED",
+      "strategy": "PAY_FOR_CONVERSION",
+      "started_at": "2026-04-30",
+      "counter_binding_present": true
+    },
+    "capability_snapshot": {
+      "schema_version": "direct-account-capability-snapshot-v1",
+      "snapshot_id": "direct-capability:sha256:c6ac41e9383c97af40e132acc08eb09c03cc0362a198df59faba55bafb36d5ba",
+      "observed_at": "2026-08-25T11:36:04.213Z",
+      "source": "YANDEX_DIRECT_API_V501",
+      "account": "direct-account-353eb3ce664bb9ed",
+      "api_version": "v501",
+      "archived": "NO",
+      "currency": "RUB",
+      "edit_campaigns_grant": "YES",
+      "available_campaign_types": [
+        "BILLING_AGGREGATE",
+        "CONTENT_PROMOTION",
+        "CPM_BANNER_CAMPAIGN",
+        "DYNAMIC_TEXT_CAMPAIGN",
+        "MOBILE_APP_CAMPAIGN",
+        "SMART_CAMPAIGN",
+        "TEXT_CAMPAIGN",
+        "UNIFIED_CAMPAIGN"
+      ],
+      "restrictions": [
+        { "element": "AD_EXTENSIONS_TOTAL", "value": 1000 },
+        { "element": "ADGROUPS_TOTAL_PER_CAMPAIGN", "value": 1000 },
+        { "element": "ADS_TOTAL_PER_ADGROUP", "value": 50 },
+        { "element": "API_POINTS", "value": 168000 },
+        { "element": "CAMPAIGNS_TOTAL_PER_CLIENT", "value": 3000 },
+        { "element": "CAMPAIGNS_UNARCHIVED_PER_CLIENT", "value": 1000 },
+        { "element": "FORECAST_REPORTS_TOTAL_IN_QUEUE", "value": 5 },
+        { "element": "GENERAL_DOMAIN_BLACKLIST_SIZE", "value": 1000 },
+        { "element": "KEYWORDS_TOTAL_PER_ADGROUP", "value": 200 },
+        { "element": "STAT_REPORTS_TOTAL_IN_QUEUE", "value": 5 },
+        { "element": "VIDEO_DOMAIN_BLACKLIST_SIZE", "value": 100 },
+        { "element": "WORDSTAT_REPORTS_TOTAL_IN_QUEUE", "value": 5 }
+      ],
+      "conditional_capabilities": []
+    },
+    "cost": {
+      "status": "AVAILABLE",
+      "source": "KEYWORDBIDS_V5_CURRENT_PROXY",
+      "method": "KeywordBids.get",
+      "phrase_scope": "EXACT_CURRENT_BRANDING_KEYWORD",
+      "as_of": "2026-08-25T11:36:04.214Z",
+      "currency": "RUB",
+      "vat_treatment": "INCLUDED",
+      "sample_size": {
+        "unit": "auction_scenarios",
+        "value": 44
+      },
+      "range": {
+        "low": 9.6,
+        "high": 180,
+        "kind": "SCENARIO"
+      },
+      "qualification": {
+        "current": true,
+        "existing_comparable_keyword": true,
+        "exact_business_campaign": true,
+        "exact_geography": true,
+        "exact_search_placement": true
+      }
+    }
+  },
+  "metrika": {
+    "source": "YANDEX_METRIKA_MANAGEMENT_AND_REPORTS_API",
+    "counter_alias": "901708517",
+    "goal_alias": "196825857",
+    "counter_identity_digest": "sha256:04427674a4e5c3f586d0d2fd24f044c1d8b36554596a09441bf2a43be1837a1e",
+    "goal_identity_digest": "sha256:bb17af21210187b70101dcabe2ce4116f8deb1074f7c81419a92f5a645daa6f8",
+    "report_response_digest": "sha256:b60e560e550a52d367884856c093eb331e15c6a364cee91e6f4507ba2c164764",
+    "site": "mox-studio.ru",
+    "time_zone": "Europe/Moscow",
+    "goal": {
+      "name": "Заявка с квиза Тильда (апрель26)",
+      "type": "URL",
+      "conditions_present": true
+    },
+    "report": {
+      "status": "AVAILABLE",
+      "window": {
+        "date_from": "2026-05-27",
+        "date_to": "2026-08-24",
+        "inclusive": true,
+        "excludes_current_provisional_day": true
+      },
+      "attribution": "last_direct_click_order_exact_campaign",
+      "sampled": false,
+      "sample_share": 1,
+      "data_lag": 0,
+      "visits": {
+        "bucket": "100_499",
+        "lower_bound": 100,
+        "observed": true
+      },
+      "qualified_goal_visits": {
+        "bucket": "1_9",
+        "lower_bound": 1,
+        "observed": true
+      },
+      "seasonality": {
+        "status": "AVAILABLE",
+        "current_window": {
+          "from": "2026-07-26",
+          "to": "2026-08-24",
+          "visits_bucket": "10_49"
+        },
+        "previous_window": {
+          "from": "2026-06-26",
+          "to": "2026-07-25",
+          "visits_bucket": "10_49"
+        },
+        "ratio": 0.97
+      }
+    }
+  },
+  "supported_projection": {
+    "profile_id": "p0-campaign-creation-profile-v1",
+    "profile_version": "1.0.0",
+    "advertiser_account_alias": "direct-account-353eb3ce664bb9ed",
+    "metrika_counter_alias": "901708517",
+    "metrika_goal_alias": "196825857",
+    "allowed_campaign_type": "UNIFIED_CAMPAIGN",
+    "delivery": "SEARCH",
+    "strategy": "WB_MAXIMUM_CLICKS",
+    "ad_type": "RESPONSIVE_AD",
+    "network_serving": false,
+    "autotargeting_selected": false,
+    "must_end_non_serving": true,
+    "resume_allowed": false
+  },
+  "safety": {
+    "capture_methods": [
+      "GET public first-party landing",
+      "Clients.get",
+      "Campaigns.get",
+      "Keywords.get",
+      "KeywordBids.get",
+      "GET Metrika counter",
+      "GET Metrika goals",
+      "GET Metrika report"
+    ],
+    "provider_mutations": [],
+    "external_write_calls": 0,
+    "production_write_attempts": 0,
+    "live_authority_issued": false,
+    "impressions_started_by_capture": 0,
+    "spend_started_by_capture_rub": 0,
+    "browser_cabinets_used": false
+  }
+}

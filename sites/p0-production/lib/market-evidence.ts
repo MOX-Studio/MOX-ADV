@@ -1552,7 +1552,8 @@ export async function collectCurrentAuctionCostObservation(input: {
         method: "get",
         params: {
           SelectionCriteria: { KeywordIds: [BigInt(input.keyword_id)] },
-          FieldNames: ["KeywordId", "AuctionBids"],
+          FieldNames: ["KeywordId", "AdGroupId", "CampaignId", "ServingStatus"],
+          SearchFieldNames: ["AuctionBids"],
         },
       }),
     });
@@ -1562,9 +1563,17 @@ export async function collectCurrentAuctionCostObservation(input: {
       result?: { KeywordBids?: Array<Record<string, unknown>> };
     };
     const keywordBid = (bidsPayload.result?.KeywordBids ?? []).find((item) => String(item.KeywordId ?? "") === input.keyword_id);
-    const auctionBids = Array.isArray(keywordBid?.AuctionBids) ? keywordBid.AuctionBids as Array<Record<string, unknown>> : [];
+    const search = keywordBid?.Search && typeof keywordBid.Search === "object" && !Array.isArray(keywordBid.Search)
+      ? keywordBid.Search as Record<string, unknown>
+      : {};
+    const auctionBids = search.AuctionBids && typeof search.AuctionBids === "object" && !Array.isArray(search.AuctionBids)
+      ? search.AuctionBids as Record<string, unknown>
+      : {};
+    const auctionBidItems = Array.isArray(auctionBids.AuctionBidItems)
+      ? auctionBids.AuctionBidItems as Array<Record<string, unknown>>
+      : [];
     const allowed = new Set(input.traffic_volumes.map(Number));
-    const prices = auctionBids
+    const prices = auctionBidItems
       .filter((item) => allowed.size === 0 || allowed.has(Number(item.TrafficVolume)))
       .map((item) => Number(item.Price) / 1_000_000)
       .filter((value) => Number.isFinite(value) && value >= 0);

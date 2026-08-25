@@ -381,6 +381,8 @@ test("official Direct adapter qualifies a current comparable existing keyword au
     "https://api.direct.yandex.com/json/v501/keywordbids",
   ]);
   assert.deepEqual(requests.map((item) => item.body.method), ["get", "get"]);
+  assert.deepEqual(requests[1].body.params.FieldNames, ["KeywordId", "AdGroupId", "CampaignId", "ServingStatus"]);
+  assert.deepEqual(requests[1].body.params.SearchFieldNames, ["AuctionBids"]);
   assert.equal(observation.status, "AVAILABLE");
   assert.deepEqual(observation.range, { low: 120, high: 180, kind: "SCENARIO" });
   assert.equal(observation.qualification.complete_direct_audit, true);

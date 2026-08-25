@@ -1,0 +1,1409 @@
+{
+  "schema_version": "p0-viable-campaign-acceptance-v1",
+  "feature_issue": 238,
+  "implemented_tasks": [
+    285,
+    286
+  ],
+  "generated_at": "2026-08-25T11:36:04.213Z",
+  "status": "READY_FOR_OWNER_CHECKPOINT",
+  "evidence": {
+    "independent_positive": {
+      "scenario_id": "mox-branding-readonly-positive-v1",
+      "evidence_kind": "INDEPENDENT_READ_ONLY_BUSINESS_EVIDENCE",
+      "derived_from_fixture": false,
+      "real_business_name": "MOX Creative Studio",
+      "source_observed_at": "2026-08-25T11:36:04.213Z",
+      "source_digest": "sha256:3781b0a58a40cf89e50eeb101777efcdcd80b9d3353e38805aca2cfccba284db",
+      "campaigns": [
+        {
+          "draft_id": "draft-312363c9b748a32cec28",
+          "name": "Брендинг для запуска или малого бизнеса · STRATEGY_BASELINE_FALLBACK",
+          "status": "VIABLE",
+          "editable": true,
+          "hard_gates": [
+            {
+              "gate": "LINEAGE",
+              "evaluated_before_score": true,
+              "status": "PASSED",
+              "blocker_codes": []
+            },
+            {
+              "gate": "ECONOMICS",
+              "evaluated_before_score": true,
+              "status": "PASSED",
+              "blocker_codes": []
+            },
+            {
+              "gate": "DESTINATION",
+              "evaluated_before_score": true,
+              "status": "PASSED",
+              "blocker_codes": []
+            },
+            {
+              "gate": "MEASUREMENT",
+              "evaluated_before_score": true,
+              "status": "PASSED",
+              "blocker_codes": []
+            },
+            {
+              "gate": "DEMAND",
+              "evaluated_before_score": true,
+              "status": "PASSED",
+              "blocker_codes": []
+            },
+            {
+              "gate": "CAPABILITY",
+              "evaluated_before_score": true,
+              "status": "PASSED",
+              "blocker_codes": []
+            },
+            {
+              "gate": "POLICY",
+              "evaluated_before_score": true,
+              "status": "PASSED",
+              "blocker_codes": []
+            },
+            {
+              "gate": "DUPLICATE_PROTECTION",
+              "evaluated_before_score": true,
+              "status": "PASSED",
+              "blocker_codes": []
+            },
+            {
+              "gate": "PROJECTION",
+              "evaluated_before_score": true,
+              "status": "PASSED",
+              "blocker_codes": []
+            },
+            {
+              "gate": "PROTOCOL_BUDGET_READINESS",
+              "evaluated_before_score": true,
+              "status": "PASSED",
+              "blocker_codes": []
+            },
+            {
+              "gate": "NON_SERVING_SAFETY",
+              "evaluated_before_score": true,
+              "status": "PASSED",
+              "blocker_codes": []
+            }
+          ],
+          "profile_v1": {
+            "profile_id": "p0-campaign-creation-profile-v1",
+            "version": "1.0.0",
+            "complete": true,
+            "fields": [
+              "advertiser_currency",
+              "unified_campaign",
+              "unified_ad_group",
+              "search_delivery",
+              "responsive_ad",
+              "geography",
+              "schedule",
+              "landing",
+              "tracking",
+              "negative_phrases",
+              "explicit_keywords",
+              "autotargeting_policy",
+              "metrika_binding",
+              "measurement_plan"
+            ],
+            "unsupported_selected_fields": []
+          },
+          "score": {
+            "value": 88,
+            "rank": 1,
+            "coverage_percent": 100,
+            "sensitivity": [
+              88.1667,
+              88.1667
+            ],
+            "comparative_not_predictive": true
+          },
+          "publication": {
+            "preview_only": true,
+            "external_write_calls": 0,
+            "must_end_non_serving": true,
+            "resume_allowed": false
+          }
+        },
+        {
+          "draft_id": "draft-ef3081496c3d4be7c5b2",
+          "name": "Брендинг для запуска или малого бизнеса · Целевое действие",
+          "status": "VIABLE",
+          "editable": true,
+          "hard_gates": [
+            {
+              "gate": "LINEAGE",
+              "evaluated_before_score": true,
+              "status": "PASSED",
+              "blocker_codes": []
+            },
+            {
+              "gate": "ECONOMICS",
+              "evaluated_before_score": true,
+              "status": "PASSED",
+              "blocker_codes": []
+            },
+            {
+              "gate": "DESTINATION",
+              "evaluated_before_score": true,
+              "status": "PASSED",
+              "blocker_codes": []
+            },
+            {
+              "gate": "MEASUREMENT",
+              "evaluated_before_score": true,
+              "status": "PASSED",
+              "blocker_codes": []
+            },
+            {
+              "gate": "DEMAND",
+              "evaluated_before_score": true,
+              "status": "PASSED",
+              "blocker_codes": []
+            },
+            {
+              "gate": "CAPABILITY",
+              "evaluated_before_score": true,
+              "status": "PASSED",
+              "blocker_codes": []
+            },
+            {
+              "gate": "POLICY",
+              "evaluated_before_score": true,
+              "status": "PASSED",
+              "blocker_codes": []
+            },
+            {
+              "gate": "DUPLICATE_PROTECTION",
+              "evaluated_before_score": true,
+              "status": "PASSED",
+              "blocker_codes": []
+            },
+            {
+              "gate": "PROJECTION",
+              "evaluated_before_score": true,
+              "status": "PASSED",
+              "blocker_codes": []
+            },
+            {
+              "gate": "PROTOCOL_BUDGET_READINESS",
+              "evaluated_before_score": true,
+              "status": "PASSED",
+              "blocker_codes": []
+            },
+            {
+              "gate": "NON_SERVING_SAFETY",
+              "evaluated_before_score": true,
+              "status": "PASSED",
+              "blocker_codes": []
+            }
+          ],
+          "profile_v1": {
+            "profile_id": "p0-campaign-creation-profile-v1",
+            "version": "1.0.0",
+            "complete": true,
+            "fields": [
+              "advertiser_currency",
+              "unified_campaign",
+              "unified_ad_group",
+              "search_delivery",
+              "responsive_ad",
+              "geography",
+              "schedule",
+              "landing",
+              "tracking",
+              "negative_phrases",
+              "explicit_keywords",
+              "autotargeting_policy",
+              "metrika_binding",
+              "measurement_plan"
+            ],
+            "unsupported_selected_fields": []
+          },
+          "score": {
+            "value": 88,
+            "rank": 1,
+            "coverage_percent": 100,
+            "sensitivity": [
+              88.1667,
+              88.1667
+            ],
+            "comparative_not_predictive": true
+          },
+          "publication": {
+            "preview_only": true,
+            "external_write_calls": 0,
+            "must_end_non_serving": true,
+            "resume_allowed": false
+          }
+        }
+      ],
+      "execution_proof": {
+        "recommendation_set_status": "VIABLE_DRAFTS_AVAILABLE",
+        "viable_count": 2,
+        "authoritative_contracts_executed": [
+          "campaign-fanout-v1",
+          "viability-score/1.0.0",
+          "p0-campaign-creation-profile-v1"
+        ],
+        "external_write_calls": 0
+      }
+    },
+    "controlled_honesty": {
+      "evidence_kind": "CONTROLLED_HONESTY_VARIANTS_FROM_INDEPENDENT_SOURCE",
+      "base_source_digest": "sha256:3781b0a58a40cf89e50eeb101777efcdcd80b9d3353e38805aca2cfccba284db",
+      "cases": [
+        {
+          "case_id": "economics-insufficient",
+          "insufficient_area": "ECONOMICS",
+          "campaigns": [
+            {
+              "draft_id": "draft-312363c9b748a32cec28",
+              "name": "Брендинг для запуска или малого бизнеса · STRATEGY_BASELINE_FALLBACK",
+              "status": "INSUFFICIENT_EVIDENCE",
+              "editable": true,
+              "hard_gates": [
+                {
+                  "gate": "LINEAGE",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "ECONOMICS",
+                  "evaluated_before_score": true,
+                  "status": "REQUIRED_EVIDENCE_MISSING",
+                  "blocker_codes": [
+                    "ECONOMICS_MATERIAL_UNCERTAINTY"
+                  ]
+                },
+                {
+                  "gate": "DESTINATION",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "MEASUREMENT",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "DEMAND",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "CAPABILITY",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "POLICY",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "DUPLICATE_PROTECTION",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "PROJECTION",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "PROTOCOL_BUDGET_READINESS",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "NON_SERVING_SAFETY",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                }
+              ],
+              "profile_v1": {
+                "profile_id": "p0-campaign-creation-profile-v1",
+                "version": "1.0.0",
+                "complete": true,
+                "fields": [
+                  "advertiser_currency",
+                  "unified_campaign",
+                  "unified_ad_group",
+                  "search_delivery",
+                  "responsive_ad",
+                  "geography",
+                  "schedule",
+                  "landing",
+                  "tracking",
+                  "negative_phrases",
+                  "explicit_keywords",
+                  "autotargeting_policy",
+                  "metrika_binding",
+                  "measurement_plan"
+                ],
+                "unsupported_selected_fields": []
+              },
+              "score": {
+                "value": null,
+                "rank": null,
+                "coverage_percent": 0,
+                "sensitivity": [
+                  null,
+                  null
+                ],
+                "comparative_not_predictive": true
+              },
+              "publication": {
+                "preview_only": true,
+                "external_write_calls": 0,
+                "must_end_non_serving": true,
+                "resume_allowed": false
+              }
+            },
+            {
+              "draft_id": "draft-ef3081496c3d4be7c5b2",
+              "name": "Брендинг для запуска или малого бизнеса · Целевое действие",
+              "status": "INSUFFICIENT_EVIDENCE",
+              "editable": true,
+              "hard_gates": [
+                {
+                  "gate": "LINEAGE",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "ECONOMICS",
+                  "evaluated_before_score": true,
+                  "status": "REQUIRED_EVIDENCE_MISSING",
+                  "blocker_codes": [
+                    "ECONOMICS_MATERIAL_UNCERTAINTY"
+                  ]
+                },
+                {
+                  "gate": "DESTINATION",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "MEASUREMENT",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "DEMAND",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "CAPABILITY",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "POLICY",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "DUPLICATE_PROTECTION",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "PROJECTION",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "PROTOCOL_BUDGET_READINESS",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "NON_SERVING_SAFETY",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                }
+              ],
+              "profile_v1": {
+                "profile_id": "p0-campaign-creation-profile-v1",
+                "version": "1.0.0",
+                "complete": true,
+                "fields": [
+                  "advertiser_currency",
+                  "unified_campaign",
+                  "unified_ad_group",
+                  "search_delivery",
+                  "responsive_ad",
+                  "geography",
+                  "schedule",
+                  "landing",
+                  "tracking",
+                  "negative_phrases",
+                  "explicit_keywords",
+                  "autotargeting_policy",
+                  "metrika_binding",
+                  "measurement_plan"
+                ],
+                "unsupported_selected_fields": []
+              },
+              "score": {
+                "value": null,
+                "rank": null,
+                "coverage_percent": 0,
+                "sensitivity": [
+                  null,
+                  null
+                ],
+                "comparative_not_predictive": true
+              },
+              "publication": {
+                "preview_only": true,
+                "external_write_calls": 0,
+                "must_end_non_serving": true,
+                "resume_allowed": false
+              }
+            }
+          ],
+          "repair_plan": [
+            {
+              "priority": 1,
+              "code": "ECONOMICS_MATERIAL_UNCERTAINTY",
+              "action": "Подтвердить value, margin и lead-to-sale inputs; положительный бюджет или вручную введённая стоимость результата не заменяют economics."
+            }
+          ],
+          "execution_proof": {
+            "recommendation_set_status": "NO_VIABLE_DRAFTS",
+            "viable_count": 0,
+            "external_write_calls": 0
+          }
+        },
+        {
+          "case_id": "demand-insufficient",
+          "insufficient_area": "DEMAND",
+          "campaigns": [
+            {
+              "draft_id": "draft-bcc38b89bd8e88618579",
+              "name": "Брендинг для запуска или малого бизнеса · STRATEGY_BASELINE_FALLBACK",
+              "status": "INSUFFICIENT_EVIDENCE",
+              "editable": true,
+              "hard_gates": [
+                {
+                  "gate": "LINEAGE",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "ECONOMICS",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "DESTINATION",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "MEASUREMENT",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "DEMAND",
+                  "evaluated_before_score": true,
+                  "status": "REQUIRED_EVIDENCE_MISSING",
+                  "blocker_codes": [
+                    "DEMAND_EVIDENCE_GAP"
+                  ]
+                },
+                {
+                  "gate": "CAPABILITY",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "POLICY",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "DUPLICATE_PROTECTION",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "PROJECTION",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "PROTOCOL_BUDGET_READINESS",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "NON_SERVING_SAFETY",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                }
+              ],
+              "profile_v1": {
+                "profile_id": "p0-campaign-creation-profile-v1",
+                "version": "1.0.0",
+                "complete": false,
+                "fields": [
+                  "advertiser_currency",
+                  "unified_campaign",
+                  "unified_ad_group",
+                  "search_delivery",
+                  "responsive_ad",
+                  "geography",
+                  "schedule",
+                  "landing",
+                  "tracking",
+                  "negative_phrases",
+                  "explicit_keywords",
+                  "autotargeting_policy",
+                  "metrika_binding",
+                  "measurement_plan"
+                ],
+                "unsupported_selected_fields": []
+              },
+              "score": {
+                "value": null,
+                "rank": null,
+                "coverage_percent": 0,
+                "sensitivity": [
+                  null,
+                  null
+                ],
+                "comparative_not_predictive": true
+              },
+              "publication": {
+                "preview_only": true,
+                "external_write_calls": 0,
+                "must_end_non_serving": true,
+                "resume_allowed": false
+              }
+            },
+            {
+              "draft_id": "draft-e65ca7c7bdf3c81d5e2c",
+              "name": "Брендинг для запуска или малого бизнеса · Целевое действие",
+              "status": "INSUFFICIENT_EVIDENCE",
+              "editable": true,
+              "hard_gates": [
+                {
+                  "gate": "LINEAGE",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "ECONOMICS",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "DESTINATION",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "MEASUREMENT",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "DEMAND",
+                  "evaluated_before_score": true,
+                  "status": "REQUIRED_EVIDENCE_MISSING",
+                  "blocker_codes": [
+                    "DEMAND_EVIDENCE_GAP"
+                  ]
+                },
+                {
+                  "gate": "CAPABILITY",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "POLICY",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "DUPLICATE_PROTECTION",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "PROJECTION",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "PROTOCOL_BUDGET_READINESS",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "NON_SERVING_SAFETY",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                }
+              ],
+              "profile_v1": {
+                "profile_id": "p0-campaign-creation-profile-v1",
+                "version": "1.0.0",
+                "complete": false,
+                "fields": [
+                  "advertiser_currency",
+                  "unified_campaign",
+                  "unified_ad_group",
+                  "search_delivery",
+                  "responsive_ad",
+                  "geography",
+                  "schedule",
+                  "landing",
+                  "tracking",
+                  "negative_phrases",
+                  "explicit_keywords",
+                  "autotargeting_policy",
+                  "metrika_binding",
+                  "measurement_plan"
+                ],
+                "unsupported_selected_fields": []
+              },
+              "score": {
+                "value": null,
+                "rank": null,
+                "coverage_percent": 0,
+                "sensitivity": [
+                  null,
+                  null
+                ],
+                "comparative_not_predictive": true
+              },
+              "publication": {
+                "preview_only": true,
+                "external_write_calls": 0,
+                "must_end_non_serving": true,
+                "resume_allowed": false
+              }
+            }
+          ],
+          "repair_plan": [
+            {
+              "priority": 1,
+              "code": "DEMAND_EVIDENCE_GAP",
+              "action": "Campaign Draft lacks required comparable demand evidence; unavailable is not zero demand."
+            }
+          ],
+          "execution_proof": {
+            "recommendation_set_status": "NO_VIABLE_DRAFTS",
+            "viable_count": 0,
+            "external_write_calls": 0
+          }
+        },
+        {
+          "case_id": "measurement-insufficient",
+          "insufficient_area": "MEASUREMENT",
+          "campaigns": [
+            {
+              "draft_id": "draft-312363c9b748a32cec28",
+              "name": "Брендинг для запуска или малого бизнеса · STRATEGY_BASELINE_FALLBACK",
+              "status": "BLOCKED",
+              "editable": true,
+              "hard_gates": [
+                {
+                  "gate": "LINEAGE",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "ECONOMICS",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "DESTINATION",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "MEASUREMENT",
+                  "evaluated_before_score": true,
+                  "status": "FAILED",
+                  "blocker_codes": [
+                    "MEASUREMENT_READINESS_BLOCKED",
+                    "PUBLICATION_MEASUREMENT_READINESS_BLOCKED"
+                  ]
+                },
+                {
+                  "gate": "DEMAND",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "CAPABILITY",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "POLICY",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "DUPLICATE_PROTECTION",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "PROJECTION",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "PROTOCOL_BUDGET_READINESS",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "NON_SERVING_SAFETY",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                }
+              ],
+              "profile_v1": {
+                "profile_id": "p0-campaign-creation-profile-v1",
+                "version": "1.0.0",
+                "complete": false,
+                "fields": [
+                  "advertiser_currency",
+                  "unified_campaign",
+                  "unified_ad_group",
+                  "search_delivery",
+                  "responsive_ad",
+                  "geography",
+                  "schedule",
+                  "landing",
+                  "tracking",
+                  "negative_phrases",
+                  "explicit_keywords",
+                  "autotargeting_policy",
+                  "metrika_binding",
+                  "measurement_plan"
+                ],
+                "unsupported_selected_fields": []
+              },
+              "score": {
+                "value": null,
+                "rank": null,
+                "coverage_percent": 0,
+                "sensitivity": [
+                  null,
+                  null
+                ],
+                "comparative_not_predictive": true
+              },
+              "publication": {
+                "preview_only": true,
+                "external_write_calls": 0,
+                "must_end_non_serving": true,
+                "resume_allowed": false
+              }
+            }
+          ],
+          "repair_plan": [
+            {
+              "priority": 1,
+              "code": "PUBLICATION_MEASUREMENT_READINESS_BLOCKED",
+              "action": "Выбранный бизнес-результат пока нельзя надёжно наблюдать; выполните подготовленный measurement repair plan."
+            }
+          ],
+          "execution_proof": {
+            "recommendation_set_status": "NO_VIABLE_DRAFTS",
+            "viable_count": 0,
+            "external_write_calls": 0
+          }
+        },
+        {
+          "case_id": "destination-insufficient",
+          "insufficient_area": "DESTINATION",
+          "campaigns": [
+            {
+              "draft_id": "draft-312363c9b748a32cec28",
+              "name": "Брендинг для запуска или малого бизнеса · STRATEGY_BASELINE_FALLBACK",
+              "status": "BLOCKED",
+              "editable": true,
+              "hard_gates": [
+                {
+                  "gate": "LINEAGE",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "ECONOMICS",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "DESTINATION",
+                  "evaluated_before_score": true,
+                  "status": "FAILED",
+                  "blocker_codes": [
+                    "DESTINATION_SCOPE_BLOCKED",
+                    "PUBLICATION_DESTINATION_SCOPE_BLOCKED"
+                  ]
+                },
+                {
+                  "gate": "MEASUREMENT",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "DEMAND",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "CAPABILITY",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "POLICY",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "DUPLICATE_PROTECTION",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "PROJECTION",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "PROTOCOL_BUDGET_READINESS",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "NON_SERVING_SAFETY",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                }
+              ],
+              "profile_v1": {
+                "profile_id": "p0-campaign-creation-profile-v1",
+                "version": "1.0.0",
+                "complete": false,
+                "fields": [
+                  "advertiser_currency",
+                  "unified_campaign",
+                  "unified_ad_group",
+                  "search_delivery",
+                  "responsive_ad",
+                  "geography",
+                  "schedule",
+                  "landing",
+                  "tracking",
+                  "negative_phrases",
+                  "explicit_keywords",
+                  "autotargeting_policy",
+                  "metrika_binding",
+                  "measurement_plan"
+                ],
+                "unsupported_selected_fields": []
+              },
+              "score": {
+                "value": null,
+                "rank": null,
+                "coverage_percent": 0,
+                "sensitivity": [
+                  null,
+                  null
+                ],
+                "comparative_not_predictive": true
+              },
+              "publication": {
+                "preview_only": true,
+                "external_write_calls": 0,
+                "must_end_non_serving": true,
+                "resume_allowed": false
+              }
+            },
+            {
+              "draft_id": "draft-ef3081496c3d4be7c5b2",
+              "name": "Брендинг для запуска или малого бизнеса · Целевое действие",
+              "status": "BLOCKED",
+              "editable": true,
+              "hard_gates": [
+                {
+                  "gate": "LINEAGE",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "ECONOMICS",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "DESTINATION",
+                  "evaluated_before_score": true,
+                  "status": "FAILED",
+                  "blocker_codes": [
+                    "DESTINATION_SCOPE_BLOCKED",
+                    "PUBLICATION_DESTINATION_SCOPE_BLOCKED"
+                  ]
+                },
+                {
+                  "gate": "MEASUREMENT",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "DEMAND",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "CAPABILITY",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "POLICY",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "DUPLICATE_PROTECTION",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "PROJECTION",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "PROTOCOL_BUDGET_READINESS",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "NON_SERVING_SAFETY",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                }
+              ],
+              "profile_v1": {
+                "profile_id": "p0-campaign-creation-profile-v1",
+                "version": "1.0.0",
+                "complete": false,
+                "fields": [
+                  "advertiser_currency",
+                  "unified_campaign",
+                  "unified_ad_group",
+                  "search_delivery",
+                  "responsive_ad",
+                  "geography",
+                  "schedule",
+                  "landing",
+                  "tracking",
+                  "negative_phrases",
+                  "explicit_keywords",
+                  "autotargeting_policy",
+                  "metrika_binding",
+                  "measurement_plan"
+                ],
+                "unsupported_selected_fields": []
+              },
+              "score": {
+                "value": null,
+                "rank": null,
+                "coverage_percent": 0,
+                "sensitivity": [
+                  null,
+                  null
+                ],
+                "comparative_not_predictive": true
+              },
+              "publication": {
+                "preview_only": true,
+                "external_write_calls": 0,
+                "must_end_non_serving": true,
+                "resume_allowed": false
+              }
+            }
+          ],
+          "repair_plan": [
+            {
+              "priority": 1,
+              "code": "PUBLICATION_DESTINATION_SCOPE_BLOCKED",
+              "action": "Destination не готова для каждого device scope, который способен обслуживать Campaign Draft."
+            }
+          ],
+          "execution_proof": {
+            "recommendation_set_status": "NO_VIABLE_DRAFTS",
+            "viable_count": 0,
+            "external_write_calls": 0
+          }
+        },
+        {
+          "case_id": "capability-insufficient",
+          "insufficient_area": "CAPABILITY",
+          "campaigns": [
+            {
+              "draft_id": "draft-312363c9b748a32cec28",
+              "name": "Брендинг для запуска или малого бизнеса · STRATEGY_BASELINE_FALLBACK",
+              "status": "BLOCKED",
+              "editable": true,
+              "hard_gates": [
+                {
+                  "gate": "LINEAGE",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "ECONOMICS",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "DESTINATION",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "MEASUREMENT",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "DEMAND",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "CAPABILITY",
+                  "evaluated_before_score": true,
+                  "status": "REQUIRED_EVIDENCE_MISSING",
+                  "blocker_codes": [
+                    "DIRECT_UNIFIED_CAMPAIGN_UNAVAILABLE",
+                    "PUBLICATION_DIRECT_UNIFIED_CAMPAIGN_UNAVAILABLE"
+                  ]
+                },
+                {
+                  "gate": "POLICY",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "DUPLICATE_PROTECTION",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "PROJECTION",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "PROTOCOL_BUDGET_READINESS",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "NON_SERVING_SAFETY",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                }
+              ],
+              "profile_v1": {
+                "profile_id": "p0-campaign-creation-profile-v1",
+                "version": "1.0.0",
+                "complete": false,
+                "fields": [
+                  "advertiser_currency",
+                  "unified_campaign",
+                  "unified_ad_group",
+                  "search_delivery",
+                  "responsive_ad",
+                  "geography",
+                  "schedule",
+                  "landing",
+                  "tracking",
+                  "negative_phrases",
+                  "explicit_keywords",
+                  "autotargeting_policy",
+                  "metrika_binding",
+                  "measurement_plan"
+                ],
+                "unsupported_selected_fields": []
+              },
+              "score": {
+                "value": null,
+                "rank": null,
+                "coverage_percent": 0,
+                "sensitivity": [
+                  null,
+                  null
+                ],
+                "comparative_not_predictive": true
+              },
+              "publication": {
+                "preview_only": true,
+                "external_write_calls": 0,
+                "must_end_non_serving": true,
+                "resume_allowed": false
+              }
+            },
+            {
+              "draft_id": "draft-ef3081496c3d4be7c5b2",
+              "name": "Брендинг для запуска или малого бизнеса · Целевое действие",
+              "status": "BLOCKED",
+              "editable": true,
+              "hard_gates": [
+                {
+                  "gate": "LINEAGE",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "ECONOMICS",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "DESTINATION",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "MEASUREMENT",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "DEMAND",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "CAPABILITY",
+                  "evaluated_before_score": true,
+                  "status": "REQUIRED_EVIDENCE_MISSING",
+                  "blocker_codes": [
+                    "DIRECT_UNIFIED_CAMPAIGN_UNAVAILABLE",
+                    "PUBLICATION_DIRECT_UNIFIED_CAMPAIGN_UNAVAILABLE"
+                  ]
+                },
+                {
+                  "gate": "POLICY",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "DUPLICATE_PROTECTION",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "PROJECTION",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "PROTOCOL_BUDGET_READINESS",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                },
+                {
+                  "gate": "NON_SERVING_SAFETY",
+                  "evaluated_before_score": true,
+                  "status": "PASSED",
+                  "blocker_codes": []
+                }
+              ],
+              "profile_v1": {
+                "profile_id": "p0-campaign-creation-profile-v1",
+                "version": "1.0.0",
+                "complete": false,
+                "fields": [
+                  "advertiser_currency",
+                  "unified_campaign",
+                  "unified_ad_group",
+                  "search_delivery",
+                  "responsive_ad",
+                  "geography",
+                  "schedule",
+                  "landing",
+                  "tracking",
+                  "negative_phrases",
+                  "explicit_keywords",
+                  "autotargeting_policy",
+                  "metrika_binding",
+                  "measurement_plan"
+                ],
+                "unsupported_selected_fields": []
+              },
+              "score": {
+                "value": null,
+                "rank": null,
+                "coverage_percent": 0,
+                "sensitivity": [
+                  null,
+                  null
+                ],
+                "comparative_not_predictive": true
+              },
+              "publication": {
+                "preview_only": true,
+                "external_write_calls": 0,
+                "must_end_non_serving": true,
+                "resume_allowed": false
+              }
+            }
+          ],
+          "repair_plan": [
+            {
+              "priority": 1,
+              "code": "PUBLICATION_DIRECT_UNIFIED_CAMPAIGN_UNAVAILABLE",
+              "action": "Exact Direct account does not report UNIFIED_CAMPAIGN eligibility."
+            }
+          ],
+          "execution_proof": {
+            "recommendation_set_status": "NO_VIABLE_DRAFTS",
+            "viable_count": 0,
+            "external_write_calls": 0
+          }
+        }
+      ]
+    },
+    "browser_regression": {
+      "evidence_kind": "CONTROLLED_BROWSER_FIXTURE_EVIDENCE",
+      "fixture_is_independent_evidence": false,
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "expected_positive": "At least one editable VIABLE Campaign Draft is visible in Campaign Canvas.",
+      "expected_honesty": "No false VIABLE Campaign Draft is visible and a priority repair plan is shown.",
+      "executable_test": "tests/e2e/test_p0_production_candidate.py"
+    }
+  },
+  "no_write_proof": {
+    "provider_mutations": [],
+    "external_write_calls": 0,
+    "production_write_attempts": 0,
+    "live_authority_issued": false,
+    "impressions_started": 0,
+    "spend_started_rub": 0,
+    "browser_cabinets_used": false
+  },
+  "human_checkpoint": {
+    "issue": 241,
+    "required": true,
+    "verdict": "PENDING_HUMAN_VERDICT",
+    "implementation_may_claim_acceptance": false
+  }
+}
