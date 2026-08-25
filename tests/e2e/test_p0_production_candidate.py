@@ -853,34 +853,41 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 )
                 checkpoint("Проверка и создание")
 
-                page.get_by_role(
-                    "button", name="Подтвердить точный пакет", exact=True
+                decision = page.get_by_role(
+                    "region", name="Принять или отклонить точный пакет", exact=True
+                )
+                self.assertIn("Нужно решение", decision.inner_text())
+                self.assertIn(
+                    "Внешних записей, показов и расходов не будет",
+                    decision.inner_text(),
+                )
+                self.assertEqual(
+                    campaign_count,
+                    decision.locator(".owner-package-exact li").count(),
+                )
+                decision.get_by_role(
+                    "button", name="Принять точный пакет", exact=True
                 ).click()
                 page.get_by_role(
-                    "button", name="Подтвердить исправление", exact=True
+                    "heading", name="Решение по точному пакету записано", exact=True
                 ).wait_for(timeout=20_000)
-                self.assertTrue(
-                    page.get_by_text("Создана и оставлена без показов", exact=True).is_visible()
+                decision = page.get_by_role(
+                    "region", name="Принять или отклонить точный пакет", exact=True
                 )
-                self.assertTrue(
-                    page.get_by_text("Нужно исправить формулировку", exact=True).is_visible()
+                self.assertIn("Принято", decision.inner_text())
+                self.assertIn("Внешних записей — 0", decision.inner_text())
+                self.assertIn("показы — 0", decision.inner_text())
+                self.assertIn("расходы — 0", decision.inner_text())
+                self.assertIn("отдельно разрешаемом реальном этапе", decision.inner_text())
+                self.assertEqual(0, decision.get_by_role("button").count())
+                self.assertEqual(
+                    0,
+                    page.get_by_text("Создана и оставлена без показов", exact=True).count(),
                 )
-                self.assertTrue(
-                    page.get_by_text(
-                        re.compile(r"Подайте заявку на участие без гарантии результата")
-                    ).first.is_visible()
+                self.assertEqual(
+                    0,
+                    page.get_by_text("Нужно исправить формулировку", exact=True).count(),
                 )
-                checkpoint("Проверка и создание")
-
-                page.get_by_role(
-                    "button", name="Подтвердить исправление", exact=True
-                ).wait_for()
-                page.get_by_role(
-                    "button", name="Подтвердить исправление", exact=True
-                ).click()
-                page.get_by_role(
-                    "heading", name="Создание завершено без запуска показов", exact=True
-                ).wait_for(timeout=20_000)
                 checkpoint("Проверка и создание")
 
                 visible_copy = "\n".join(visible_copy_samples)

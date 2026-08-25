@@ -184,6 +184,25 @@ export default function P0Client() {
     }
   }
 
+  async function submitPackageDecision(handle: string) {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const next = await request("/api/p0", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ handle, values: {} }),
+      });
+      setProjection(next);
+      setSelectedStage(next.journey.currentStage);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function submitStrategyEdit(event: FormEvent<HTMLFormElement>, handle: string, fields: OwnerActionField[]) {
     event.preventDefault();
     if (busy) return;
@@ -386,6 +405,12 @@ export default function P0Client() {
             {projection.packageSummary.outcomes.length > 0 && <ul>{projection.packageSummary.outcomes.map((item) => <li key={item.campaign}><strong>{item.campaign}</strong><span>{item.outcome}</span></li>)}</ul>}
           </section>}
 
+          {activeStage === "review" && activeStageStatus !== "upcoming" && projection.packageDecision && <PackageOwnerDecision
+            decision={projection.packageDecision}
+            busy={busy}
+            onDecision={submitPackageDecision}
+          />}
+
           {viewingCurrentStage && projection.materialUnknowns.length > 0 && <details className={styles.disclosure} open><summary>СУЩЕСТВЕННЫЕ НЕИЗВЕСТНЫЕ</summary><ul>{projection.materialUnknowns.map((item) => <li key={item}>{item}</li>)}</ul></details>}
 
           {viewingCurrentStage && projection.primaryAction && <form key={projection.primaryAction.handle} className="owner-action" onSubmit={submit}>
@@ -403,8 +428,42 @@ export default function P0Client() {
 }
 
 type StrategyOwnerReviewProjection = NonNullable<NonNullable<OwnerJourneyProjection["campaignStrategy"]>["ownerReview"]>;
-
+type PackageDecisionProjection = NonNullable<OwnerJourneyProjection["packageDecision"]>;
 type CampaignOptionProjection = OwnerJourneyProjection["campaignOptions"][number];
+
+function PackageOwnerDecision({
+  decision,
+  busy,
+  onDecision,
+}: {
+  decision: PackageDecisionProjection;
+  busy: boolean;
+  onDecision: (handle: string) => Promise<void>;
+}) {
+  return <section className="owner-package-decision" data-decision-status={decision.status} aria-labelledby="owner-package-decision-title">
+    <header>
+      <div><p className="owner-eyebrow">ОДНО ЯВНОЕ РЕШЕНИЕ ВЛАДЕЛЬЦА</p><h2 id="owner-package-decision-title">Принять или отклонить точный пакет</h2><p>{decision.exactVersion}</p></div>
+      <strong>{decision.status}</strong>
+    </header>
+    <p className="owner-package-safety" role="status">{decision.safety}</p>
+    <section className="owner-package-recommendation"><span>Рекомендация</span><h3>{decision.recommendation}</h3></section>
+    <section className="owner-package-exact" aria-labelledby="owner-package-exact-title">
+      <h3 id="owner-package-exact-title">Точная видимая версия</h3>
+      <ol>{decision.campaigns.map((campaign) => <li key={`${campaign.order}-${campaign.name}`}><b>{campaign.order}</b><strong>{campaign.name}</strong><span>{campaign.budget} · {campaign.period}</span></li>)}</ol>
+    </section>
+    <div className="owner-package-decision-grid">
+      <section><h3>Альтернативы</h3><ul>{decision.alternatives.map((item) => <li key={item}>{item}</li>)}</ul></section>
+      <section><h3>Последствия</h3><ul>{decision.consequences.map((item) => <li key={item}>{item}</li>)}</ul></section>
+      <section><h3>Риски и границы</h3><ul>{decision.risks.map((item) => <li key={item}>{item}</li>)}</ul></section>
+      <section><h3>Следующий реальный этап</h3><p>{decision.nextRealStage}</p></section>
+    </div>
+    {decision.history.length > 0 && <details className="owner-package-history"><summary>Сохранённые решения · {decision.history.length}</summary><ol>{decision.history.map((item, index) => <li key={`${item.decidedAt}-${index}`}><strong>{item.verdict}</strong><span>{item.exactVersion}</span><small>{item.decidedAt}</small></li>)}</ol></details>}
+    {(decision.acceptHandle || decision.rejectHandle) && <footer>
+      {decision.rejectHandle && <button type="button" onClick={() => onDecision(decision.rejectHandle!)} disabled={busy}>Отклонить и вернуться к редактированию</button>}
+      {decision.acceptHandle && <button type="button" className="owner-package-accept" onClick={() => onDecision(decision.acceptHandle!)} disabled={busy}>{busy ? "Записываю решение…" : "Принять точный пакет"}</button>}
+    </footer>}
+  </section>;
+}
 
 function StrategyOwnerReview({
   review,

@@ -204,6 +204,7 @@ export type DecisionInvalidationReason =
   | "EVIDENCE_LINEAGE_CHANGED"
   | "PLAYBOOK_REGENERATION"
   | "COMPETITOR_GUIDANCE_REGENERATION"
+  | "OWNER_REJECTED_PACKAGE"
   | "LEGACY_AUTHORITY_REQUIRES_REVIEW";
 
 export type DecisionInvalidation = {

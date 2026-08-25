@@ -78,6 +78,7 @@ import {
 import {
   buildDecisionInvalidation,
   buildHumanDecisionGate,
+  buildPackageOwnerDecision,
   buildPackageReview,
   emptyShortlist,
   PACKAGE_CONFIRMATION_TOKEN,
@@ -89,6 +90,7 @@ import {
   shortlistSelectionBlockReason,
   verifyDecisionInvalidation,
   verifyHumanDecisionGate,
+  verifyPackageOwnerDecision,
   verifyPackageReview,
   verifyShortlist,
   type DecisionInvalidation,
@@ -96,6 +98,7 @@ import {
   type DirectAccountBinding,
   type HumanDecisionGate,
   type P0Shortlist,
+  type PackageOwnerDecision,
   type PackageReview,
 } from "./campaign-decision-gate.ts";
 import {
@@ -185,14 +188,14 @@ import {
 } from "./measurement-destination-readiness.ts";
 
 export const P0_APPLICATION_CONTRACT = "mox-adv.p0.application";
-export const P0_APPLICATION_CONTRACT_VERSION = "1.30.0";
-export const P0_DOCUMENT_SCHEMA = "p0-application-document-v18";
-const P0_LEGACY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4", "p0-application-document-v5", "p0-application-document-v6", "p0-application-document-v7", "p0-application-document-v8", "p0-application-document-v9", "p0-application-document-v10", "p0-application-document-v11", "p0-application-document-v12", "p0-application-document-v13", "p0-application-document-v14", "p0-application-document-v15", "p0-application-document-v16", "p0-application-document-v17"]);
+export const P0_APPLICATION_CONTRACT_VERSION = "1.31.0";
+export const P0_DOCUMENT_SCHEMA = "p0-application-document-v19";
+const P0_LEGACY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4", "p0-application-document-v5", "p0-application-document-v6", "p0-application-document-v7", "p0-application-document-v8", "p0-application-document-v9", "p0-application-document-v10", "p0-application-document-v11", "p0-application-document-v12", "p0-application-document-v13", "p0-application-document-v14", "p0-application-document-v15", "p0-application-document-v16", "p0-application-document-v17", "p0-application-document-v18"]);
 const P0_PRE_PACKAGE_AUTHORITY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4"]);
 export const P0_CONTEXT_SCHEMA = "p0-context-v2";
 const P0_LEGACY_CONTEXT_SCHEMA = "p0-context-v1";
 export const P0_CONTEXT_PREFLIGHT_MAX_AGE_MS = 5 * 60_000;
-export const P0_AGENT_POLICY_VERSION = "p0-agent-policy-v11";
+export const P0_AGENT_POLICY_VERSION = "p0-agent-policy-v12";
 export const P0_AGENT_OBJECTIVE: P0AgentApplicationContract["objective"] = {
   kind: "COORDINATE_OWNER_JOURNEY",
   statement: "Coordinate bounded safe research, queued reads, approved dispatch, and local correction preparation for the current P0 owner journey, preserving application truth and stopping only at a Critical Decision or Material Uncertainty.",
@@ -407,6 +410,7 @@ export type P0Document = {
   shortlist: P0Shortlist | null;
   package_review: PackageReview | null;
   human_decision_gate: HumanDecisionGate | null;
+  package_owner_decisions: PackageOwnerDecision[];
   package_execution: PackageExecution | null;
   package_corrections: PackageCorrection[];
   last_decision_invalidation: DecisionInvalidation | null;
@@ -707,6 +711,11 @@ export const P0_COMMAND_TRUTH_TABLE = {
       && state.package_review.business_projection.preflight.passed === 9
       && !state.human_decision_gate && state.shortlist?.selections.length && packageNotDispatched(state),
   ),
+  reject_package: (state: P0Document) => Boolean(
+    state.package_review?.business_projection.preflight.status === "PASS"
+      && state.package_review.business_projection.preflight.passed === 9
+      && !state.human_decision_gate && state.shortlist?.selections.length && packageNotDispatched(state),
+  ),
   dispatch_package: (state: P0Document) => Boolean(
     state.package_review
       && state.human_decision_gate
@@ -776,6 +785,7 @@ function emptyDocument(): P0Document {
     shortlist: null,
     package_review: null,
     human_decision_gate: null,
+    package_owner_decisions: [],
     package_execution: null,
     package_corrections: [],
     last_decision_invalidation: null,
@@ -1526,6 +1536,7 @@ function agentFreshUntil(context: P0Context) {
 
 function agentPriorOutcomes(state: P0Document) {
   return {
+    package_owner_decisions: state.package_owner_decisions,
     package_execution: state.package_execution,
     package_corrections: state.package_corrections,
     external_write_intent: state.external_write_intent,
@@ -2429,6 +2440,19 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
     lineageError("Campaign Strategy не связана с моделью бизнеса.");
   }
 
+  if (!Object.hasOwn(raw, "package_owner_decisions")) {
+    if (!legacyDocument) lineageError("same-schema document field package_owner_decisions отсутствует.");
+    state.package_owner_decisions = [];
+    changed = true;
+  } else if (!Array.isArray(state.package_owner_decisions)) {
+    lineageError("package owner decisions должны быть persisted array.");
+  }
+  for (const decision of state.package_owner_decisions) {
+    if (!await verifyPackageOwnerDecision(decision, decision.exact_review)) {
+      lineageError("package owner decision journal содержит изменённую или неполную запись.");
+    }
+  }
+
   if (!Object.hasOwn(raw, "package_corrections")) {
     if (!legacyDocument) lineageError("same-schema document field package_corrections отсутствует.");
     state.package_corrections = [];
@@ -2995,9 +3019,32 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
         lineageError("package review identity или exact authority snapshot не прошли проверку.");
       }
     }
+    if (state.human_decision_gate && legacyDocument && state.package_review) {
+      const acceptedDecision = await buildPackageOwnerDecision(
+        state.package_review,
+        "ACCEPTED",
+        state.human_decision_gate.confirmed_at,
+      );
+      const migratedGate = await buildHumanDecisionGate(state.package_review, state.human_decision_gate.confirmed_at);
+      if (JSON.stringify(state.human_decision_gate) !== JSON.stringify(migratedGate)) {
+        state.human_decision_gate = migratedGate;
+        changed = true;
+      }
+      if (!state.package_owner_decisions.some((decision) => decision.decision_id === acceptedDecision.decision_id)) {
+        state.package_owner_decisions.push(acceptedDecision);
+        changed = true;
+      }
+    }
     if (state.human_decision_gate) {
-      if (!state.package_review || !await verifyHumanDecisionGate(state.human_decision_gate, state.package_review)) {
-        lineageError("Human Decision Gate confirmation или package authority не прошли проверку.");
+      const activeDecision = state.package_owner_decisions.find((decision) =>
+        decision.decision_id === state.human_decision_gate?.owner_decision_id
+      );
+      if (!state.package_review
+        || !activeDecision
+        || activeDecision.verdict !== "ACCEPTED"
+        || !await verifyPackageOwnerDecision(activeDecision, state.package_review)
+        || !await verifyHumanDecisionGate(state.human_decision_gate, state.package_review)) {
+        lineageError("Human Decision Gate confirmation, owner decision journal или package authority не прошли проверку.");
       }
     }
     if (state.package_execution && legacyDocument && record(state.package_execution).schema_version === "p0-package-execution-v1") {
@@ -3290,8 +3337,11 @@ function pendingAgentSafeWork(state: P0Document) {
 }
 
 function approvedAgentDispatch(state: P0Document) {
-  if (state.package_review && state.human_decision_gate
-    && (!state.package_execution || state.package_execution.items.some((item) => ["QUEUED", "DISPATCHING", "RECONCILIATION_REQUIRED"].includes(item.status)))) {
+  // Feature #246 deliberately stops after the local owner decision. Initial
+  // provider creation needs the separate real-execution authorization in #250.
+  // Already-started durable execution may still be reconciled fail-closed.
+  if (state.package_review && state.human_decision_gate && state.package_execution
+    && state.package_execution.items.some((item) => ["QUEUED", "DISPATCHING", "RECONCILIATION_REQUIRED"].includes(item.status))) {
     return { kind: "PACKAGE" as const, correction_id: null };
   }
   const correction = state.package_corrections.find((item) => item.status === "READY_TO_RESUBMIT"
@@ -5762,7 +5812,43 @@ export class P0Application {
       })) {
         fail("P0_PACKAGE_STALE", "Package review больше не совпадает с current authoritative state.");
       }
+      const ownerDecision = await buildPackageOwnerDecision(state.package_review, "ACCEPTED", confirmedAt);
+      state.package_owner_decisions.push(ownerDecision);
       state.human_decision_gate = await buildHumanDecisionGate(state.package_review, confirmedAt);
+    } else if (action === "reject_package") {
+      if (payload.confirmation !== "REJECT_EXACT_SHORTLIST_PACKAGE") {
+        fail("P0_PACKAGE_REJECTION_REQUIRED", "Нужно точное отклонение REJECT_EXACT_SHORTLIST_PACKAGE.");
+      }
+      if (!state.package_review || !state.shortlist || !state.recommendation_set || !state.strategy || !state.context_state || !state.analytics_evidence_snapshot) {
+        fail("P0_PACKAGE_REVIEW_MISSING", "Сначала выполните current package review.");
+      }
+      if (payload.package_review_id !== state.package_review.package_review_id || payload.package_id !== state.package_review.package_id) {
+        fail("P0_PACKAGE_IDENTITY_STALE", "Package review identity изменилась; повторите review перед решением.");
+      }
+      const rejectedAt = this.adapters.now();
+      const binding = directAccountBinding(state);
+      if (!binding || !await verifyPackageReview({
+        review: state.package_review,
+        shortlist: state.shortlist,
+        recommendationSet: state.recommendation_set,
+        strategyRevisionId: String(state.strategy.strategy_revision_id ?? ""),
+        strategy: state.strategy as Record<string, unknown>,
+        businessModel: state.business_model as unknown as Record<string, unknown>,
+        analyticsEvidenceSnapshot: state.analytics_evidence_snapshot as unknown as Record<string, unknown>,
+        measurementDestinationReadiness: state.measurement_destination_readiness as unknown as Record<string, unknown>,
+        accountBinding: binding,
+        capabilitySnapshot: state.context_state.facts.direct.capability_snapshot as unknown as Record<string, unknown>,
+        analyticsEvidenceSnapshotId: state.analytics_evidence_snapshot.snapshot_id,
+      })) {
+        fail("P0_PACKAGE_STALE", "Package review больше не совпадает с current authoritative state.");
+      }
+      state.package_owner_decisions.push(await buildPackageOwnerDecision(state.package_review, "REJECTED", rejectedAt));
+      await invalidateDecisionAuthority(
+        state,
+        "OWNER_REJECTED_PACKAGE",
+        "Owner rejected the exact visible package without external change.",
+        rejectedAt,
+      );
     } else if (action === "dispatch_package") {
       if (!state.package_review || !state.human_decision_gate || !state.recommendation_set || !state.context_state) {
         fail("P0_PACKAGE_AUTHORITY_MISSING", "Package dispatch требует current package review, exact Human Decision Gate, Recommendation Set и Context.");

@@ -306,6 +306,35 @@
 .owner-package > ul { display: grid; gap: 6px; padding: 0; list-style: none; }
 .owner-package > ul li { display: flex; gap: 16px; justify-content: space-between; padding: 10px 12px; border: 1px solid var(--owner-line); border-radius: 7px; background: white; font-size: 8px; }
 .owner-package > ul span { color: var(--owner-muted); text-align: right; }
+.owner-package-decision { margin-top: 18px; padding: 18px; border: 2px solid var(--owner-green); border-radius: 11px; background: #f8fcf9; }
+.owner-package-decision[data-decision-status="Принято"] { background: #eff8f2; }
+.owner-package-decision > header { display: flex; gap: 18px; justify-content: space-between; align-items: flex-start; }
+.owner-package-decision > header h2 { margin: 5px 0; font-size: 22px; }
+.owner-package-decision > header p { margin: 0; color: var(--owner-muted); font-size: 8px; }
+.owner-package-decision > header > strong { padding: 7px 9px; border-radius: 999px; color: var(--owner-green-dark); background: var(--owner-soft); font-size: 8px; white-space: nowrap; }
+.owner-package-safety { margin: 12px 0 0; padding: 11px 13px; border-left: 4px solid var(--owner-green); border-radius: 7px; color: var(--owner-green-dark); background: white; font-size: 9px; font-weight: 750; line-height: 1.5; }
+.owner-package-recommendation { margin-top: 11px; padding: 12px; border: 1px solid var(--owner-line); border-radius: 8px; background: white; }
+.owner-package-recommendation span { color: var(--owner-green-dark); font-size: 7px; font-weight: 850; text-transform: uppercase; }
+.owner-package-recommendation h3 { margin: 6px 0 0; font-size: 13px; line-height: 1.45; }
+.owner-package-exact { margin-top: 12px; }
+.owner-package-exact > h3, .owner-package-decision-grid h3 { margin: 0 0 8px; font-size: 10px; }
+.owner-package-exact ol { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.owner-package-exact li { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 9px; align-items: center; padding: 10px; border: 1px solid var(--owner-line); border-radius: 7px; background: white; }
+.owner-package-exact li b { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 50%; color: white; background: var(--owner-green); font-size: 7px; }
+.owner-package-exact li strong { font-size: 8px; overflow-wrap: anywhere; }
+.owner-package-exact li span { color: var(--owner-muted); font-size: 7px; text-align: right; }
+.owner-package-decision-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 11px; }
+.owner-package-decision-grid section { padding: 11px; border: 1px solid var(--owner-line); border-radius: 7px; background: white; }
+.owner-package-decision-grid ul { display: grid; gap: 5px; margin: 0; padding-left: 15px; }
+.owner-package-decision-grid li, .owner-package-decision-grid p { margin: 0; color: var(--owner-muted); font-size: 7px; line-height: 1.45; }
+.owner-package-history { margin-top: 11px; padding-top: 10px; border-top: 1px solid var(--owner-line); }
+.owner-package-history summary { cursor: pointer; color: var(--owner-green-dark); font-size: 8px; font-weight: 800; }
+.owner-package-history ol { display: grid; gap: 5px; margin: 8px 0 0; padding: 0; list-style: none; }
+.owner-package-history li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; padding: 8px 10px; border-radius: 6px; background: white; font-size: 7px; }
+.owner-package-history li span, .owner-package-history li small { color: var(--owner-muted); }
+.owner-package-decision > footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 13px; padding-top: 12px; border-top: 1px solid var(--owner-line); }
+.owner-package-decision > footer button { min-height: 40px; padding: 0 14px; border: 1px solid var(--owner-green); border-radius: 7px; color: var(--owner-green-dark); background: white; font-size: 8px; font-weight: 850; }
+.owner-package-decision > footer .owner-package-accept { color: white; background: var(--owner-green); }
 .owner-action { margin-top: 20px; padding: 20px; border: 2px solid var(--owner-green); border-radius: 11px; background: #f8fcf9; }
 .owner-action h2 { margin: 6px 0; font-size: 22px; }
 .owner-action header > p:last-child { margin: 0; color: var(--owner-muted); font-size: 9px; line-height: 1.5; }

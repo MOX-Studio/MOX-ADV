@@ -317,6 +317,20 @@ export type OwnerJourneyProjection = {
     execution: string;
     outcomes: Array<{ campaign: string; outcome: string }>;
   } | null;
+  packageDecision: {
+    status: "Нужно решение" | "Принято";
+    exactVersion: string;
+    recommendation: string;
+    alternatives: string[];
+    consequences: string[];
+    risks: string[];
+    nextRealStage: string;
+    safety: string;
+    campaigns: Array<{ order: number; name: string; budget: string; period: string }>;
+    acceptHandle: string | null;
+    rejectHandle: string | null;
+    history: Array<{ verdict: "Принято" | "Отклонено"; decidedAt: string; exactVersion: string }>;
+  } | null;
   primaryAction: {
     handle: string;
     label: string;
@@ -1899,7 +1913,9 @@ function packageSummary(view: InternalView, campaigns: OwnerJourneyProjection["c
     }),
     execution: execution
       ? completed ? "Создание завершено" : "Агент продолжает создание и проверку"
-      : state.human_decision_gate ? "Решение подтверждено" : "Ожидает решения владельца",
+      : state.human_decision_gate
+        ? "Решение записано без внешней записи; реальное создание требует отдельного следующего разрешения"
+        : "Ожидает решения владельца",
     outcomes: (execution?.items ?? []).map((item, index) => ({
       campaign: campaigns[index]?.name ?? `Кампания ${index + 1}`,
       outcome: correctedItemIds.has(item.item_execution_id)
@@ -1907,6 +1923,96 @@ function packageSummary(view: InternalView, campaigns: OwnerJourneyProjection["c
         : executionOutcome(item.status),
     })),
   };
+}
+
+async function packageDecisionHandle(
+  ownerKey: string,
+  view: InternalView,
+  verdict: "ACCEPTED" | "REJECTED",
+) {
+  const review = view.state.package_review;
+  if (!review) return null;
+  return opaqueHandle({
+    ownerKey,
+    state: view.revision,
+    kind: "package-owner-decision",
+    verdict,
+    packageReview: review.package_review_id,
+    package: review.package_id,
+  });
+}
+
+async function packageDecisionProjection(
+  ownerKey: string,
+  view: InternalView,
+): Promise<OwnerJourneyProjection["packageDecision"]> {
+  const state = view.state;
+  const review = state.package_review;
+  if (!review) return null;
+  const accepted = state.human_decision_gate
+    ? state.package_owner_decisions.find((decision) => decision.decision_id === state.human_decision_gate?.owner_decision_id) ?? null
+    : null;
+  const explanation = accepted?.explanation ?? {
+    recommendation: "Принять только показанный точный пакет после полной проверки, если его состав, порядок и ограничения соответствуют вашему решению.",
+    alternatives: ["Принять точный пакет без внешней записи", "Отклонить пакет и вернуться к редактированию"],
+    consequences: [
+      "Принятие фиксирует одноразовое полномочие только для показанных неизменяемых версий.",
+      "Отклонение не выдаёт полномочие и не меняет внешнюю систему.",
+    ],
+    risks: [
+      "Существенное изменение или устаревшая версия отменяют решение и полномочие.",
+      "Полномочие не разрешает показы, расходы или возобновление кампаний.",
+      "Агент и модель не могут расширить состав пакета, аккаунт или разрешённые действия.",
+    ],
+    next_real_stage: "Создание точных кампаний в остановленном состоянии возможно только на следующем отдельно разрешаемом реальном этапе.",
+  };
+  const drafts = state.recommendation_set?.drafts ?? [];
+  const alignment = review.business_projection.budget_alignment;
+  const campaigns = review.authority.ordered_selections.map((selection, index) => {
+    const draft = drafts.find((item) => item.draft_id === selection.draft_id);
+    const budget = alignment.campaigns.find((item) => item.draft_id === selection.draft_id);
+    return {
+      order: index + 1,
+      name: ownerText(draft?.campaign_name, `Кампания ${index + 1}`, 255),
+      budget: `${Number(budget?.test_budget_rub ?? 0).toLocaleString("ru-RU")} ₽`,
+      period: `${ownerText(budget?.period.start_date, "Недоступно", 20)} — ${ownerText(budget?.period.end_date, "Недоступно", 20)}`,
+    };
+  });
+  const canDecide = !state.human_decision_gate
+    && allowed(view, "confirm_package")
+    && allowed(view, "reject_package");
+  return {
+    status: accepted ? "Принято" : "Нужно решение",
+    exactVersion: `${campaigns.length} ${campaigns.length === 1 ? "кампания" : "кампании"} · ${review.business_projection.preflight.passed}/9 проверок · состав и порядок зафиксированы`,
+    recommendation: explanation.recommendation,
+    alternatives: structuredClone(explanation.alternatives),
+    consequences: structuredClone(explanation.consequences),
+    risks: structuredClone(explanation.risks),
+    nextRealStage: explanation.next_real_stage,
+    safety: accepted
+      ? "Решение записано. Внешних записей — 0, показы — 0, расходы — 0. Реальное создание не началось."
+      : "Это решение только записывает принятие или отклонение. Внешних записей, показов и расходов не будет.",
+    campaigns,
+    acceptHandle: canDecide ? await packageDecisionHandle(ownerKey, view, "ACCEPTED") : null,
+    rejectHandle: canDecide ? await packageDecisionHandle(ownerKey, view, "REJECTED") : null,
+    history: state.package_owner_decisions.map((decision) => ({
+      verdict: decision.verdict === "ACCEPTED" ? "Принято" as const : "Отклонено" as const,
+      decidedAt: ownerObservedAt(decision.decided_at),
+      exactVersion: `${decision.exact_review.authority.ordered_selections.length} ${decision.exact_review.authority.ordered_selections.length === 1 ? "кампания" : "кампании"} · точный состав сохранён`,
+    })),
+  };
+}
+
+async function matchingPackageDecisionAction(
+  ownerKey: string,
+  view: InternalView,
+  handle: string,
+) {
+  if (!view.state.package_review || view.state.human_decision_gate) return null;
+  for (const verdict of ["ACCEPTED", "REJECTED"] as const) {
+    if (handle === await packageDecisionHandle(ownerKey, view, verdict)) return verdict;
+  }
+  return null;
 }
 
 function outcome(view: InternalView, stage: OwnerJourneyStageId, unknowns: string[]): OwnerJourneyProjection["businessOutcome"] {
@@ -1948,7 +2054,10 @@ function outcome(view: InternalView, stage: OwnerJourneyStageId, unknowns: strin
   if (state.package_execution?.items.some((item) => item.status === "SYSTEM_FAILED" || item.status === "PROVIDER_REJECTED")) {
     return { status: "blocked", headline: "Часть кампаний безопасно не создана", summary: "Каждый результат сохранён отдельно; подтверждённые остановленные кампании не смешаны с отказами или сбоями." };
   }
-  return { status: state.human_decision_gate ? "working" : "ready", headline: "Пакет готов к точному решению", summary: "Проверьте бизнес-состав пакета. Техническое продолжение останется работой агента." };
+  if (state.human_decision_gate && !state.package_execution) {
+    return { status: "complete", headline: "Решение по точному пакету записано", summary: "Внешних записей, показов и расходов не было. Реальное создание требует следующего отдельного разрешения." };
+  }
+  return { status: "ready", headline: "Пакет готов к точному решению", summary: "Проверьте бизнес-состав пакета. Принятие или отклонение только сохранит решение без внешней записи." };
 }
 
 function recommendation(view: InternalView, stage: OwnerJourneyStageId): OwnerJourneyProjection["currentRecommendation"] {
@@ -1965,7 +2074,10 @@ function recommendation(view: InternalView, stage: OwnerJourneyStageId): OwnerJo
   if (state.package_corrections.some((correction) => correction.status === "HUMAN_GATE_REQUIRED")) {
     return { headline: "Подтвердить подготовленное исправление", rationale: "Новая формулировка прошла тот же бизнес-редактор и полную проверку, но исходный отказ и новое решение остаются раздельными." };
   }
-  return { headline: "Подтвердить точный пакет", rationale: "Решение выдаст одноразовое полномочие только на показанные кампании; отдельное исполнение останется работой агента." };
+  if (state.human_decision_gate && !state.package_execution) {
+    return { headline: "Точный пакет принят без внешней записи", rationale: "Одноразовое полномочие связано только с показанными версиями; показы, расходы и возобновление запрещены, а реальное создание требует отдельного следующего разрешения." };
+  }
+  return { headline: "Принять или отклонить точный пакет", rationale: "Одно явное решение будет записано только для показанного состава. На этом этапе внешней записи, показов и расходов не будет." };
 }
 
 function cards(
@@ -2124,7 +2236,8 @@ async function project(
     cards: cards(view, stage, unknowns, agent),
     campaignOptions: campaigns,
     packageSummary: packageSummary(view, campaigns),
-    primaryAction: descriptor && !goalInterview?.primaryAction ? {
+    packageDecision: await packageDecisionProjection(ownerKey, view),
+    primaryAction: descriptor && descriptor.kind !== "authorize-and-create" && !goalInterview?.primaryAction ? {
       handle: await actionHandle(ownerKey, view, descriptor),
       label: descriptor.label,
       description: descriptor.description,
@@ -2258,6 +2371,7 @@ async function projectAccessOnly(
     }],
     campaignOptions: [],
     packageSummary: null,
+    packageDecision: null,
     primaryAction: descriptor ? {
       handle: await opaqueHandle({ ownerKey, accessRevision: state.revision, kind: descriptor.kind }),
       label: descriptor.label,
@@ -2335,7 +2449,7 @@ export class P0OwnerJourney {
     const access = accessState && this.accessReadiness ? this.accessReadiness.project(accessState) : null;
     if (accessState && !accessIsActive(accessState)) return projectAccessOnly(ownerKey, accessState, access!);
     const initial = await this.application.query(ownerKey);
-    if (!this.agentProjection) return project(ownerKey, await this.continueSafeWork(ownerKey, initial), null, access);
+    if (!this.agentProjection) return project(ownerKey, await this.continueSafeWork(ownerKey, initial, false), null, access);
     const agent = await this.agentProjection(ownerKey);
     const current = await this.application.query(ownerKey);
     return project(ownerKey, current, agent, access);
@@ -2373,7 +2487,7 @@ export class P0OwnerJourney {
       const nextAccess = this.accessReadiness!.project(accessState);
       if (!accessIsActive(accessState)) return projectAccessOnly(ownerKey, accessState, nextAccess);
       const initial = await this.application.query(ownerKey);
-      if (!this.agentProjection) return project(ownerKey, await this.continueSafeWork(ownerKey, initial), null, nextAccess);
+      if (!this.agentProjection) return project(ownerKey, await this.continueSafeWork(ownerKey, initial, false), null, nextAccess);
       const agent = await this.agentProjection(ownerKey);
       const current = await this.application.query(ownerKey);
       return project(ownerKey, current, agent, nextAccess);
@@ -2443,6 +2557,21 @@ export class P0OwnerJourney {
       if (agent) view = await this.application.query(ownerKey);
       const access = accessState && this.accessReadiness ? this.accessReadiness.project(accessState) : null;
       return project(ownerKey, view, agent, access);
+    }
+    const packageDecisionAction = await matchingPackageDecisionAction(ownerKey, view, submission.handle);
+    if (packageDecisionAction) {
+      const review = view.state.package_review!;
+      view = await this.application.command(ownerKey, {
+        action: packageDecisionAction === "ACCEPTED" ? "confirm_package" : "reject_package",
+        expected_revision: view.revision,
+        confirmation: packageDecisionAction === "ACCEPTED"
+          ? "CONFIRM_EXACT_SHORTLIST_PACKAGE"
+          : "REJECT_EXACT_SHORTLIST_PACKAGE",
+        package_review_id: review.package_review_id,
+        package_id: review.package_id,
+      });
+      const access = accessState && this.accessReadiness ? this.accessReadiness.project(accessState) : null;
+      return project(ownerKey, view, null, access);
     }
     const draftEditorAction = await matchingDraftEditorAction(ownerKey, view, submission.handle);
     if (draftEditorAction) {

@@ -35,25 +35,28 @@ test("owner surface renders exactly one opaque primary action seam", () => {
   assert.doesNotMatch(clientSource, /expected_revision|allowed_commands|CONFIRM_EXACT_SHORTLIST_PACKAGE/u);
 });
 
-test("owner package review shows business outcomes while exact authority stays behind the interface", () => {
+test("owner package review shows exact business outcomes and one no-write accept/reject decision", () => {
   assert.match(ownerSource, /preflightGates/u);
   assert.match(clientSource, /Предпубликационная проверка/u);
   assert.match(clientSource, /Месячный бюджет Strategy/u);
-  assert.match(ownerSource, /Создана и оставлена без показов/u);
-  assert.match(ownerSource, /Нужно исправить формулировку/u);
-  assert.match(ownerSource, /authorize-and-create/u);
+  assert.match(clientSource, /ОДНО ЯВНОЕ РЕШЕНИЕ ВЛАДЕЛЬЦА/u);
+  assert.match(clientSource, /Отклонить и вернуться к редактированию/u);
+  assert.match(clientSource, /Принять точный пакет/u);
+  assert.match(ownerSource, /Внешних записей — 0, показы — 0, расходы — 0/u);
   assert.match(ownerSource, /confirm_package/u);
-  assert.match(ownerSource, /allowDispatch.*dispatch_package/su);
+  assert.match(ownerSource, /reject_package/u);
   assert.doesNotMatch(clientSource, /package_id|gate_id|package_review_id|account_lock/u);
 });
 
-test("safe continuation and approved dispatch remain agent-owned without technical owner controls", () => {
-  assert.match(ownerSource, /if \(!this\.agentProjection\) return project\(ownerKey, await this\.continueSafeWork/u);
+test("safe continuation remains agent-owned while initial real creation needs a separate stage", () => {
+  assert.match(ownerSource, /continueSafeWork\(ownerKey, initial, false\)/u);
   assert.match(ownerSource, /const current = await this\.application\.query\(ownerKey\);\s+return project\(ownerKey, current, agent/u);
+  assert.match(applicationSource, /Feature #246 deliberately stops after the local owner decision/u);
+  assert.match(applicationSource, /authorization in #250/u);
   assert.match(applicationSource, /p0_continue_due_safe_work/u);
   assert.match(applicationSource, /p0_dispatch_approved_package/u);
   assert.match(applicationSource, /p0_prepare_rejected_correction/u);
-  assert.match(applicationSource, /No exact persisted Human Decision Gate authorizes dispatch/u);
+  assert.match(applicationSource, /P0_AGENT_APPROVED_DISPATCH_DENIED/u);
   assert.doesNotMatch(ownerSource, /create-authorized-package|Подготовить исправление|Сохранить исправленную формулировку/u);
   assert.doesNotMatch(clientSource, /Проверить запланированный элемент|Повторить запрос|Сверить идентификаторы|Продолжить создание без запуска/u);
 });

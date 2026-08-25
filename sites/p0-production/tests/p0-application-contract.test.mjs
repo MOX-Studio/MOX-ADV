@@ -2691,6 +2691,77 @@ async function reviewAndConfirm(application, result, draftIds) {
   });
 }
 
+test("initial accepted package remains no-write across owner refresh and cannot be dispatched by the agent before the separate real stage", async (t) => {
+  const value = await packageFixture(t);
+  const draft = value.result.state.recommendation_set.drafts.find((item) => item.shortlist_eligible && item.visibility === "VISIBLE");
+  const accepted = await reviewAndConfirm(value.application, value.result, [draft.draft_id]);
+  const journey = new P0OwnerJourney(value.application);
+  const projection = await journey.query("owner");
+  const refreshed = await journey.diagnostics("owner");
+
+  assert.equal(projection.packageDecision.status, "Принято");
+  assert.match(projection.packageDecision.safety, /Внешних записей — 0/iu);
+  assert.equal(refreshed.revision, accepted.revision);
+  assert.equal(refreshed.state.package_execution, null);
+  assert.equal(refreshed.state.external_write_intent, null);
+  assert.equal(value.externalWrites(), 0);
+
+  const contract = await value.application.agentContract("owner", "COORDINATE_OWNER_JOURNEY");
+  await assert.rejects(
+    value.application.executeAgentTool({
+      owner_key: "owner",
+      run_id: "no-write-owner-decision",
+      objective: contract.objective,
+      authority: contract.authority,
+      call: { id: "attempt-initial-dispatch", name: "p0_dispatch_approved_package", arguments: { expected_revision: accepted.revision } },
+      observation_sequence: 1,
+    }),
+    (error) => error instanceof P0ApplicationError && error.code === "P0_AGENT_APPROVED_DISPATCH_DENIED",
+  );
+  assert.equal((await value.application.query("owner")).state.package_execution, null);
+});
+
+test("owner can reject the exact reviewed package and retain an immutable zero-write audit decision", async (t) => {
+  const value = await packageFixture(t);
+  const draft = value.result.state.recommendation_set.drafts.find((item) => item.shortlist_eligible && item.visibility === "VISIBLE");
+  let result = await value.application.command("owner", {
+    action: "add_to_shortlist",
+    expected_revision: value.result.revision,
+    draft_id: draft.draft_id,
+  });
+  result = await value.application.command("owner", {
+    action: "review_package",
+    expected_revision: result.revision,
+  });
+  const review = structuredClone(result.state.package_review);
+  result = await value.application.command("owner", {
+    action: "reject_package",
+    expected_revision: result.revision,
+    confirmation: "REJECT_EXACT_SHORTLIST_PACKAGE",
+    package_review_id: review.package_review_id,
+    package_id: review.package_id,
+  });
+
+  assert.equal(result.state.package_review, null);
+  assert.equal(result.state.human_decision_gate, null);
+  assert.equal(result.state.package_execution, null);
+  assert.equal(result.state.package_owner_decisions.length, 1);
+  assert.equal(result.state.package_owner_decisions[0].verdict, "REJECTED");
+  assert.equal(result.state.package_owner_decisions[0].authority_grant, null);
+  assert.deepEqual(result.state.package_owner_decisions[0].external_effects, {
+    provider_mutations: 0,
+    external_write_calls: 0,
+    impressions_started: 0,
+    spend_started_rub: 0,
+  });
+  assert.equal(result.state.package_owner_decisions[0].package_review_id, review.package_review_id);
+  assert.equal(result.state.last_decision_invalidation.reason_code, "OWNER_REJECTED_PACKAGE");
+  assert.equal(value.externalWrites(), 0);
+
+  const restarted = await new P0Application({ store: value.store, adapters: value.adapter }).query("owner");
+  assert.deepEqual(restarted.state.package_owner_decisions, result.state.package_owner_decisions);
+});
+
 function auctionProtocolValue(draft, overrides = {}) {
   const protocol = draft.auction_protocol;
   return {
@@ -5094,14 +5165,34 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
   assert.match(projection.packageSummary.budgetAlignment.explanation, /арифметик|не прогноз/iu);
   assert.deepEqual(projection.packageSummary.campaignBudgets.map((campaign) => campaign.name), expectedPackageOrder);
   assert.equal(projection.packageSummary.campaignCount, 2);
-  assert.equal(projection.primaryAction.label, "Подтвердить точный пакет");
+  assert.equal(projection.primaryAction, null);
+  assert.equal(projection.packageDecision.status, "Нужно решение");
+  assert.match(projection.packageDecision.safety, /Внешних записей, показов и расходов не будет/iu);
+  assert.ok(projection.packageDecision.acceptHandle);
+  assert.ok(projection.packageDecision.rejectHandle);
+  assert.deepEqual(projection.packageDecision.campaigns.map((campaign) => campaign.name), expectedPackageOrder);
+  const staleDecisionHandle = projection.packageDecision.acceptHandle;
   projection = await journey.submit(ownerKey, {
-    handle: projection.primaryAction.handle,
-    values: values(projection),
+    handle: projection.packageDecision.acceptHandle,
+    values: {},
   });
   ownerResponses.push(projection);
+  assert.equal(projection.packageDecision.status, "Принято");
+  assert.equal(projection.packageDecision.acceptHandle, null);
+  assert.equal(projection.packageDecision.rejectHandle, null);
+  assert.match(projection.packageDecision.safety, /Внешних записей — 0, показы — 0, расходы — 0/iu);
+  assert.match(projection.packageDecision.nextRealStage, /отдельно разрешаемом реальном этапе/iu);
+  assert.equal(projection.businessOutcome.headline, "Решение по точному пакету записано");
+  await assert.rejects(
+    journey.submit(ownerKey, { handle: staleDecisionHandle, values: {} }),
+    (error) => error instanceof P0ApplicationError && error.code === "P0_OWNER_ACTION_STALE",
+  );
   const confirmedDiagnostics = await journey.diagnostics(ownerKey);
   assert.ok(confirmedDiagnostics.state.human_decision_gate);
+  assert.equal(confirmedDiagnostics.state.package_owner_decisions.length, 1);
+  assert.equal(confirmedDiagnostics.state.package_owner_decisions[0].verdict, "ACCEPTED");
+  assert.equal(confirmedDiagnostics.state.package_owner_decisions[0].decision_id, confirmedDiagnostics.state.human_decision_gate.owner_decision_id);
+  assert.equal(confirmedDiagnostics.state.package_owner_decisions[0].external_effects.external_write_calls, 0);
   assert.equal(confirmedDiagnostics.state.package_execution, null);
   assert.equal(confirmedDiagnostics.state.external_write_intent, null);
   assert.equal(confirmedDiagnostics.state.campaign, null);
