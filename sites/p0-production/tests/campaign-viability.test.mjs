@@ -595,3 +595,62 @@ test("current Business Model economics uncertainty blocks eligibility even when 
   assert.ok(scored.every((draft) => draft.viability_score.score === null));
   assert.ok(scored.every((draft) => draft.viability_score.draft_status === "INSUFFICIENT_EVIDENCE"));
 });
+
+test("scores only the current Strategy, evidence and Direct capability lineage", async () => {
+  const generated = await recommendationSet();
+
+  const staleStrategy = await rescore(generated.drafts, evidence(), {
+    strategy: { ...strategy, strategy_revision_id: "campaign-strategy-r8" },
+  });
+  assert.ok(staleStrategy.every((draft) => draft.viability_score.score === null));
+  assert.ok(staleStrategy.every((draft) => draft.viability_score.eligibility.blockers.some((item) => item.code === "CURRENT_STRATEGY_LINEAGE_MISMATCH")));
+
+  const replacedEvidence = evidence({ snapshot_id: "sha256:analytics-v2" });
+  const staleEvidence = await rescore(generated.drafts, replacedEvidence);
+  assert.ok(staleEvidence.every((draft) => draft.viability_score.score === null));
+  assert.ok(staleEvidence.every((draft) => draft.viability_score.eligibility.blockers.some((item) => item.code === "AUCTION_PROTOCOL_EVIDENCE_LINEAGE_MISMATCH")));
+
+  const staleCapabilityDrafts = structuredClone(generated.drafts);
+  for (const draft of staleCapabilityDrafts) {
+    draft.capability_selection.capability_snapshot_id = "direct-capability:owner-account:replacement";
+    draft.viability_score = undefined;
+  }
+  const staleCapability = await rescore(staleCapabilityDrafts);
+  assert.ok(staleCapability.every((draft) => draft.viability_score.score === null));
+  assert.ok(staleCapability.every((draft) => draft.viability_score.eligibility.blockers.some((item) => item.code === "CAPABILITY_SNAPSHOT_LINEAGE_MISMATCH")));
+});
+
+test("deterministically distinguishes all four owner-facing viability statuses", async () => {
+  const generated = await recommendationSet();
+  assert.equal(generated.drafts[0].viability_status, "VIABLE");
+  assert.notEqual(generated.drafts[0].viability_score.score, null);
+
+  const optional = evidence();
+  optional.market_evidence.cost = {
+    status: "UNAVAILABLE",
+    compact_source: null,
+    scenario: null,
+    scope: null,
+    as_of: null,
+    currency: null,
+    vat_treatment: null,
+    sample_size: null,
+    range: null,
+    observations: [],
+  };
+  optional.gaps = [{ gap_id: "gap-cost", code: "PRELAUNCH_COST_UNAVAILABLE", source_id: "direct", description: "No comparable cost source", material: false }];
+  const testable = await recommendationSet(optional);
+  assert.equal(testable.drafts[0].viability_status, "TESTABLE_WITH_GAPS");
+  assert.notEqual(testable.drafts[0].viability_score.score, null);
+
+  const insufficient = await recommendationSet(evidence({ summary: { hard_blockers: ["Current evidence is unresolved"] } }));
+  assert.equal(insufficient.drafts[0].viability_status, "INSUFFICIENT_EVIDENCE");
+  assert.equal(insufficient.drafts[0].viability_score.score, null);
+
+  const duplicate = structuredClone(generated.drafts[0]);
+  duplicate.duplicate_of = generated.drafts[1].draft_id;
+  duplicate.viability_score = undefined;
+  const blocked = await rescore([duplicate]);
+  assert.equal(blocked[0].viability_status, "BLOCKED");
+  assert.equal(blocked[0].viability_score.score, null);
+});

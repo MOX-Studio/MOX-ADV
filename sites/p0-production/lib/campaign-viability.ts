@@ -520,6 +520,14 @@ function evaluateEligibility(
   if (missingStrategy.length) {
     blockers.push(blocker("STRATEGY_INCOMPLETE", `/strategy/${missingStrategy[0]}`, "Принять полную Campaign Strategy revision."));
   }
+  const currentStrategyRevisionId = text(strategy.strategy_revision_id);
+  if (text(draft.strategy_revision_id) !== currentStrategyRevisionId) {
+    blockers.push(blocker(
+      "CURRENT_STRATEGY_LINEAGE_MISMATCH",
+      "/draft/strategy_revision_id",
+      "Пересобрать Draft из текущей утверждённой Campaign Strategy revision до проверки жизнеспособности.",
+    ));
+  }
   const projection = record(draft.publish_projection);
   const projectionLineage = record(projection.lineage);
   if (!text(draft.draft_revision_id) || !projection.direct) {
@@ -546,6 +554,29 @@ function evaluateEligibility(
   if (creationProfile.profile_id !== "p0-campaign-creation-profile-v1" || !text(advertiser.account) || !text(advertiser.currency)) {
     blockers.push(blocker("CAMPAIGN_PROFILE_INVALID", "/draft/publish_projection/creation_profile", "Зафиксировать exact advertiser/currency Campaign Creation Profile v1."));
   }
+  const capabilitySelection = record(draft.capability_selection);
+  const draftCapabilitySnapshotId = text(draft.direct_capability_snapshot_id);
+  const selectionCapabilitySnapshotId = text(capabilitySelection.capability_snapshot_id);
+  if (!draftCapabilitySnapshotId || !selectionCapabilitySnapshotId) {
+    blockers.push(blocker(
+      "CAPABILITY_SNAPSHOT_MISSING",
+      "/draft/direct_capability_snapshot_id",
+      "Зафиксировать текущий снимок возможностей точного аккаунта Яндекс Директа до проверки жизнеспособности.",
+    ));
+  } else if (draftCapabilitySnapshotId !== selectionCapabilitySnapshotId) {
+    blockers.push(blocker(
+      "CAPABILITY_SNAPSHOT_LINEAGE_MISMATCH",
+      "/draft/capability_selection/capability_snapshot_id",
+      "Повторить проверку возможностей для текущего снимка точного аккаунта Яндекс Директа.",
+    ));
+  }
+  if (capabilitySelection.eligible !== true) {
+    blockers.push(blocker(
+      "CAPABILITY_SELECTION_INELIGIBLE",
+      "/draft/capability_selection/eligible",
+      "Устранить блокирующие ограничения выбранных возможностей Яндекс Директа до расчёта балла.",
+    ));
+  }
   if (!text(measurementPlan.counter_id) || !text(measurementPlan.primary_goal_id) || !text(measurementPlan.readiness_id)) {
     blockers.push(blocker("METRIKA_MEASUREMENT_PLAN_INCOMPLETE", "/draft/publish_projection/creation_profile/measurement_plan", "Зафиксировать точную Metrika measurement plan."));
   }
@@ -562,8 +593,8 @@ function evaluateEligibility(
   for (const protocolIssue of auctionProtocolBusinessCompletenessBlockers(draft.auction_protocol)) {
     blockers.push(blocker("AUCTION_PROTOCOL_INVALID", "/draft/auction_protocol", protocolIssue));
   }
-  if (record(draft.auction_protocol).evidence_snapshot_id !== evidence?.snapshot_id) {
-    blockers.push(blocker("AUCTION_PROTOCOL_EVIDENCE_LINEAGE_MISMATCH", "/draft/auction_protocol/evidence_snapshot_id", "Пересобрать Auction Protocol из exact Analytics Evidence Snapshot."));
+  if (text(record(draft.auction_protocol).evidence_snapshot_id) !== text(evidence?.snapshot_id)) {
+    blockers.push(blocker("AUCTION_PROTOCOL_EVIDENCE_LINEAGE_MISMATCH", "/draft/auction_protocol/evidence_snapshot_id", "Пересобрать Auction Protocol из текущего Analytics Evidence Snapshot."));
   }
   const bidding = record(record(record(campaign.UnifiedCampaign).BiddingStrategy).Search);
   const weeklySpend = numberOrNull(record(bidding.WbMaximumClicks).WeeklySpendLimit);
