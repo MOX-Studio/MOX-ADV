@@ -2428,6 +2428,69 @@ test("normalization-only Draft save reports a no-op without inventing a Draft or
   assert.equal(JSON.stringify(result.state.shortlist), shortlistBeforeNormalization);
 });
 
+test("owner campaign editor saves and reloads one exact Draft independently, rejects stale handles, and edits its Auction Protocol separately", async (t) => {
+  const { application, result: approved } = await approvedDraftFixture(t);
+  const journey = new P0OwnerJourney(application, { agentProjection: async () => null });
+  let projection = await journey.query("owner");
+  assert.equal(projection.campaignOptions.length >= 1, true);
+  const first = projection.campaignOptions[0];
+  assert.ok(first.editor.publicationHandle);
+  assert.ok(first.editor.protocolHandle);
+  assert.equal(first.editor.publicationFields.length, 6);
+  assert.equal(first.editor.protocolFields.length, 14);
+  assert.equal(first.editor.publicationContract.length, 24);
+  assert.equal(first.editor.capabilityBoundaries.some((item) => item.classification === "Доступно после отдельной проверки"), true);
+  assert.equal(first.editor.capabilityBoundaries.some((item) => item.classification === "Не поддерживается"), true);
+  assert.match(first.editor.versionLabel, /^Редакция \d+$/u);
+  const staleHandle = first.editor.publicationHandle;
+  const target = approved.state.recommendation_set.drafts.find((draft) => draft.visibility !== "HIDDEN");
+  assert.ok(target);
+  const targetRevisionBefore = target.draft_revision_id;
+  const editedTitle = "Заявка на промышленную выставку";
+
+  projection = await journey.submit("owner", {
+    handle: first.editor.publicationHandle,
+    values: Object.fromEntries(first.editor.publicationFields.map((field) => [
+      field.key,
+      field.key === "ad_title" ? editedTitle : String(field.value),
+    ])),
+  });
+  let edited = projection.campaignOptions.find((campaign) => campaign.name === first.name);
+  assert.ok(edited);
+  assert.equal(edited.editor.validationStatus, "Требуется повторная проверка");
+  assert.match(edited.editor.feedback, /новая неизменяемая редакция/u);
+  assert.equal(edited.publishPreview.titles.includes(editedTitle), true);
+  let diagnostics = await journey.diagnostics("owner");
+  assert.notEqual(diagnostics.state.recommendation_set.drafts.find((draft) => draft.draft_id === target.draft_id).draft_revision_id, targetRevisionBefore);
+
+  const reloaded = await journey.query("owner");
+  edited = reloaded.campaignOptions.find((campaign) => campaign.name === first.name);
+  assert.equal(edited.publishPreview.titles.includes(editedTitle), true);
+  assert.equal(edited.editor.validationStatus, "Требуется повторная проверка");
+  await assert.rejects(
+    journey.submit("owner", { handle: staleHandle, values: {} }),
+    (error) => error instanceof P0ApplicationError && error.code === "P0_OWNER_ACTION_STALE",
+  );
+
+  projection = await journey.submit("owner", { handle: reloaded.primaryAction.handle, values: {} });
+  edited = projection.campaignOptions.find((campaign) => campaign.name === first.name);
+  assert.equal(edited.editor.validationStatus, "Проверена");
+  const protocolBudget = Number(edited.editor.protocolFields.find((field) => field.key === "test_budget_rub").value);
+  projection = await journey.submit("owner", {
+    handle: edited.editor.protocolHandle,
+    values: Object.fromEntries(edited.editor.protocolFields.map((field) => [
+      field.key,
+      field.key === "test_budget_rub" ? String(protocolBudget - 1) : String(field.value),
+    ])),
+  });
+  edited = projection.campaignOptions.find((campaign) => campaign.name === first.name);
+  assert.equal(edited.editor.validationStatus, "Требуется повторная проверка");
+  assert.match(edited.editor.feedback, /аукционного протокола/u);
+  assert.match(edited.auctionProtocol.testBudget, new RegExp(`${(protocolBudget - 1).toLocaleString("ru-RU")} ₽`, "u"));
+  diagnostics = await journey.diagnostics("owner");
+  assert.equal(diagnostics.state.recommendation_set.drafts.find((draft) => draft.draft_id === target.draft_id).auction_protocol.test_budget_rub, protocolBudget - 1);
+});
+
 async function governedPlaybookRelease({ releaseId, releaseVersion, family, decisionId }) {
   const changedFields = ["/direct/keyword/Keyword", "/direct/ad/ResponsiveAd/Texts"];
   return sealCuratedPlaybookRelease({
@@ -4834,9 +4897,14 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
   ]);
   assert.equal(projection.businessReadiness.destination.priorityCorrections.length <= 3, true);
   assert.equal(projection.campaignOptions.every((campaign) => ["VIABLE", "TESTABLE_WITH_GAPS", "INSUFFICIENT_EVIDENCE", "BLOCKED"].includes(campaign.status)), true);
-  assert.equal(projection.campaignOptions.every((campaign) => /сравнительный приоритет|hard eligibility/iu.test(campaign.comparativeScore)), true);
+  assert.equal(projection.campaignOptions.every((campaign) => /сравнительный приоритет|обязательных условий/iu.test(campaign.comparativeScore)), true);
   assert.equal(projection.campaignOptions.every((campaign) => /^\d+%$/u.test(campaign.evidenceCoverage)), true);
   assert.equal(projection.campaignOptions.every((campaign) => campaign.reasons.length <= 3), true);
+  assert.equal(projection.campaignOptions.every((campaign) => campaign.editor.publicationFields.length === 6), true);
+  assert.equal(projection.campaignOptions.every((campaign) => campaign.editor.protocolFields.length === 14), true);
+  assert.equal(projection.campaignOptions.every((campaign) => campaign.editor.publicationContract.length === 24), true);
+  assert.equal(projection.campaignOptions.every((campaign) => /^Редакция \d+$/u.test(campaign.editor.versionLabel)), true);
+  assert.equal(projection.campaignOptions.every((campaign) => campaign.editor.publicationHandle?.startsWith("act_") && campaign.editor.protocolHandle?.startsWith("act_")), true);
   assert.equal(projection.primaryAction.fields.length >= 2, true);
   const campaignOrderFields = projection.primaryAction.fields.filter((field) => field.key.startsWith("campaign_"));
   const ownerShortlistOrder = {

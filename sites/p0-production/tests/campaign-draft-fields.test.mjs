@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  AUCTION_PROTOCOL_EDITOR_FIELDS,
+  CAMPAIGN_DRAFT_EDITOR_CONTRACT,
   DIRECT_V501_DRAFT_FIELD_REGISTRY,
+  DRAFT_EDITOR_CAPABILITY_BOUNDARIES,
   editableDraftFieldNames,
   nextDraftRevisionId,
   normalizeDraftFieldInput,
@@ -77,6 +80,41 @@ test("the accepted Direct v501 field registry covers every core campaign, group,
     "/direct/sitelink_sets",
   ]);
   assert.equal(absentConditional.every((field) => field.editable === false && field.presence === "NOT_PRESENT"), true);
+});
+
+test("owner editor contract covers publication, auction protocol, conditional and unsupported values with deterministic materiality", () => {
+  assert.equal(CAMPAIGN_DRAFT_EDITOR_CONTRACT.profile_id, DIRECT_V501_DRAFT_FIELD_REGISTRY.profile_id);
+  assert.equal(CAMPAIGN_DRAFT_EDITOR_CONTRACT.publication_fields, DIRECT_V501_DRAFT_FIELD_REGISTRY.fields);
+  assert.deepEqual(AUCTION_PROTOCOL_EDITOR_FIELDS.map((field) => field.key), [
+    "control",
+    "tested_change",
+    "bidding_strategy",
+    "bid_ceiling_rub",
+    "query_matching",
+    "autotargeting_policy",
+    "comparator_percent",
+    "treatment_percent",
+    "test_budget_rub",
+    "start_date",
+    "end_date",
+    "measurement_goal",
+    "success_threshold",
+    "stop_condition",
+  ]);
+  assert.equal(AUCTION_PROTOCOL_EDITOR_FIELDS.every((field) => field.materiality === "NORMALIZATION_SENSITIVE_MATERIAL"), true);
+  assert.deepEqual(
+    [...new Set(DRAFT_EDITOR_CAPABILITY_BOUNDARIES.map((boundary) => boundary.classification))].sort(),
+    ["CONDITIONALLY_ELIGIBLE", "UNSUPPORTED"],
+  );
+  assert.deepEqual(
+    DRAFT_EDITOR_CAPABILITY_BOUNDARIES.filter((boundary) => boundary.classification === "CONDITIONALLY_ELIGIBLE").map((boundary) => boundary.capability),
+    ["AUTOTARGETING", "SITELINKS"],
+  );
+  assert.deepEqual(CAMPAIGN_DRAFT_EDITOR_CONTRACT.materiality, {
+    normalization_only: "PRESERVE_EXACT_DRAFT_REVISION_AND_AUTHORITY",
+    supported_publication_change: "CREATE_IMMUTABLE_DRAFT_REVISION_AND_REQUIRE_REVALIDATION",
+    auction_protocol_change: "CREATE_IMMUTABLE_DRAFT_REVISION_AND_REQUIRE_REVALIDATION",
+  });
 });
 
 test("registry input normalization is the only accepted editable surface and resolves exact projection values", () => {

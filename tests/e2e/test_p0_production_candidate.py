@@ -558,6 +558,100 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 self.assertIn("Предположение теста отделено", protocol_previews.first.inner_text())
                 checkpoint("Кампании")
 
+                campaign_cards = page.locator(".owner-campaigns > div > article")
+                first_campaign = campaign_cards.nth(0)
+                second_campaign = campaign_cards.nth(1)
+                second_preview_before = second_campaign.get_by_label(
+                    "Точный предпросмотр публикации"
+                ).inner_text()
+                first_campaign.get_by_role(
+                    "button", name="Редактировать черновик", exact=True
+                ).click()
+                editor = first_campaign.locator(".owner-draft-editor")
+                self.assertTrue(editor.is_visible())
+                contract = editor.locator(".owner-draft-contract")
+                contract.locator("summary").click()
+                self.assertIn("Доступно после отдельной проверки", contract.inner_text())
+                self.assertIn("Не поддерживается", contract.inner_text())
+                self.assertIn("Показы в сетях", contract.inner_text())
+                ad_title = editor.get_by_label(re.compile(r"^Заголовки объявления"))
+                original_ad_title = ad_title.input_value()
+                ad_title.fill("Несохранённый заголовок")
+                editor.get_by_role(
+                    "button", name="Отменить правки", exact=True
+                ).click()
+                self.assertEqual(0, first_campaign.locator(".owner-draft-editor").count())
+                first_campaign.get_by_role(
+                    "button", name="Редактировать черновик", exact=True
+                ).click()
+                editor = first_campaign.locator(".owner-draft-editor")
+                self.assertEqual(
+                    original_ad_title,
+                    editor.get_by_label(re.compile(r"^Заголовки объявления")).input_value(),
+                )
+
+                comparator_share = editor.get_by_label(re.compile(r"^Доля сравнения, %"))
+                comparator_share.fill("101")
+                editor.get_by_role(
+                    "button", name="Сохранить протокол", exact=True
+                ).click()
+                self.assertTrue(comparator_share.evaluate("element => Boolean(element.validationMessage)"))
+                self.assertEqual(0, page.locator(".owner-error").count())
+                editor.get_by_role(
+                    "button", name="Отменить правки протокола", exact=True
+                ).click()
+
+                edited_ad_title = "Заявка на промышленную выставку"
+                first_campaign.get_by_role(
+                    "button", name="Редактировать черновик", exact=True
+                ).click()
+                editor = first_campaign.locator(".owner-draft-editor")
+                editor.get_by_label(re.compile(r"^Заголовки объявления")).fill(
+                    edited_ad_title
+                )
+                editor.get_by_role(
+                    "button", name="Сохранить новую версию", exact=True
+                ).click()
+                page.get_by_role(
+                    "button", name="Повторно проверить изменённую кампанию", exact=True
+                ).wait_for()
+                self.assertIn(
+                    edited_ad_title,
+                    first_campaign.get_by_label("Точный предпросмотр публикации").inner_text(),
+                )
+                self.assertEqual(
+                    second_preview_before,
+                    second_campaign.get_by_label("Точный предпросмотр публикации").inner_text(),
+                )
+                self.assertIn("РЕДАКЦИЯ 2", first_campaign.locator(".owner-draft-version").inner_text())
+                self.assertIn(
+                    "Требуется повторная проверка",
+                    first_campaign.locator(".owner-draft-version").inner_text(),
+                )
+                self.assertIn(
+                    "Балл, предварительная проверка, короткий список и прежнее полномочие не действуют",
+                    first_campaign.locator(".owner-draft-version").inner_text(),
+                )
+
+                page.reload(wait_until="networkidle")
+                first_campaign = page.locator(".owner-campaigns > div > article").nth(0)
+                second_campaign = page.locator(".owner-campaigns > div > article").nth(1)
+                self.assertIn(
+                    edited_ad_title,
+                    first_campaign.get_by_label("Точный предпросмотр публикации").inner_text(),
+                )
+                self.assertEqual(
+                    second_preview_before,
+                    second_campaign.get_by_label("Точный предпросмотр публикации").inner_text(),
+                )
+                page.get_by_role(
+                    "button", name="Повторно проверить изменённую кампанию", exact=True
+                ).click()
+                page.get_by_role(
+                    "button", name="Проверить состав и порядок набора", exact=True
+                ).wait_for()
+                checkpoint("Кампании")
+
                 test_budget = page.get_by_label(re.compile(r"бюджет теста, ₽")).first
                 original_test_budget = int(test_budget.input_value())
                 test_budget.fill(str(original_test_budget - 1))

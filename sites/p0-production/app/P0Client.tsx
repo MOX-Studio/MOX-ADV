@@ -141,6 +141,29 @@ export default function P0Client() {
     }
   }
 
+  async function submitCampaignEdit(event: FormEvent<HTMLFormElement>, handle: string, fields: OwnerActionField[]) {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const next = await request("/api/p0", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          handle,
+          values: actionValues(event.currentTarget, fields),
+        }),
+      });
+      setProjection(next);
+      setSelectedStage("campaigns");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!projection) {
     return <div className={styles.prototype}>
       <Header />
@@ -297,38 +320,12 @@ export default function P0Client() {
 
           {activeStage === "campaigns" && activeStageStatus !== "upcoming" && projection.campaignOptions.length > 0 && <section className="owner-campaigns" aria-labelledby="owner-campaigns-title">
             <header><p className="owner-eyebrow">ВАРИАНТЫ КАМПАНИЙ</p><h2 id="owner-campaigns-title">Кампании для бизнес-проверки</h2></header>
-            <div>{projection.campaignOptions.map((campaign, index) => <article key={`${campaign.name}-${index}`} className={campaign.selected ? "selected" : ""}>
-              <header><span>{campaign.status} · {campaign.readiness}</span>{campaign.selected ? <b>Выбрана владельцем</b> : campaign.agentRecommended && <b>Рекомендация агента</b>}</header>
-              <h3>{campaign.name}</h3>
-              <dl><div><dt>Предложение</dt><dd>{campaign.offer}</dd></div><div><dt>Аудитория</dt><dd>{campaign.audience}</dd></div><div><dt>Куда ведём</dt><dd>{campaign.destination}</dd></div><div><dt>Сравнительный приоритет</dt><dd>{campaign.comparativeScore}</dd></div><div><dt>Покрытие доказательств</dt><dd>{campaign.evidenceCoverage}</dd></div><div><dt>Чувствительность</dt><dd>{campaign.sensitivity}</dd></div></dl>
-              <section className="owner-publish-preview" aria-label="Заранее зафиксированный протокол теста">
-                <h4>Как будет проверяться гипотеза</h4>
-                <dl>
-                  <div><dt>Сравнение</dt><dd>{campaign.auctionProtocol.control}</dd></div>
-                  <div><dt>Проверяемое изменение</dt><dd>{campaign.auctionProtocol.testedChange}</dd></div>
-                  <div><dt>Ставки и предел</dt><dd>{campaign.auctionProtocol.biddingStrategy} · {campaign.auctionProtocol.bidCeiling}</dd></div>
-                  <div><dt>Запросы</dt><dd>{campaign.auctionProtocol.queryMatching}</dd></div>
-                  <div><dt>Автотаргетинг</dt><dd>{campaign.auctionProtocol.autotargetingPolicy}</dd></div>
-                  <div><dt>Распределение</dt><dd>{campaign.auctionProtocol.trafficSplit}</dd></div>
-                  <div><dt>Бюджет и период</dt><dd>{campaign.auctionProtocol.testBudget} · {campaign.auctionProtocol.testPeriod}</dd></div>
-                  <div><dt>Измеряемый результат</dt><dd>{campaign.auctionProtocol.measurementGoal}</dd></div>
-                  <div><dt>Условие успеха</dt><dd>{campaign.auctionProtocol.successThreshold}</dd></div>
-                  <div><dt>Условие остановки</dt><dd>{campaign.auctionProtocol.stopCondition}</dd></div>
-                  <div><dt>Честность вывода</dt><dd>{campaign.auctionProtocol.attribution}</dd></div>
-                </dl>
-                <p>{campaign.auctionProtocol.evidenceStatus}</p>
-              </section>
-              <section className="owner-publish-preview" aria-label="Точный предпросмотр публикации">
-                <h4>Что увидят клиенты</h4>
-                <div><strong>Заголовки</strong><ul>{campaign.publishPreview.titles.map((title) => <li key={title}>{title}</li>)}</ul></div>
-                <div><strong>Тексты</strong><ul>{campaign.publishPreview.texts.map((text) => <li key={text}>{text}</li>)}</ul></div>
-                <div><strong>Ссылки и отслеживание</strong>{campaign.publishPreview.urls.map((url) => <p key={`${url.landing}-${url.tracking}`}>{url.landing}<small>{url.tracking}</small></p>)}</div>
-                <details><summary>Поддерживаемые сочетания · {campaign.publishPreview.creativeCombinations.length}</summary><ol>{campaign.publishPreview.creativeCombinations.map((combination, combinationIndex) => <li key={`${combination.title}-${combination.text}-${combinationIndex}`}><b>{combination.title}</b><span>{combination.text}</span><small>{combination.landing}</small></li>)}</ol></details>
-                <p><b>Происхождение:</b> {campaign.publishPreview.creativeProvenance.family} · {campaign.publishPreview.creativeProvenance.source} · {campaign.publishPreview.creativeProvenance.rights}</p>
-                <p><b>Обязательные оговорки:</b> {campaign.publishPreview.requiredDisclaimers.length ? campaign.publishPreview.requiredDisclaimers.join(" · ") : "Для текущего подтверждённого содержания не требуются"}</p>
-              </section>
-              {campaign.reasons.length > 0 && <ul>{campaign.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>}
-            </article>)}</div>
+            <div>{projection.campaignOptions.map((campaign, index) => <CampaignOption
+              key={`${campaign.editor.publicationHandle ?? campaign.editor.protocolHandle ?? campaign.editor.versionLabel}-${index}`}
+              campaign={campaign}
+              busy={busy}
+              onSubmit={submitCampaignEdit}
+            />)}</div>
           </section>}
 
           {activeStage === "review" && activeStageStatus !== "upcoming" && projection.packageSummary && <section className="owner-package" aria-labelledby="owner-package-title">
@@ -357,6 +354,82 @@ export default function P0Client() {
       </div>
     </main>
   </div>;
+}
+
+type CampaignOptionProjection = OwnerJourneyProjection["campaignOptions"][number];
+
+function CampaignOption({
+  campaign,
+  busy,
+  onSubmit,
+}: {
+  campaign: CampaignOptionProjection;
+  busy: boolean;
+  onSubmit: (event: FormEvent<HTMLFormElement>, handle: string, fields: OwnerActionField[]) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const canEdit = Boolean(campaign.editor.publicationHandle || campaign.editor.protocolHandle);
+  return <article className={campaign.selected ? "selected" : ""} data-validation-status={campaign.editor.validationStatus}>
+    <header><span>{campaign.status} · {campaign.readiness}</span>{campaign.selected ? <b>Выбрана владельцем</b> : campaign.agentRecommended && <b>Рекомендация агента</b>}</header>
+    <h3>{campaign.name}</h3>
+    <div className="owner-draft-version">
+      <div><span>{campaign.editor.versionLabel}</span><strong>{campaign.editor.validationStatus}</strong><small>{campaign.editor.validationExplanation}</small></div>
+      {canEdit ? <button type="button" onClick={() => setEditing((value) => !value)} aria-expanded={editing}>{editing ? "Закрыть редактор" : "Редактировать черновик"}</button>
+        : <span>Редактирование завершено</span>}
+    </div>
+    {campaign.editor.feedback && <p className="owner-draft-feedback" role="status">{campaign.editor.feedback}</p>}
+    <dl><div><dt>Предложение</dt><dd>{campaign.offer}</dd></div><div><dt>Аудитория</dt><dd>{campaign.audience}</dd></div><div><dt>Куда ведём</dt><dd>{campaign.destination}</dd></div><div><dt>Сравнительный приоритет</dt><dd>{campaign.comparativeScore}</dd></div><div><dt>Покрытие доказательств</dt><dd>{campaign.evidenceCoverage}</dd></div><div><dt>Чувствительность</dt><dd>{campaign.sensitivity}</dd></div></dl>
+    {editing && <section className="owner-draft-editor" aria-label={`Редактор черновика «${campaign.name}»`}>
+      <header><div><span>РУЧНОЕ РЕДАКТИРОВАНИЕ</span><h4>Точная сохранённая редакция кампании</h4></div><strong>Без технических идентификаторов</strong></header>
+      <p>Каждая форма изменяет только эту кампанию. Существенная правка создаёт новую редакцию; отмена возвращает сохранённые значения.</p>
+      {campaign.editor.publicationHandle && <form onSubmit={(event) => onSubmit(event, campaign.editor.publicationHandle!, campaign.editor.publicationFields)}>
+        <h5>Кампания, таргетинг и объявление</h5>
+        <div className="owner-fields">{campaign.editor.publicationFields.map((field) => <OwnerField key={field.key} field={field} />)}</div>
+        <footer><button type="button" onClick={(event) => { event.currentTarget.form?.reset(); setEditing(false); }}>Отменить правки</button><button type="submit" disabled={busy}>{busy ? "Сохраняю…" : "Сохранить новую версию"}</button></footer>
+      </form>}
+      {campaign.editor.protocolHandle && <form onSubmit={(event) => onSubmit(event, campaign.editor.protocolHandle!, campaign.editor.protocolFields)}>
+        <h5>Аукционный протокол</h5>
+        <p>Бюджет, период, сравнение и условия результата сохраняются независимо для этой кампании.</p>
+        <div className="owner-fields">{campaign.editor.protocolFields.map((field) => <OwnerField key={field.key} field={field} />)}</div>
+        <footer><button type="button" onClick={(event) => { event.currentTarget.form?.reset(); setEditing(false); }}>Отменить правки протокола</button><button type="submit" disabled={busy}>{busy ? "Сохраняю…" : "Сохранить протокол"}</button></footer>
+      </form>}
+      <details className="owner-draft-contract">
+        <summary>Поддерживаемые, условные и неподдерживаемые значения</summary>
+        <p>Поля не исчезают молча: каждое значение явно редактируется, фиксируется либо блокируется.</p>
+        <div>{campaign.editor.publicationContract.map((field) => <div key={`${field.section}-${field.label}`} data-field-classification={field.classification}>
+          <span>{field.section}</span><strong>{field.label}</strong><b>{field.classification}</b><output>{field.value}</output><small>{field.explanation}</small>
+        </div>)}</div>
+        <section><h5>Границы текущего профиля</h5>{campaign.editor.capabilityBoundaries.map((boundary) => <div key={boundary.label} data-capability-classification={boundary.classification}><strong>{boundary.label}</strong><b>{boundary.classification}</b><small>{boundary.explanation}</small></div>)}</section>
+      </details>
+    </section>}
+    <section className="owner-publish-preview" aria-label="Заранее зафиксированный протокол теста">
+      <h4>Как будет проверяться гипотеза</h4>
+      <dl>
+        <div><dt>Сравнение</dt><dd>{campaign.auctionProtocol.control}</dd></div>
+        <div><dt>Проверяемое изменение</dt><dd>{campaign.auctionProtocol.testedChange}</dd></div>
+        <div><dt>Ставки и предел</dt><dd>{campaign.auctionProtocol.biddingStrategy} · {campaign.auctionProtocol.bidCeiling}</dd></div>
+        <div><dt>Запросы</dt><dd>{campaign.auctionProtocol.queryMatching}</dd></div>
+        <div><dt>Автотаргетинг</dt><dd>{campaign.auctionProtocol.autotargetingPolicy}</dd></div>
+        <div><dt>Распределение</dt><dd>{campaign.auctionProtocol.trafficSplit}</dd></div>
+        <div><dt>Бюджет и период</dt><dd>{campaign.auctionProtocol.testBudget} · {campaign.auctionProtocol.testPeriod}</dd></div>
+        <div><dt>Измеряемый результат</dt><dd>{campaign.auctionProtocol.measurementGoal}</dd></div>
+        <div><dt>Условие успеха</dt><dd>{campaign.auctionProtocol.successThreshold}</dd></div>
+        <div><dt>Условие остановки</dt><dd>{campaign.auctionProtocol.stopCondition}</dd></div>
+        <div><dt>Честность вывода</dt><dd>{campaign.auctionProtocol.attribution}</dd></div>
+      </dl>
+      <p>{campaign.auctionProtocol.evidenceStatus}</p>
+    </section>
+    <section className="owner-publish-preview" aria-label="Точный предпросмотр публикации">
+      <h4>Что увидят клиенты</h4>
+      <div><strong>Заголовки</strong><ul>{campaign.publishPreview.titles.map((title) => <li key={title}>{title}</li>)}</ul></div>
+      <div><strong>Тексты</strong><ul>{campaign.publishPreview.texts.map((text) => <li key={text}>{text}</li>)}</ul></div>
+      <div><strong>Ссылки и отслеживание</strong>{campaign.publishPreview.urls.map((url) => <p key={`${url.landing}-${url.tracking}`}>{url.landing}<small>{url.tracking}</small></p>)}</div>
+      <details><summary>Поддерживаемые сочетания · {campaign.publishPreview.creativeCombinations.length}</summary><ol>{campaign.publishPreview.creativeCombinations.map((combination, combinationIndex) => <li key={`${combination.title}-${combination.text}-${combinationIndex}`}><b>{combination.title}</b><span>{combination.text}</span><small>{combination.landing}</small></li>)}</ol></details>
+      <p><b>Происхождение:</b> {campaign.publishPreview.creativeProvenance.family} · {campaign.publishPreview.creativeProvenance.source} · {campaign.publishPreview.creativeProvenance.rights}</p>
+      <p><b>Обязательные оговорки:</b> {campaign.publishPreview.requiredDisclaimers.length ? campaign.publishPreview.requiredDisclaimers.join(" · ") : "Для текущего подтверждённого содержания не требуются"}</p>
+    </section>
+    {campaign.reasons.length > 0 && <ul>{campaign.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>}
+  </article>;
 }
 
 function Hero({ projection }: { projection: OwnerJourneyProjection }) {
@@ -481,7 +554,16 @@ function Header() {
 }
 
 function OwnerField({ field, onTextareaKeyDown }: { field: OwnerActionField; onTextareaKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void }) {
-  const common = { name: field.key, required: field.required, defaultValue: field.value, readOnly: field.readOnly };
+  const common = {
+    name: field.key,
+    required: field.required,
+    defaultValue: field.value,
+    readOnly: field.readOnly,
+    maxLength: field.maximumLength,
+    min: field.minimum,
+    max: field.maximum,
+    step: field.control === "number" ? 1 : undefined,
+  };
   return <label className={field.control === "textarea" ? "wide" : ""}><span>{field.label}</span>
     {field.control === "textarea" ? <textarea {...common} onKeyDown={onTextareaKeyDown} /> : field.control === "select" ? <select name={field.key} required={field.required} defaultValue={field.value}><option value="" disabled>Выберите</option>{field.options?.map((option) => {
       const value = typeof option === "string" ? option : option.value;

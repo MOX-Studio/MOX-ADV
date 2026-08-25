@@ -8,12 +8,21 @@ const applicationSource = await readFile(new URL("../lib/p0-application.ts", imp
 const styles = await readFile(new URL("../app/owner-journey.css", import.meta.url), "utf8");
 const prototypeStyles = await readFile(new URL("../app/prototype/prd-149/prototype.module.css", import.meta.url), "utf8");
 
-test("owner campaign surface renders business options without internal draft controls", () => {
+test("owner campaign surface renders an independent business editor without exposing internal draft identifiers", () => {
   assert.match(clientSource, /Кампании для бизнес-проверки/u);
   assert.match(clientSource, /campaign\.offer/u);
   assert.match(clientSource, /campaign\.audience/u);
   assert.match(clientSource, /campaign\.destination/u);
-  assert.doesNotMatch(clientSource, /publish_fingerprint|draft_revision_id|provider_ids|field_registry/u);
+  assert.match(clientSource, /Редактировать черновик/u);
+  assert.match(clientSource, /Сохранить новую версию/u);
+  assert.match(clientSource, /Отменить правки/u);
+  assert.match(clientSource, /Сохранить протокол/u);
+  assert.match(clientSource, /Поддерживаемые, условные и неподдерживаемые значения/u);
+  assert.match(clientSource, /Точный предпросмотр публикации/u);
+  assert.match(ownerSource, /matchingDraftEditorAction/u);
+  assert.match(ownerSource, /save_draft/u);
+  assert.match(ownerSource, /save_auction_protocol/u);
+  assert.doesNotMatch(clientSource, /publish_fingerprint|draft_revision_id|provider_ids|field_registry|draft_id/u);
   assert.doesNotMatch(clientSource, /Фильтр вариантов|Открыть точную проекцию|Показать скрытые/u);
 });
 

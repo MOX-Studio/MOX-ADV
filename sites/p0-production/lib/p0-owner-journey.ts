@@ -11,6 +11,11 @@ import { BUSINESS_MODEL_FIELD_ORDER } from "./business-model-contract.ts";
 import type { P0AgentOwnerProjection } from "./p0-agent-runtime.ts";
 import { buildOwnerPublishPreview } from "./campaign-creation-profile.ts";
 import {
+  AUCTION_PROTOCOL_EDITOR_FIELDS,
+  CAMPAIGN_DRAFT_EDITOR_CONTRACT,
+  projectionFieldValue,
+} from "./campaign-draft-fields.ts";
+import {
   type AccessReadinessProjection,
   type AccessReadinessService,
   type AccessReadinessState,
@@ -41,6 +46,9 @@ export type OwnerActionField = {
   options?: Array<string | { value: string; label: string }>;
   help?: string;
   readOnly?: boolean;
+  maximumLength?: number;
+  minimum?: number;
+  maximum?: number;
 };
 
 export type OwnerJourneyProjection = {
@@ -256,6 +264,28 @@ export type OwnerJourneyProjection = {
       creativeCombinations: Array<{ title: string; text: string; landing: string; tracking: string }>;
       requiredDisclaimers: string[];
       creativeProvenance: { family: string; source: string; rights: string };
+    };
+    editor: {
+      versionLabel: string;
+      validationStatus: "Проверена" | "Требуется повторная проверка" | "Балл недействителен";
+      validationExplanation: string;
+      publicationHandle: string | null;
+      publicationFields: OwnerActionField[];
+      protocolHandle: string | null;
+      protocolFields: OwnerActionField[];
+      publicationContract: Array<{
+        section: "Кампания" | "Таргетинг" | "Объявление" | "Активы";
+        label: string;
+        classification: "Редактируется" | "Зафиксировано стратегией" | "Зафиксировано возможностями" | "Доступно после отдельной проверки";
+        value: string;
+        explanation: string;
+      }>;
+      capabilityBoundaries: Array<{
+        label: string;
+        classification: "Доступно после отдельной проверки" | "Не поддерживается";
+        explanation: string;
+      }>;
+      feedback: string | null;
     };
     selected: boolean;
     agentRecommended: boolean;
@@ -1442,7 +1472,146 @@ function appliedPractice(state: InternalState): OwnerJourneyProjection["appliedP
   };
 }
 
-function campaignOptions(view: InternalView): OwnerJourneyProjection["campaignOptions"] {
+const OWNER_DRAFT_FIELD_SECTIONS = {
+  CAMPAIGN: "Кампания",
+  AD_GROUP: "Таргетинг",
+  CRITERION: "Таргетинг",
+  AD: "Объявление",
+  ASSET: "Активы",
+} as const;
+
+const OWNER_DRAFT_CLASSIFICATIONS = {
+  EDITABLE: "Редактируется",
+  FIXED_BY_STRATEGY: "Зафиксировано стратегией",
+  FIXED_BY_CAPABILITY: "Зафиксировано возможностями",
+  CONDITIONALLY_ELIGIBLE: "Доступно после отдельной проверки",
+} as const;
+
+function ownerDraftRevisionLabel(value: unknown) {
+  const match = /-r(\d+)$/u.exec(String(value ?? ""));
+  return `Редакция ${match ? Number(match[1]) : 1}`;
+}
+
+function ownerDraftContractValue(pointer: string, value: unknown) {
+  if (value === undefined || value === null) return "Не публикуется";
+  if (pointer.endsWith("/TimeTargeting")) return "Ежедневно, круглосуточно по московскому времени";
+  if (pointer.endsWith("/CounterIds")) return "Подтверждённый счётчик Метрики";
+  if (pointer.endsWith("/WeeklySpendLimit") || pointer.endsWith("/BidCeiling")) {
+    return `${Math.floor(Number(value) / 1_000_000).toLocaleString("ru-RU")} ₽`;
+  }
+  const labels: Record<string, string> = {
+    YES: "Включено",
+    NO: "Отключено",
+    WB_MAXIMUM_CLICKS: "Максимум переходов в недельном бюджете",
+    SERVING_OFF: "Показы отключены",
+    "Europe/Moscow": "Москва",
+  };
+  if (typeof value === "string") return labels[value] ?? ownerText(value, "Не указано", 1_500);
+  if (typeof value === "number") return value.toLocaleString("ru-RU");
+  if (Array.isArray(value)) return value.map((item) => ownerText(item, "", 500)).filter(Boolean).join(", ") || "Не публикуется";
+  const items = list(record(value).Items);
+  if (items.length) return items.map((item) => ownerText(item, "", 500)).filter(Boolean).join(", ");
+  return "Зафиксировано текущим профилем";
+}
+
+function ownerDraftContractExplanation(classification: keyof typeof OWNER_DRAFT_CLASSIFICATIONS) {
+  if (classification === "EDITABLE") return "Сохраняется в новой редакции и входит в точную проекцию публикации.";
+  if (classification === "FIXED_BY_STRATEGY") return "Изменяется только через отдельную утверждённую стратегию.";
+  if (classification === "FIXED_BY_CAPABILITY") return "Определяется подтверждённым профилем возможностей выбранного аккаунта.";
+  return "Не публикуется, пока отдельная проверка API и аккаунта не подтвердит поддержку.";
+}
+
+function draftPublicationFields(draft: Record<string, unknown>): OwnerActionField[] {
+  return CAMPAIGN_DRAFT_EDITOR_CONTRACT.publication_fields
+    .filter((field) => field.editable && field.input_name)
+    .map((field) => {
+      const key = String(field.input_name);
+      const control: OwnerActionField["control"] = ["negative_keywords", "keyword", "ad_text"].includes(key) ? "textarea" : "text";
+      return {
+        key,
+        label: field.label,
+        control,
+        value: ownerText(draft[key], "", Number(field.maximum_length ?? 1_000)),
+        required: true,
+        maximumLength: Number(field.maximum_length ?? 1_000),
+        help: `Публикуется точно в текущей кампании. До ${Number(field.maximum_length).toLocaleString("ru-RU")} символов.`,
+      };
+    });
+}
+
+function draftProtocolFields(draft: Record<string, unknown>): OwnerActionField[] {
+  const protocol = record(draft.auction_protocol);
+  const bidding = record(protocol.bidding);
+  const split = record(protocol.traffic_split);
+  const period = record(protocol.test_period);
+  const values: Record<string, string | number> = {
+    control: ownerText(protocol.control, "", 1_000),
+    tested_change: ownerText(protocol.tested_change, "", 1_000),
+    bidding_strategy: ownerText(bidding.strategy, "", 300),
+    bid_ceiling_rub: Number(bidding.ceiling_rub),
+    query_matching: ownerText(protocol.query_matching, "", 500),
+    autotargeting_policy: ownerText(protocol.autotargeting_policy, "", 500),
+    comparator_percent: Number(split.comparator_percent),
+    treatment_percent: Number(split.treatment_percent),
+    test_budget_rub: Number(protocol.test_budget_rub),
+    start_date: ownerText(period.start_date, "", 10),
+    end_date: ownerText(period.end_date, "", 10),
+    measurement_goal: ownerText(protocol.measurement_goal, "", 1_000),
+    success_threshold: ownerText(protocol.success_threshold, "", 1_000),
+    stop_condition: ownerText(protocol.stop_condition, "", 1_000),
+  };
+  return AUCTION_PROTOCOL_EDITOR_FIELDS.map((field) => ({
+    key: field.key,
+    label: field.label,
+    control: field.control,
+    value: values[field.key] ?? "",
+    required: true,
+    ...(field.maximum_length ? { maximumLength: field.maximum_length } : {}),
+    ...(["bid_ceiling_rub", "test_budget_rub"].includes(field.key) ? { minimum: 1 } : {}),
+    ...(["comparator_percent", "treatment_percent"].includes(field.key) ? { minimum: 0, maximum: 100 } : {}),
+    help: "Существенная правка создаёт новую редакцию кампании и требует повторной проверки.",
+  }));
+}
+
+function draftEditorFeedback(draft: Record<string, unknown>) {
+  const currentVersion = String(draft.draft_revision_id ?? "");
+  const draftSave = record(draft.draft_save_result);
+  const protocolSave = record(draft.protocol_edit_result);
+  const draftSaveIsCurrent = String(draftSave.current_draft_revision_id ?? "") === currentVersion;
+  const protocolSaveIsCurrent = String(protocolSave.current_draft_revision_id ?? "") === currentVersion;
+  if (protocolSaveIsCurrent && !draftSaveIsCurrent) return protocolSave.material_change === true
+    ? "Сохранена новая редакция аукционного протокола. Балл и полномочие недействительны до повторной проверки."
+    : "После нормализации протокол не изменился: сохранена прежняя редакция.";
+  if (draftSaveIsCurrent) return draftSave.material_change === true
+    ? "Сохранена новая неизменяемая редакция. Балл, предварительная проверка, список и полномочие недействительны до повторной проверки."
+    : "После нормализации значения не изменились: сохранена прежняя редакция и действующие проверки.";
+  if (protocolSaveIsCurrent) return protocolSave.material_change === true
+    ? "Сохранена новая редакция аукционного протокола. Балл и полномочие недействительны до повторной проверки."
+    : "После нормализации протокол не изменился: сохранена прежняя редакция.";
+  return null;
+}
+
+async function draftEditorActionHandle(ownerKey: string, view: InternalView, draftId: string, kind: "publication" | "protocol") {
+  return opaqueHandle({ ownerKey, state: view.revision, kind: `edit-campaign-draft-${kind}`, target: draftId });
+}
+
+async function matchingDraftEditorAction(ownerKey: string, view: InternalView, handle: string) {
+  const drafts = list(record(view.state.recommendation_set).drafts)
+    .map(record)
+    .filter((draft) => draft.visibility !== "HIDDEN" && draft.draft_id);
+  for (const draft of drafts) {
+    const draftId = String(draft.draft_id);
+    if (allowed(view, "save_draft") && handle === await draftEditorActionHandle(ownerKey, view, draftId, "publication")) {
+      return { kind: "publication" as const, draft };
+    }
+    if (allowed(view, "save_auction_protocol") && handle === await draftEditorActionHandle(ownerKey, view, draftId, "protocol")) {
+      return { kind: "protocol" as const, draft };
+    }
+  }
+  return null;
+}
+
+async function campaignOptions(ownerKey: string, view: InternalView): Promise<OwnerJourneyProjection["campaignOptions"]> {
   const state = view.state;
   const recommendationSet = record(state.recommendation_set);
   const correctedDrafts = new Map(state.package_corrections
@@ -1453,11 +1622,12 @@ function campaignOptions(view: InternalView): OwnerJourneyProjection["campaignOp
     return correctedDrafts.get(String(draft.draft_id ?? "")) ?? value;
   });
   const recommendedIds = new Set(list(record(recommendationSet.recommended_shortlist).draft_ids).map(String));
-  return drafts
+  return Promise.all(drafts
     .filter((value) => record(value).visibility !== "HIDDEN")
     .slice(0, 6)
-    .map((value, index) => {
+    .map(async (value, index) => {
       const draft = record(value);
+      const draftId = String(draft.draft_id ?? "");
       const score = record(draft.viability_score);
       const eligibility = record(score.eligibility);
       const gaps = record(score.evidence_gaps);
@@ -1474,6 +1644,17 @@ function campaignOptions(view: InternalView): OwnerJourneyProjection["campaignOp
       const protocolSplit = record(protocol.traffic_split);
       const protocolPeriod = record(protocol.test_period);
       const attribution = record(protocol.attribution);
+      const blockerCodes = new Set(list(draft.publication_blockers).map((item) => String(record(item).code ?? "")));
+      const revalidationRequired = blockerCodes.has("DRAFT_REVALIDATION_REQUIRED") || blockerCodes.has("AUCTION_PROTOCOL_REVALIDATION_REQUIRED");
+      const validationStatus = revalidationRequired ? "Требуется повторная проверка" as const
+        : Object.keys(score).length ? "Проверена" as const : "Балл недействителен" as const;
+      const publicationContract = CAMPAIGN_DRAFT_EDITOR_CONTRACT.publication_fields.map((field) => ({
+        section: OWNER_DRAFT_FIELD_SECTIONS[field.object_kind],
+        label: field.label,
+        classification: OWNER_DRAFT_CLASSIFICATIONS[field.classification],
+        value: ownerDraftContractValue(field.pointer, projectionFieldValue(draft.publish_projection, field.pointer)),
+        explanation: ownerDraftContractExplanation(field.classification),
+      }));
       return {
         name: ownerText(draft.campaign_name, `Кампания ${index + 1}`, 255),
         audience: ownerText(answerValue(state, "target_audience"), "Целевая аудитория уточняется", 500),
@@ -1483,7 +1664,7 @@ function campaignOptions(view: InternalView): OwnerJourneyProjection["campaignOp
         readiness: status === "BLOCKED" ? "Заблокирована" as const
           : status === "INSUFFICIENT_EVIDENCE" ? "Недостаточно доказательств" as const
             : status === "TESTABLE_WITH_GAPS" ? "Есть существенные пробелы" as const : "Готова к проверке" as const,
-        comparativeScore: score.score === null || score.score === undefined ? "Не рассчитывается до hard eligibility" : `${score.score}/100 · только сравнительный приоритет, не прогноз`,
+        comparativeScore: score.score === null || score.score === undefined ? "Не рассчитывается до прохождения обязательных условий" : `${score.score}/100 · только сравнительный приоритет, не прогноз`,
         evidenceCoverage: `${Number(coverage.percent ?? 0)}%`,
         sensitivity: score.score_lower === null || score.score_lower === undefined ? "Недоступна до оценки" : `${score.score_lower}–${score.score_upper}`,
         reasons,
@@ -1507,10 +1688,30 @@ function campaignOptions(view: InternalView): OwnerJourneyProjection["campaignOp
           evidenceStatus: "Предположение теста отделено от зафиксированных фактов рекламной системы",
         },
         publishPreview: buildOwnerPublishPreview(record(draft.publish_projection)),
+        editor: {
+          versionLabel: ownerDraftRevisionLabel(draft.draft_revision_id),
+          validationStatus,
+          validationExplanation: revalidationRequired
+            ? "Балл, предварительная проверка, короткий список и прежнее полномочие не действуют для этой редакции."
+            : validationStatus === "Проверена"
+              ? "Балл и проекция рассчитаны для этой точной сохранённой редакции."
+              : "Кампания не может войти в пакет, пока её балл и проекция не проверены заново.",
+          publicationHandle: allowed(view, "save_draft") ? await draftEditorActionHandle(ownerKey, view, draftId, "publication") : null,
+          publicationFields: draftPublicationFields(draft),
+          protocolHandle: allowed(view, "save_auction_protocol") ? await draftEditorActionHandle(ownerKey, view, draftId, "protocol") : null,
+          protocolFields: draftProtocolFields(draft),
+          publicationContract,
+          capabilityBoundaries: CAMPAIGN_DRAFT_EDITOR_CONTRACT.capability_boundaries.map((boundary) => ({
+            label: boundary.label,
+            classification: boundary.classification === "CONDITIONALLY_ELIGIBLE" ? "Доступно после отдельной проверки" as const : "Не поддерживается" as const,
+            explanation: boundary.reason,
+          })),
+          feedback: draftEditorFeedback(draft),
+        },
         selected,
-        agentRecommended: recommendedIds.has(String(draft.draft_id)),
+        agentRecommended: recommendedIds.has(draftId),
       };
-    });
+    }));
 }
 
 function executionOutcome(status: unknown) {
@@ -1745,7 +1946,7 @@ async function project(
         }],
       }
     : baseDescriptor;
-  const campaigns = campaignOptions(view);
+  const campaigns = await campaignOptions(ownerKey, view);
   const goalInterview = view.state.owner_goal_interview
     ? await projectOwnerGoalInterview(ownerKey, view.state.owner_goal_interview)
     : null;
@@ -2052,6 +2253,58 @@ export class P0OwnerJourney {
           expected_revision: view.revision,
           confirmation: "CONFIRM_CONTEXT_GOAL",
           goal: view.state.context_state.business_goal_decision.value,
+        });
+      }
+      const agent = this.agentProjection ? await this.agentProjection(ownerKey) : null;
+      if (agent) view = await this.application.query(ownerKey);
+      const access = accessState && this.accessReadiness ? this.accessReadiness.project(accessState) : null;
+      return project(ownerKey, view, agent, access);
+    }
+    const draftEditorAction = await matchingDraftEditorAction(ownerKey, view, submission.handle);
+    if (draftEditorAction) {
+      const values = record(submission.values);
+      const draftId = String(draftEditorAction.draft.draft_id);
+      if (draftEditorAction.kind === "publication") {
+        view = await this.application.command(ownerKey, {
+          action: "save_draft",
+          expected_revision: view.revision,
+          value: {
+            draft_id: draftId,
+            campaign_name: required(values, "campaign_name"),
+            group_name: required(values, "group_name"),
+            negative_keywords: required(values, "negative_keywords"),
+            keyword: required(values, "keyword"),
+            ad_title: required(values, "ad_title"),
+            ad_text: required(values, "ad_text"),
+          },
+        });
+      } else {
+        view = await this.application.command(ownerKey, {
+          action: "save_auction_protocol",
+          expected_revision: view.revision,
+          value: {
+            draft_id: draftId,
+            control: required(values, "control"),
+            tested_change: required(values, "tested_change"),
+            bidding: {
+              strategy: required(values, "bidding_strategy"),
+              ceiling_rub: required(values, "bid_ceiling_rub"),
+            },
+            query_matching: required(values, "query_matching"),
+            autotargeting_policy: required(values, "autotargeting_policy"),
+            traffic_split: {
+              comparator_percent: required(values, "comparator_percent"),
+              treatment_percent: required(values, "treatment_percent"),
+            },
+            test_budget_rub: required(values, "test_budget_rub"),
+            test_period: {
+              start_date: required(values, "start_date"),
+              end_date: required(values, "end_date"),
+            },
+            measurement_goal: required(values, "measurement_goal"),
+            success_threshold: required(values, "success_threshold"),
+            stop_condition: required(values, "stop_condition"),
+          },
         });
       }
       const agent = this.agentProjection ? await this.agentProjection(ownerKey) : null;

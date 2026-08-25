@@ -195,6 +195,52 @@
 .owner-campaigns dt { color: var(--owner-muted); font-size: 6px; }
 .owner-campaigns dd { margin: 0; font-size: 7px; font-weight: 700; overflow-wrap: anywhere; }
 .owner-campaigns article ul { margin: 9px 0 0; padding-left: 16px; color: var(--owner-danger); font-size: 7px; }
+.owner-draft-version { display: flex; gap: 10px; justify-content: space-between; align-items: flex-start; margin: 9px 0; padding: 10px; border: 1px solid var(--owner-line); border-radius: 7px; background: #f7faf8; }
+.owner-draft-version div { min-width: 0; }
+.owner-draft-version span, .owner-draft-version strong, .owner-draft-version small { display: block; }
+.owner-draft-version span { color: var(--owner-green-dark); font-size: 7px; font-weight: 850; text-transform: uppercase; }
+.owner-draft-version strong { margin-top: 4px; font-size: 9px; }
+.owner-draft-version small { margin-top: 4px; color: var(--owner-muted); font-size: 6px; line-height: 1.45; }
+.owner-draft-version > button { flex: 0 0 auto; min-height: 32px; padding: 0 10px; border: 1px solid var(--owner-green); border-radius: 6px; color: var(--owner-green-dark); background: white; font-size: 7px; font-weight: 850; }
+.owner-draft-version > span { padding: 6px 8px; border-radius: 999px; color: var(--owner-muted); background: #edf1ee; font-size: 6px; white-space: nowrap; }
+.owner-campaigns article[data-validation-status="Требуется повторная проверка"] .owner-draft-version { border-color: #dfbd86; background: var(--owner-amber); }
+.owner-campaigns article[data-validation-status="Балл недействителен"] .owner-draft-version { border-color: #dfaaa4; background: #fbe9e6; }
+.owner-draft-feedback { margin: 9px 0; padding: 9px 10px; border-left: 3px solid var(--owner-green); border-radius: 6px; color: var(--owner-green-dark); background: var(--owner-soft); font-size: 7px; line-height: 1.45; }
+.owner-draft-editor { margin: 11px 0; padding: 12px; border: 2px solid var(--owner-green); border-radius: 8px; background: #f8fcf9; }
+.owner-draft-editor > header { display: flex; gap: 12px; justify-content: space-between; align-items: flex-start; color: var(--owner-ink); }
+.owner-draft-editor > header span { color: var(--owner-green-dark); font-size: 6px; font-weight: 850; letter-spacing: .08em; }
+.owner-draft-editor > header h4 { margin: 5px 0 0; font-size: 12px; }
+.owner-draft-editor > header > strong { padding: 5px 7px; border-radius: 999px; color: var(--owner-green-dark); background: var(--owner-soft); font-size: 6px; white-space: nowrap; }
+.owner-draft-editor > p, .owner-draft-editor form > p, .owner-draft-contract > p { margin: 7px 0 0; color: var(--owner-muted); font-size: 7px; line-height: 1.45; }
+.owner-draft-editor form { margin-top: 11px; padding-top: 11px; border-top: 1px solid var(--owner-line); }
+.owner-draft-editor form h5, .owner-draft-contract h5 { margin: 0; color: var(--owner-ink); font-size: 9px; }
+.owner-draft-editor .owner-fields { gap: 8px; margin-top: 9px; }
+.owner-draft-editor .owner-fields label > span { font-size: 7px; }
+.owner-draft-editor .owner-fields input, .owner-draft-editor .owner-fields select { height: 36px; padding: 0 9px; font-size: 7px; }
+.owner-draft-editor .owner-fields textarea { min-height: 60px; padding: 8px 9px; font-size: 7px; }
+.owner-draft-editor .owner-fields small { font-size: 6px; }
+.owner-draft-editor form > footer { display: flex; gap: 7px; justify-content: flex-end; margin-top: 10px; }
+.owner-draft-editor form > footer button { min-height: 34px; padding: 0 11px; border: 1px solid var(--owner-line); border-radius: 6px; color: var(--owner-ink); background: white; font-size: 7px; font-weight: 800; }
+.owner-draft-editor form > footer button[type="submit"] { border-color: var(--owner-green); color: white; background: var(--owner-green); }
+.owner-draft-contract { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--owner-line); }
+.owner-draft-contract > summary { cursor: pointer; color: var(--owner-green-dark); font-size: 8px; font-weight: 850; }
+.owner-draft-contract > div { display: grid; gap: 5px; margin-top: 9px; }
+.owner-draft-contract > div > div { display: grid; grid-template-columns: 70px minmax(0, 1fr) auto; gap: 3px 7px; align-items: start; padding: 8px; border: 1px solid var(--owner-line); border-radius: 6px; background: white; }
+.owner-draft-contract > div span { color: var(--owner-muted); font-size: 5px; font-weight: 800; text-transform: uppercase; }
+.owner-draft-contract > div strong { font-size: 7px; }
+.owner-draft-contract > div b { color: var(--owner-green-dark); font-size: 5px; text-align: right; }
+.owner-draft-contract > div output, .owner-draft-contract > div small { grid-column: 2 / -1; overflow-wrap: anywhere; }
+.owner-draft-contract > div output { font-size: 7px; font-weight: 750; }
+.owner-draft-contract > div small { color: var(--owner-muted); font-size: 6px; line-height: 1.4; }
+.owner-draft-contract > div > div[data-field-classification="Доступно после отдельной проверки"] { border-color: #dfbd86; background: #fffaf2; }
+.owner-draft-contract > section { display: grid; gap: 5px; margin-top: 10px; }
+.owner-draft-contract > section h5 { margin-bottom: 2px; }
+.owner-draft-contract > section > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 8px; padding: 8px; border-radius: 6px; background: #fffaf2; }
+.owner-draft-contract > section strong { font-size: 7px; }
+.owner-draft-contract > section b { color: #7b531d; font-size: 6px; }
+.owner-draft-contract > section small { grid-column: 1 / -1; color: var(--owner-muted); font-size: 6px; line-height: 1.4; }
+.owner-draft-contract > section > div[data-capability-classification="Не поддерживается"] { background: #fbe9e6; }
+.owner-draft-contract > section > div[data-capability-classification="Не поддерживается"] b { color: var(--owner-danger); }
 .owner-publish-preview { margin-top: 10px; padding: 10px; border-radius: 7px; background: var(--owner-soft); font-size: 7px; }
 .owner-publish-preview h4 { margin: 0 0 8px; font-size: 10px; }
 .owner-publish-preview > div { margin-top: 7px; }

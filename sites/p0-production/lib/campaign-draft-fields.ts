@@ -80,6 +80,91 @@ export const DIRECT_V501_DRAFT_FIELD_REGISTRY = Object.freeze({
   ] satisfies DraftFieldRegistryEntry[]),
 });
 
+export type AuctionProtocolEditorField = {
+  key: string;
+  label: string;
+  control: "text" | "textarea" | "number" | "date";
+  maximum_length: number | null;
+  materiality: "NORMALIZATION_SENSITIVE_MATERIAL";
+};
+
+export const AUCTION_PROTOCOL_EDITOR_FIELDS = Object.freeze([
+  { key: "control", label: "С чем сравниваем", control: "textarea", maximum_length: 1_000, materiality: "NORMALIZATION_SENSITIVE_MATERIAL" },
+  { key: "tested_change", label: "Проверяемое изменение", control: "textarea", maximum_length: 1_000, materiality: "NORMALIZATION_SENSITIVE_MATERIAL" },
+  { key: "bidding_strategy", label: "Подход к ставкам", control: "textarea", maximum_length: 300, materiality: "NORMALIZATION_SENSITIVE_MATERIAL" },
+  { key: "bid_ceiling_rub", label: "Предел ставки, ₽", control: "number", maximum_length: null, materiality: "NORMALIZATION_SENSITIVE_MATERIAL" },
+  { key: "query_matching", label: "Сопоставление запросов", control: "textarea", maximum_length: 500, materiality: "NORMALIZATION_SENSITIVE_MATERIAL" },
+  { key: "autotargeting_policy", label: "Политика автотаргетинга", control: "textarea", maximum_length: 500, materiality: "NORMALIZATION_SENSITIVE_MATERIAL" },
+  { key: "comparator_percent", label: "Доля сравнения, %", control: "number", maximum_length: null, materiality: "NORMALIZATION_SENSITIVE_MATERIAL" },
+  { key: "treatment_percent", label: "Доля изменения, %", control: "number", maximum_length: null, materiality: "NORMALIZATION_SENSITIVE_MATERIAL" },
+  { key: "test_budget_rub", label: "Бюджет теста, ₽", control: "number", maximum_length: null, materiality: "NORMALIZATION_SENSITIVE_MATERIAL" },
+  { key: "start_date", label: "Начало теста", control: "date", maximum_length: null, materiality: "NORMALIZATION_SENSITIVE_MATERIAL" },
+  { key: "end_date", label: "Окончание теста", control: "date", maximum_length: null, materiality: "NORMALIZATION_SENSITIVE_MATERIAL" },
+  { key: "measurement_goal", label: "Измеряемый результат", control: "textarea", maximum_length: 1_000, materiality: "NORMALIZATION_SENSITIVE_MATERIAL" },
+  { key: "success_threshold", label: "Условие успеха", control: "textarea", maximum_length: 1_000, materiality: "NORMALIZATION_SENSITIVE_MATERIAL" },
+  { key: "stop_condition", label: "Условие остановки", control: "textarea", maximum_length: 1_000, materiality: "NORMALIZATION_SENSITIVE_MATERIAL" },
+] satisfies AuctionProtocolEditorField[]);
+
+export type DraftEditorCapabilityBoundary = {
+  capability: string;
+  label: string;
+  classification: "CONDITIONALLY_ELIGIBLE" | "UNSUPPORTED";
+  reason: string;
+};
+
+export const DRAFT_EDITOR_CAPABILITY_BOUNDARIES = Object.freeze([
+  {
+    capability: "AUTOTARGETING",
+    label: "Автотаргетинг",
+    classification: "CONDITIONALLY_ELIGIBLE",
+    reason: "Появится только после отдельного подтверждения официального API и возможностей выбранного аккаунта.",
+  },
+  {
+    capability: "SITELINKS",
+    label: "Быстрые ссылки",
+    classification: "CONDITIONALLY_ELIGIBLE",
+    reason: "Появятся только при подтверждённой поддержке аккаунта и правах на точные посадочные страницы.",
+  },
+  {
+    capability: "PRODUCT_GALLERY",
+    label: "Товарная галерея",
+    classification: "UNSUPPORTED",
+    reason: "Текущий профиль P0 публикует только поиск без товарной галереи.",
+  },
+  {
+    capability: "NETWORK_SERVING",
+    label: "Показы в сетях",
+    classification: "UNSUPPORTED",
+    reason: "Текущий профиль P0 фиксирует показы в сетях как отключённые.",
+  },
+  {
+    capability: "MEDIA_ASSETS",
+    label: "Изображения и видео",
+    classification: "UNSUPPORTED",
+    reason: "Текущий профиль P0 создаёт только поддерживаемое текстовое семейство объявлений.",
+  },
+  {
+    capability: "CAMPAIGNS_RESUME",
+    label: "Запуск показов и расходов",
+    classification: "UNSUPPORTED",
+    reason: "P0 создаёт кампании остановленными и не поддерживает возобновление показов.",
+  },
+] satisfies DraftEditorCapabilityBoundary[]);
+
+export const CAMPAIGN_DRAFT_EDITOR_CONTRACT = Object.freeze({
+  schema_version: "p0-campaign-draft-editor-contract-v1",
+  profile_id: DIRECT_V501_DRAFT_FIELD_REGISTRY.profile_id,
+  profile_version: DIRECT_V501_DRAFT_FIELD_REGISTRY.profile_version,
+  publication_fields: DIRECT_V501_DRAFT_FIELD_REGISTRY.fields,
+  auction_protocol_fields: AUCTION_PROTOCOL_EDITOR_FIELDS,
+  capability_boundaries: DRAFT_EDITOR_CAPABILITY_BOUNDARIES,
+  materiality: {
+    normalization_only: "PRESERVE_EXACT_DRAFT_REVISION_AND_AUTHORITY",
+    supported_publication_change: "CREATE_IMMUTABLE_DRAFT_REVISION_AND_REQUIRE_REVALIDATION",
+    auction_protocol_change: "CREATE_IMMUTABLE_DRAFT_REVISION_AND_REQUIRE_REVALIDATION",
+  },
+});
+
 function canonicalRegistryValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalRegistryValue);
   if (!value || typeof value !== "object") return value;
