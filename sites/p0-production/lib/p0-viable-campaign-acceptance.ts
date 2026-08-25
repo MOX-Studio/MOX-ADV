@@ -446,6 +446,21 @@ function honestyInput(base: ScenarioInput, area: HonestyArea) {
   return input;
 }
 
+export async function buildP0ViableCampaignPackageContext(sourceValue: unknown) {
+  const source = validateSource(sourceValue);
+  const input = scenarioInput(source);
+  return {
+    source: structuredClone(source),
+    model: structuredClone(input.model),
+    strategy: structuredClone(input.strategy),
+    analyticsEvidence: structuredClone(input.analyticsEvidence),
+    directCapabilitySnapshot: structuredClone(input.directCapabilitySnapshot),
+    measurementDestinationReadiness: structuredClone(input.measurementDestinationReadiness),
+    recommendationSet: await execute(input),
+    blockedRecommendationSet: await execute(honestyInput(input, "CAPABILITY")),
+  };
+}
+
 export async function runP0ViableCampaignScenarios(sourceValue: unknown) {
   const source = validateSource(sourceValue);
   const input = scenarioInput(source);

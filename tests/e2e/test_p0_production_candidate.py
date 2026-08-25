@@ -627,7 +627,7 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 self.assertGreaterEqual(page.locator(".owner-campaigns article").count(), 2)
 
                 page.get_by_label("Путь подготовки рекламных кампаний").get_by_role(
-                    "button", name=re.compile(r"^Стратегия")
+                    "button", name=re.compile(r"Стратегия")
                 ).click()
                 approved_review = page.get_by_role(
                     "region", name="Проверка точной версии стратегии", exact=True
@@ -651,12 +651,12 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                     "button", name="Подтвердить точную версию", exact=True
                 ).wait_for()
                 page.get_by_label("Путь подготовки рекламных кампаний").get_by_role(
-                    "button", name=re.compile(r"^Кампании")
+                    "button", name=re.compile(r"Кампании")
                 ).click()
                 self.assertTrue(page.get_by_text("ЭТАП ЕЩЁ НЕ ОТКРЫТ", exact=True).is_visible())
                 self.assertEqual(0, page.locator(".owner-campaigns").count())
                 page.get_by_label("Путь подготовки рекламных кампаний").get_by_role(
-                    "button", name=re.compile(r"^Стратегия")
+                    "button", name=re.compile(r"Стратегия")
                 ).click()
                 page.get_by_role(
                     "region", name="Проверка точной версии стратегии", exact=True
@@ -751,6 +751,9 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 )
 
                 page.reload(wait_until="networkidle")
+                page.get_by_label("Путь подготовки рекламных кампаний").get_by_role(
+                    "button", name=re.compile(r"Кампании")
+                ).click()
                 first_campaign = page.locator(".owner-campaigns > div > article").nth(0)
                 second_campaign = page.locator(".owner-campaigns > div > article").nth(1)
                 self.assertIn(

@@ -1,0 +1,219 @@
+{
+  "schema_version": "p0-package-selection-acceptance-v1",
+  "feature_issue": 242,
+  "implemented_tasks": [
+    287,
+    288
+  ],
+  "generated_at": "2026-08-25T11:36:04.213Z",
+  "status": "READY_FOR_OWNER_CHECKPOINT",
+  "task_287_shortlist_management": {
+    "recommended_shortlist": {
+      "source": "CURRENT_RECOMMENDATION_SET_COMPARATIVE_PRIORITY",
+      "reproducible": true,
+      "campaigns": [
+        "Брендинг для запуска или малого бизнеса · STRATEGY_BASELINE_FALLBACK",
+        "Брендинг для запуска или малого бизнеса · Целевое действие"
+      ]
+    },
+    "owner_actions": {
+      "initial_order": [
+        "Брендинг для запуска или малого бизнеса · STRATEGY_BASELINE_FALLBACK",
+        "Брендинг для запуска или малого бизнеса · Целевое действие"
+      ],
+      "after_exclusion": [
+        "Брендинг для запуска или малого бизнеса · Целевое действие"
+      ],
+      "after_positional_restore": [
+        "Брендинг для запуска или малого бизнеса · STRATEGY_BASELINE_FALLBACK",
+        "Брендинг для запуска или малого бизнеса · Целевое действие"
+      ],
+      "after_reorder": [
+        "Брендинг для запуска или малого бизнеса · Целевое действие",
+        "Брендинг для запуска или малого бизнеса · STRATEGY_BASELINE_FALLBACK"
+      ]
+    },
+    "blocked_draft": {
+      "selection_rejected": true,
+      "reason": "Exact Direct account does not report UNIFIED_CAMPAIGN eligibility."
+    },
+    "stale_action_rejected": true,
+    "owner_order_stored_separately_from_draft_versions": true
+  },
+  "task_288_exact_package_review": {
+    "owner_review": {
+      "composition_and_order": [
+        {
+          "order": 1,
+          "campaign": "Брендинг для запуска или малого бизнеса · Целевое действие",
+          "budget_rub": 11600,
+          "period": {
+            "start": "2026-09-01",
+            "end": "2026-09-30"
+          },
+          "auction_protocol": {
+            "comparison": "Точная исходная кампания для сравнения",
+            "tested_change": "Показать качественный результат прямо в формулировке предложения и проверить его как отдельную гипотезу.",
+            "bidding_strategy": "Максимум переходов в недельном бюджете",
+            "bid_ceiling_rub": 116,
+            "query_matching": "Широкое соответствие заданной фразе",
+            "autotargeting": "Только заданные ключевые фразы; автотаргетинг выключен",
+            "traffic_split": {
+              "comparison_percent": 50,
+              "change_percent": 50
+            },
+            "measured_result": "Заявка с квиза Тильда (апрель26)",
+            "success_condition": "К моменту окончания теста primary measurement goal достигается без нарушения stop condition; вывод остаётся scoped evidence, не прогнозом.",
+            "stop_condition": "Остановить treatment при исчерпании test budget, завершении периода, потере измеримости или любом нарушении non-serving safety/authority."
+          }
+        },
+        {
+          "order": 2,
+          "campaign": "Брендинг для запуска или малого бизнеса · STRATEGY_BASELINE_FALLBACK",
+          "budget_rub": 11600,
+          "period": {
+            "start": "2026-09-01",
+            "end": "2026-09-30"
+          },
+          "auction_protocol": {
+            "comparison": "Текущая подтверждённая поисковая формулировка",
+            "tested_change": "Контроль без дополнительного изменения",
+            "bidding_strategy": "Максимум переходов в недельном бюджете",
+            "bid_ceiling_rub": 116,
+            "query_matching": "Широкое соответствие заданной фразе",
+            "autotargeting": "Только заданные ключевые фразы; автотаргетинг выключен",
+            "traffic_split": {
+              "comparison_percent": 100,
+              "change_percent": 0
+            },
+            "measured_result": "Заявка с квиза Тильда (апрель26)",
+            "success_condition": "К моменту окончания теста primary measurement goal достигается без нарушения stop condition; вывод остаётся scoped evidence, не прогнозом.",
+            "stop_condition": "Остановить treatment при исчерпании test budget, завершении периода, потере измеримости или любом нарушении non-serving safety/authority."
+          }
+        }
+      ],
+      "budget_alignment": {
+        "strategy_weekly_budget_rub": 11600,
+        "strategy_monthly_budget_rub": 50267,
+        "ordered_package_sum_rub": 23200,
+        "difference_rub": -27067,
+        "classification": "LIMITED_TEST",
+        "explanation": "Выбранный пакет использует только часть месячного бюджета Strategy и рассматривается как ограниченный тест, не прогноз результата.",
+        "performance_forecast": false,
+        "campaigns": [
+          {
+            "campaign": "Брендинг для запуска или малого бизнеса · Целевое действие",
+            "budget_rub": 11600,
+            "period": {
+              "start_date": "2026-09-01",
+              "end_date": "2026-09-30"
+            }
+          },
+          {
+            "campaign": "Брендинг для запуска или малого бизнеса · STRATEGY_BASELINE_FALLBACK",
+            "budget_rub": 11600,
+            "period": {
+              "start_date": "2026-09-01",
+              "end_date": "2026-09-30"
+            }
+          }
+        ]
+      },
+      "mandatory_preflight": [
+        {
+          "area": "Цель и Strategy",
+          "status": "Пройдено",
+          "explanation": "Бизнес-цель, Strategy и выбранные кампании относятся к одной точной редакции."
+        },
+        {
+          "area": "Business Model и economics",
+          "status": "Пройдено",
+          "explanation": "Economics подтверждена точной Business Model и не выведена из одного положительного budget field."
+        },
+        {
+          "area": "Свежесть доказательств",
+          "status": "Заблокировано",
+          "explanation": "Evidence Snapshot неизменяем и не содержит просроченных наблюдений в выбранной области."
+        },
+        {
+          "area": "Конкуренты, спрос и стоимость",
+          "status": "Заблокировано",
+          "explanation": "Конкурентные наблюдения, demand и comparable cost доступны и сохраняют источник, scope и дату; недоступность остаётся blocker, а не превращается в ноль."
+        },
+        {
+          "area": "Измерение",
+          "status": "Пройдено",
+          "explanation": "Точный бизнес-результат измерим в подтверждённой области Метрики."
+        },
+        {
+          "area": "Посадочная",
+          "status": "Пройдено",
+          "explanation": "Посадочная готова для всех поддержанных device scopes выбранных кампаний."
+        },
+        {
+          "area": "Утверждения и материалы",
+          "status": "Пройдено",
+          "explanation": "Каждое публикуемое утверждение и material имеет evidence или rights provenance."
+        },
+        {
+          "area": "Точный профиль Direct",
+          "status": "Пройдено",
+          "explanation": "Выбран только frozen Campaign Creation Profile точного рекламного аккаунта."
+        },
+        {
+          "area": "Аукцион и бюджет",
+          "status": "Пройдено",
+          "explanation": "Выбранный пакет использует только часть месячного бюджета Strategy и рассматривается как ограниченный тест, не прогноз результата."
+        }
+      ]
+    },
+    "exact_owner_order_preserved": true,
+    "budget_classification": "LIMITED_TEST",
+    "mandatory_preflight_checked": "7/9",
+    "mandatory_preflight_status": "BLOCKED",
+    "normalization_only_preserved": true,
+    "material_change_invalidated": true,
+    "external_write_calls": 0
+  },
+  "executable_evidence": {
+    "contract": [
+      "tests/campaign-decision-gate.test.mjs",
+      "tests/p0-application-contract.test.mjs · ordered multi-Draft shortlist supports add/remove/positional restore, exact review and a durable no-write Gate",
+      "tests/p0-application-contract.test.mjs · authoritative shortlist command rejects blocked and evidence-gap Drafts without rewriting candidate or evidence audit",
+      "tests/p0-application-contract.test.mjs · normalization preserves exact package Gate while a material Draft edit invalidates and rebases shortlist lineage"
+    ],
+    "browser": {
+      "test": "tests/e2e/test_p0_production_candidate.py",
+      "viewport": {
+        "width": 1920,
+        "height": 1080
+      },
+      "owner_actions": [
+        "исключить допустимый черновик",
+        "вернуть его",
+        "изменить порядок",
+        "открыть точный пакет"
+      ]
+    }
+  },
+  "no_write_proof": {
+    "provider_mutations": [],
+    "external_write_calls": 0,
+    "production_write_attempts": 0,
+    "live_authority_issued": false,
+    "impressions_started": 0,
+    "spend_started_rub": 0,
+    "browser_cabinets_used": false
+  },
+  "human_checkpoint": {
+    "issue": 245,
+    "required": true,
+    "verdict": "PENDING_HUMAN_VERDICT",
+    "implementation_may_claim_acceptance": false,
+    "acceptance_checks": [
+      "Владелец исключает, восстанавливает и меняет порядок допустимых черновиков.",
+      "Черновик со статусом BLOCKED нельзя добавить в пакет, а устаревшее изменение аннулирует пакет.",
+      "Владелец понимает состав, порядок, бюджеты, периоды и аукционный протокол каждого элемента пакета."
+    ]
+  }
+}
