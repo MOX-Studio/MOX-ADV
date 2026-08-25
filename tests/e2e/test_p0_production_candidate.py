@@ -890,6 +890,63 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 )
                 checkpoint("Проверка и создание")
 
+                live_creation = page.get_by_role(
+                    "button", name="Разрешить создание без показов", exact=True
+                )
+                self.assertTrue(live_creation.is_visible())
+                live_creation_form = live_creation.locator("xpath=ancestor::form")
+                self.assertIn(
+                    "Это отдельное одноразовое разрешение выполнит внешнюю запись только для показанного пакета.",
+                    live_creation_form.inner_text(),
+                )
+                self.assertIn("показы, расходы и возобновление запрещены", live_creation_form.inner_text())
+                page.wait_for_timeout(3_500)
+                live_creation.click()
+                page.get_by_role(
+                    "heading", name="Исправление подготовлено к решению", exact=True
+                ).wait_for(timeout=20_000)
+                self.assertEqual(
+                    0,
+                    page.get_by_role(
+                        "button", name="Разрешить создание без показов", exact=True
+                    ).count(),
+                )
+                package_outcomes = page.locator(".owner-package > ul li")
+                self.assertEqual(campaign_count, package_outcomes.count())
+                self.assertTrue(
+                    any("Создана и оставлена без показов" in value for value in package_outcomes.all_inner_texts())
+                )
+                self.assertTrue(
+                    any("Нужно исправить формулировку" in value for value in package_outcomes.all_inner_texts())
+                )
+                checkpoint("Проверка и создание")
+
+                page.get_by_role(
+                    "button", name="Подтвердить исправление", exact=True
+                ).click()
+                page.wait_for_timeout(500)
+                if page.locator(".owner-error").count():
+                    self.fail(page.locator(".owner-error").inner_text())
+                live_correction = page.get_by_role(
+                    "button", name="Разрешить точный повтор без показов", exact=True
+                )
+                live_correction.wait_for()
+                self.assertIn("отдельное одноразовое разрешение", live_correction.locator("xpath=ancestor::form").inner_text())
+                self.assertIn("Исходный результат сохранится отдельно", live_correction.locator("xpath=ancestor::form").inner_text())
+                page.wait_for_timeout(3_500)
+                live_correction.click()
+                page.get_by_role(
+                    "heading", name="Создание завершено без запуска показов", exact=True
+                ).wait_for(timeout=20_000)
+                self.assertTrue(
+                    page.get_by_text("Исправлена, создана и оставлена без показов", exact=True).is_visible()
+                )
+                self.assertEqual(
+                    0,
+                    page.get_by_role("button", name=re.compile(r"Разрешить .*без показов")).count(),
+                )
+                checkpoint("Проверка и создание")
+
                 visible_copy = "\n".join(visible_copy_samples)
                 for forbidden in [
                     "schema_version",

@@ -83,15 +83,17 @@ test("issues exact one-time authority only after complete preflight and binds ev
 
   assert.equal(decision.verdict, "ACCEPTED");
   assert.equal(decision.authority_grant.status, "ACTIVE_UNCONSUMED");
-  assert.deepEqual(decision.authority_grant.exact_authority, sourceReview.authority);
-  assert.equal(decision.authority_grant.exact_authority.ordered_selections[0].draft_revision_id, "draft-1-r4");
-  assert.equal(decision.authority_grant.exact_authority.strategy_revision_id, "strategy-r2");
-  assert.equal(decision.authority_grant.exact_authority.business_model_snapshot.owner_contract.model_revision_id, "model-r3");
-  assert.equal(decision.authority_grant.exact_authority.analytics_evidence_snapshot_id, "evidence-r8");
-  assert.equal(decision.authority_grant.exact_authority.direct_account_binding.account, "owner-account");
-  assert.equal(decision.authority_grant.exact_authority.direct_capability_snapshot.snapshot_id, "capability-r6");
-  assert.equal(decision.authority_grant.exact_authority.claims_assets[0].draft_revision_id, "draft-1-r4");
-  assert.equal(decision.authority_grant.exact_authority.frozen_auction_protocols[0].protocol_revision_id, "auction-1-r3");
+  assert.match(decision.authority_grant.exact_authority_digest, /^sha256:[a-f0-9]{64}$/u);
+  assert.equal(decision.authority_grant.selected_count, 1);
+  assert.equal(decision.authority_grant.direct_account_binding.account, "owner-account");
+  assert.deepEqual(decision.authority_grant.capability_profile_identity, { profile_id: "profile-1", profile_version: "1.0.0" });
+  assert.equal(decision.exact_review.package_review_id, sourceReview.package_review_id);
+  assert.equal(decision.exact_review.package_id, sourceReview.package_id);
+  assert.equal(decision.exact_review.selected_count, 1);
+  assert.equal(decision.exact_review.preflight.passed, 9);
+  assert.match(decision.exact_review.authority_digest, /^sha256:[a-f0-9]{64}$/u);
+  assert.equal(JSON.stringify(decision).includes("business_model_snapshot"), false);
+  assert.equal(JSON.stringify(decision).includes("analytics_evidence_snapshot"), false);
   assert.equal(await verifyPackageOwnerDecision(decision, sourceReview), true);
 
   const blocked = review({

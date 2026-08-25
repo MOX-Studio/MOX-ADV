@@ -5,6 +5,7 @@ import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import styles from "./prototype/prd-149/prototype.module.css";
 import AnalyticsSummaryDisclosure from "./AnalyticsSummaryDisclosure";
 import { OwnerViabilitySummary } from "./OwnerViabilitySummary";
+import { ownerProjectionNeedsRefresh } from "../lib/owner-projection-refresh";
 import type {
   OwnerActionField,
   OwnerJourneyProjection,
@@ -72,11 +73,7 @@ export default function P0Client() {
   }, [error]);
 
   useEffect(() => {
-    if (!projection) return;
-    const agentContinues = projection.agentActivity?.status === "working"
-      || projection.agentActivity?.status === "waiting";
-    const businessContinues = projection.businessOutcome.status === "working" && !projection.primaryAction;
-    if (!agentContinues && !businessContinues) return;
+    if (!projection || !ownerProjectionNeedsRefresh(projection)) return;
     const timer = window.setTimeout(() => {
       request("/api/p0").then((next) => {
         setProjection(next);

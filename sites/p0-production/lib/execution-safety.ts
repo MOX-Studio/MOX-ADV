@@ -64,6 +64,21 @@ export type DirectDispatchIntent = {
   dispatched_at: string;
 };
 
+export type DirectDispatchAuditEntry = {
+  sequence: number;
+  operation: string;
+  request_fingerprint: string;
+  request_summary: {
+    service: string;
+    method: string;
+    object_count: number;
+    selection_count: number;
+  };
+  dispatched_at: string;
+  outcome: "DISPATCHED" | "CONFIRMED" | "PROVIDER_REJECTED" | "AMBIGUOUS";
+  completed_at: string | null;
+};
+
 export type DirectExecutionRecord = DirectExecutionIdentity & {
   schema_version: typeof EXECUTION_SCHEMA;
   status: string;
@@ -76,6 +91,7 @@ export type DirectExecutionRecord = DirectExecutionIdentity & {
   };
   completed_steps: string[];
   pending_dispatch: DirectDispatchIntent | null;
+  dispatch_audit: DirectDispatchAuditEntry[];
   result: Record<string, unknown>;
   created_at: string;
   updated_at: string;
@@ -333,6 +349,34 @@ function requestWithTimeout(init?: RequestInit) {
   return { ...init, signal: AbortSignal.timeout(DIRECT_REQUEST_TIMEOUT_MS) };
 }
 
+function dispatchRequestSummary(service: string, method: string, request: Record<string, unknown>) {
+  const params = valueRecord(request.params);
+  const objectRows = Object.entries(params)
+    .filter(([key, value]) => key !== "SelectionCriteria" && Array.isArray(value))
+    .flatMap(([, value]) => value as unknown[]);
+  const criteria = valueRecord(params.SelectionCriteria);
+  const selectionIds = Array.isArray(criteria.Ids) ? criteria.Ids : [];
+  return {
+    service,
+    method,
+    object_count: objectRows.length,
+    selection_count: selectionIds.length,
+  };
+}
+
+function updateDispatchAudit(
+  record: DirectExecutionRecord,
+  operation: string,
+  outcome: DirectDispatchAuditEntry["outcome"],
+  completedAt: string,
+) {
+  const entry = [...record.dispatch_audit].reverse().find((item) => item.operation === operation && item.outcome === "DISPATCHED");
+  if (entry) {
+    entry.outcome = outcome;
+    entry.completed_at = completedAt;
+  }
+}
+
 async function boundedDirectRead(
   fetcher: typeof fetch,
   url: Parameters<typeof fetch>[0],
@@ -437,6 +481,9 @@ export async function executeSafeSingleCampaign(input: SafeSingleCampaignExecuti
       { requires_reconciliation: true },
     );
   }
+  if (record && !Array.isArray(record.dispatch_audit)) {
+    record.dispatch_audit = [];
+  }
   if (record?.pending_dispatch) {
     try {
       await reconcilePendingDispatch(input, record, now);
@@ -473,6 +520,7 @@ export async function executeSafeSingleCampaign(input: SafeSingleCampaignExecuti
     provider_ids: { campaign_id: null, ad_group_id: null, keyword_id: null, ad_ids: [] },
     completed_steps: [],
     pending_dispatch: null,
+    dispatch_audit: [],
     result: {},
     created_at: timestamp,
     updated_at: timestamp,
@@ -484,8 +532,10 @@ export async function executeSafeSingleCampaign(input: SafeSingleCampaignExecuti
   const journaledFetcher: typeof fetch = async (url, init) => {
     const requestJson = String(init?.body ?? "");
     let method = "";
+    let request: Record<string, unknown> = {};
     try {
-      method = String(valueRecord(JSONbig.parse(requestJson)).method ?? "");
+      request = valueRecord(JSONbig.parse(requestJson));
+      method = String(request.method ?? "");
     } catch (error) {
       throw new DirectWriteError("P0_DIRECT_SERIALIZATION_FAILED", "Direct request serialization is invalid.", {}, { cause: error });
     }
@@ -508,6 +558,15 @@ export async function executeSafeSingleCampaign(input: SafeSingleCampaignExecuti
       request_json: requestJson,
       dispatched_at: now(),
     };
+    record.dispatch_audit.push({
+      sequence: record.dispatch_audit.length + 1,
+      operation,
+      request_fingerprint: record.pending_dispatch.request_fingerprint,
+      request_summary: dispatchRequestSummary(service, method, request),
+      dispatched_at: record.pending_dispatch.dispatched_at,
+      outcome: "DISPATCHED",
+      completed_at: null,
+    });
     record.status = "DISPATCHING";
     record.updated_at = now();
     try {
@@ -526,6 +585,7 @@ export async function executeSafeSingleCampaign(input: SafeSingleCampaignExecuti
     } catch (error) {
       record.status = "RECONCILIATION_REQUIRED";
       record.updated_at = now();
+      updateDispatchAudit(record, operation, "AMBIGUOUS", record.updated_at);
       try {
         await input.journal.save(record);
       } catch {
@@ -548,7 +608,10 @@ export async function executeSafeSingleCampaign(input: SafeSingleCampaignExecuti
     const pendingCompleted = record.pending_dispatch
       ? MUTATION_COMPLETION_PROGRESS[record.pending_dispatch.operation] === status
       : false;
-    if (!reconciliationRequired && pendingCompleted) record.pending_dispatch = null;
+    if (!reconciliationRequired && pendingCompleted) {
+      updateDispatchAudit(record, record.pending_dispatch!.operation, "CONFIRMED", now());
+      record.pending_dispatch = null;
+    }
     record.status = status;
     record.provider_ids = resultProviderIds(result, record.provider_ids);
     record.completed_steps = Array.isArray(result.steps) ? result.steps.map(String) : record.completed_steps;
@@ -593,6 +656,9 @@ export async function executeSafeSingleCampaign(input: SafeSingleCampaignExecuti
     const partial = { ...record.result, ...directError.partial };
     const definitelyRejected = directError.partial.rejected === true;
     const dispatchNotAttempted = directError.partial.dispatch_not_attempted === true;
+    if (definitelyRejected && record.pending_dispatch) {
+      updateDispatchAudit(record, record.pending_dispatch.operation, "PROVIDER_REJECTED", now());
+    }
     if (definitelyRejected || dispatchNotAttempted) record.pending_dispatch = null;
     const hold = !definitelyRejected
       && !dispatchNotAttempted

@@ -91,6 +91,7 @@ import {
   verifyDecisionInvalidation,
   verifyHumanDecisionGate,
   verifyPackageOwnerDecision,
+  verifyPackageOwnerDecisionRecord,
   verifyPackageReview,
   verifyShortlist,
   type DecisionInvalidation,
@@ -115,6 +116,15 @@ import {
   type PackageItemExecution,
   type PackageItemExternalOutcome,
 } from "./campaign-package-execution.ts";
+import {
+  buildLiveCreationAuthority,
+  consumeLiveCreationAuthority,
+  liveCreationAuthorityCanContinue,
+  liveCreationAuthorityCanStart,
+  LIVE_CREATION_CONFIRMATION_TOKEN,
+  verifyLiveCreationAuthority,
+  type LiveCreationAuthority,
+} from "./live-creation-authority.ts";
 import {
   CAMPAIGN_STRATEGY_SCHEMA,
   STRATEGY_QUESTIONNAIRE_SCHEMA,
@@ -188,9 +198,9 @@ import {
 } from "./measurement-destination-readiness.ts";
 
 export const P0_APPLICATION_CONTRACT = "mox-adv.p0.application";
-export const P0_APPLICATION_CONTRACT_VERSION = "1.31.0";
-export const P0_DOCUMENT_SCHEMA = "p0-application-document-v19";
-const P0_LEGACY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4", "p0-application-document-v5", "p0-application-document-v6", "p0-application-document-v7", "p0-application-document-v8", "p0-application-document-v9", "p0-application-document-v10", "p0-application-document-v11", "p0-application-document-v12", "p0-application-document-v13", "p0-application-document-v14", "p0-application-document-v15", "p0-application-document-v16", "p0-application-document-v17", "p0-application-document-v18"]);
+export const P0_APPLICATION_CONTRACT_VERSION = "1.32.0";
+export const P0_DOCUMENT_SCHEMA = "p0-application-document-v20";
+const P0_LEGACY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4", "p0-application-document-v5", "p0-application-document-v6", "p0-application-document-v7", "p0-application-document-v8", "p0-application-document-v9", "p0-application-document-v10", "p0-application-document-v11", "p0-application-document-v12", "p0-application-document-v13", "p0-application-document-v14", "p0-application-document-v15", "p0-application-document-v16", "p0-application-document-v17", "p0-application-document-v18", "p0-application-document-v19"]);
 const P0_PRE_PACKAGE_AUTHORITY_DOCUMENT_SCHEMAS = new Set(["p0-application-document-v1", "p0-application-document-v2", "p0-application-document-v3", "p0-application-document-v4"]);
 export const P0_CONTEXT_SCHEMA = "p0-context-v2";
 const P0_LEGACY_CONTEXT_SCHEMA = "p0-context-v1";
@@ -411,6 +421,7 @@ export type P0Document = {
   package_review: PackageReview | null;
   human_decision_gate: HumanDecisionGate | null;
   package_owner_decisions: PackageOwnerDecision[];
+  live_creation_authorities: LiveCreationAuthority[];
   package_execution: PackageExecution | null;
   package_corrections: PackageCorrection[];
   last_decision_invalidation: DecisionInvalidation | null;
@@ -521,6 +532,7 @@ export interface P0ApplicationAdapters {
     selection: P0Shortlist["selections"][number];
     projection: DirectProjection;
     draft: CampaignRecommendationSet["drafts"][number];
+    review: PackageReview;
     gate: HumanDecisionGate;
   }): Promise<PackageItemExternalOutcome>;
   resubmitCorrectedPackageItemOutcome(input: {
@@ -531,6 +543,7 @@ export interface P0ApplicationAdapters {
     selection: P0Shortlist["selections"][number];
     projection: DirectProjection;
     draft: CampaignRecommendationSet["drafts"][number];
+    review: PackageReview;
     gate: HumanDecisionGate;
     source_item: PackageItemExecution;
   }): Promise<PackageItemExternalOutcome>;
@@ -543,6 +556,7 @@ export interface P0ApplicationAdapters {
     projection: DirectProjection;
     draft: CampaignRecommendationSet["drafts"][number];
     item: PackageItemExecution;
+    review: PackageReview;
     gate: HumanDecisionGate;
   }): Promise<PackageItemExternalOutcome>;
 }
@@ -716,10 +730,29 @@ export const P0_COMMAND_TRUTH_TABLE = {
       && state.package_review.business_projection.preflight.passed === 9
       && !state.human_decision_gate && state.shortlist?.selections.length && packageNotDispatched(state),
   ),
+  authorize_live_creation: (state: P0Document) => Boolean(
+    (state.package_review && state.human_decision_gate && !state.package_execution
+      && !state.live_creation_authorities.some((authority) => authority.gate_id === state.human_decision_gate?.gate_id))
+    || state.package_corrections.some((correction) => correction.status === "READY_TO_RESUBMIT"
+      && correction.package_review && correction.human_decision_gate && !correction.execution
+      && !state.live_creation_authorities.some((authority) => authority.gate_id === correction.human_decision_gate?.gate_id)),
+  ),
   dispatch_package: (state: P0Document) => Boolean(
     state.package_review
       && state.human_decision_gate
-      && (!state.package_execution || state.package_execution.items.some((item) => ["QUEUED", "DISPATCHING", "RECONCILIATION_REQUIRED"].includes(item.status)))
+      && ((
+        !state.package_execution
+        && liveCreationAuthorityCanStart(
+          state.live_creation_authorities.find((authority) => authority.gate_id === state.human_decision_gate?.gate_id),
+          state.human_decision_gate,
+        )
+      ) || (
+        state.package_execution?.items.some((item) => ["QUEUED", "DISPATCHING", "RECONCILIATION_REQUIRED"].includes(item.status))
+        && liveCreationAuthorityCanContinue(
+          state.live_creation_authorities.find((authority) => authority.gate_id === state.human_decision_gate?.gate_id),
+          state.package_execution.package_execution_id,
+        )
+      ))
       && !state.campaign
       && !state.external_write_intent,
   ),
@@ -739,9 +772,19 @@ export const P0_COMMAND_TRUTH_TABLE = {
   save_package_correction: (state: P0Document) => state.package_corrections.some((correction) => correction.status === "EDITING"),
   review_package_correction: (state: P0Document) => state.package_corrections.some((correction) => correction.status === "PACKAGE_REVIEW_REQUIRED"),
   confirm_package_correction: (state: P0Document) => state.package_corrections.some((correction) => correction.status === "HUMAN_GATE_REQUIRED"),
-  resubmit_package_correction: (state: P0Document) => state.package_corrections.some((correction) => correction.status === "READY_TO_RESUBMIT" || (
+  resubmit_package_correction: (state: P0Document) => state.package_corrections.some((correction) => (
+    correction.status === "READY_TO_RESUBMIT"
+      && liveCreationAuthorityCanStart(
+        state.live_creation_authorities.find((authority) => authority.gate_id === correction.human_decision_gate?.gate_id),
+        correction.human_decision_gate,
+      )
+  ) || (
     correction.status === "RESUBMISSION_PENDING"
       && correction.execution?.items.some((item) => ["QUEUED", "DISPATCHING", "RECONCILIATION_REQUIRED"].includes(item.status))
+      && liveCreationAuthorityCanContinue(
+        state.live_creation_authorities.find((authority) => authority.gate_id === correction.human_decision_gate?.gate_id),
+        correction.execution.package_execution_id,
+      )
   )),
   poll_package_correction_moderation: (state: P0Document) => state.package_corrections.some((correction) =>
     correction.status === "RESUBMISSION_PENDING"
@@ -786,6 +829,7 @@ function emptyDocument(): P0Document {
     package_review: null,
     human_decision_gate: null,
     package_owner_decisions: [],
+    live_creation_authorities: [],
     package_execution: null,
     package_corrections: [],
     last_decision_invalidation: null,
@@ -1537,6 +1581,7 @@ function agentFreshUntil(context: P0Context) {
 function agentPriorOutcomes(state: P0Document) {
   return {
     package_owner_decisions: state.package_owner_decisions,
+    live_creation_authorities: state.live_creation_authorities,
     package_execution: state.package_execution,
     package_corrections: state.package_corrections,
     external_write_intent: state.external_write_intent,
@@ -1710,6 +1755,7 @@ function analyticsEvidenceDependentOutputs(state: P0Document) {
     ["shortlist", state.shortlist],
     ["package_review", state.package_review],
     ["human_decision_gate", state.human_decision_gate],
+    ["live_creation_authorities", state.live_creation_authorities],
     ["package_execution", state.package_execution],
     ["external_write_intent", state.external_write_intent],
   ];
@@ -1812,6 +1858,13 @@ async function invalidateDecisionAuthority(
   });
   state.package_review = null;
   state.human_decision_gate = null;
+  state.live_creation_authorities = [];
+}
+
+function liveAuthorityForGate(state: P0Document, gate: HumanDecisionGate | null | undefined) {
+  return gate
+    ? state.live_creation_authorities.find((authority) => authority.gate_id === gate.gate_id) ?? null
+    : null;
 }
 
 function directAccountBinding(state: P0Document): DirectAccountBinding | null {
@@ -1882,6 +1935,7 @@ function invalidateContextDownstream(state: P0Document) {
   state.shortlist = null;
   state.package_review = null;
   state.human_decision_gate = null;
+  state.live_creation_authorities = [];
   state.package_execution = null;
   state.package_corrections = [];
   state.external_write_intent = null;
@@ -1898,6 +1952,7 @@ function invalidateStrategyDownstream(state: P0Document) {
   state.shortlist = null;
   state.package_review = null;
   state.human_decision_gate = null;
+  state.live_creation_authorities = [];
   state.package_execution = null;
   state.package_corrections = [];
   state.external_write_intent = null;
@@ -2447,10 +2502,30 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
   } else if (!Array.isArray(state.package_owner_decisions)) {
     lineageError("package owner decisions должны быть persisted array.");
   }
+  if (legacyDocument && state.package_owner_decisions.some((decision) => Boolean(record(decision.exact_review).authority))) {
+    state.package_owner_decisions = await Promise.all(state.package_owner_decisions.map(async (decision) => {
+      const legacyReview = record(decision.exact_review);
+      return legacyReview.authority
+        ? buildPackageOwnerDecision(legacyReview as unknown as PackageReview, decision.verdict, decision.decided_at)
+        : decision;
+    }));
+    changed = true;
+  }
   for (const decision of state.package_owner_decisions) {
-    if (!await verifyPackageOwnerDecision(decision, decision.exact_review)) {
+    if (!await verifyPackageOwnerDecisionRecord(decision)) {
       lineageError("package owner decision journal содержит изменённую или неполную запись.");
     }
+  }
+
+  if (!Object.hasOwn(raw, "live_creation_authorities")) {
+    if (!legacyDocument) lineageError("same-schema document field live_creation_authorities отсутствует.");
+    if (state.package_execution || state.package_corrections?.some((correction) => correction.execution)) {
+      lineageError("legacy external execution не содержит отдельного точного live creation authority; разрешена только ручная сверка.");
+    }
+    state.live_creation_authorities = [];
+    changed = true;
+  } else if (!Array.isArray(state.live_creation_authorities)) {
+    lineageError("live creation authorities должны быть persisted array.");
   }
 
   if (!Object.hasOwn(raw, "package_corrections")) {
@@ -2469,6 +2544,22 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
     })));
     changed = true;
   }
+  if (legacyDocument && state.package_corrections.some((correction) => Boolean(record(correction.human_decision_gate).authority))) {
+    state.package_corrections = await Promise.all(state.package_corrections.map(async (correction) => {
+      if (!record(correction.human_decision_gate).authority) return correction;
+      if (correction.execution) {
+        lineageError("legacy corrected execution cannot migrate to a compact Gate without manual reconciliation.");
+      }
+      if (!correction.package_review || !correction.human_decision_gate) {
+        lineageError("legacy corrected Gate lost its exact package review.");
+      }
+      return sealPackageCorrection({
+        ...correction,
+        human_decision_gate: await buildHumanDecisionGate(correction.package_review, correction.human_decision_gate.confirmed_at),
+      });
+    }));
+    changed = true;
+  }
   for (const key of ["context_state", "site_analysis", "business_model", "product_focus", "analytics_evidence_snapshot", "strategy_questionnaire", "strategy_review", "strategy", "measurement_destination_readiness", "landing_advisory_run", "recommendation_set", "draft", "shortlist", "package_review", "human_decision_gate", "package_execution", "last_decision_invalidation", "external_write_intent", "campaign", "recommendation_recalculation", "last_cascade"] as const) {
     if (!(key in state)) {
       if (!legacyDocument) lineageError(`same-schema document field ${key} отсутствует.`);
@@ -2480,6 +2571,7 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
     state.shortlist = null;
     state.package_review = null;
     state.human_decision_gate = null;
+    state.live_creation_authorities = [];
     state.package_execution = null;
     state.package_corrections = [];
   }
@@ -3055,14 +3147,25 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
         lineageError(`legacy package execution migration failed: ${errorMessage(error)}`);
       }
     }
+    const initialLiveAuthority = liveAuthorityForGate(state, state.human_decision_gate);
+    if (initialLiveAuthority && (!state.package_review || !state.human_decision_gate || !await verifyLiveCreationAuthority({
+      authority: initialLiveAuthority,
+      review: state.package_review,
+      gate: state.human_decision_gate,
+    }))) {
+      lineageError("initial live creation authority identity, permissions или content hash не прошли проверку.");
+    }
     if (state.package_execution) {
-      if (!state.human_decision_gate || !await verifyPackageExecution({
+      if (!state.package_review || !state.human_decision_gate || !await verifyPackageExecution({
         execution: state.package_execution,
+        review: state.package_review,
         gate: state.human_decision_gate,
         recommendationSet: state.recommendation_set,
-      })) {
-        lineageError("package execution identity, item order или durable outcome hash не прошли проверку.");
+      }) || !liveCreationAuthorityCanContinue(initialLiveAuthority, state.package_execution.package_execution_id)) {
+        lineageError("package execution identity, one-time live authority или durable outcome hash не прошли проверку.");
       }
+    } else if (initialLiveAuthority?.status === "CONSUMED") {
+      lineageError("consumed initial live creation authority потеряла package execution.");
     }
     if (new Set(state.package_corrections.map((correction) => correction.correction_id)).size !== state.package_corrections.length
       || new Set(state.package_corrections.map((correction) => correction.source.item_execution_id)).size !== state.package_corrections.length) {
@@ -3104,17 +3207,37 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
         && (!correction.package_review || !await verifyHumanDecisionGate(correction.human_decision_gate, correction.package_review))) {
         lineageError("corrected Human Decision Gate не прошёл проверку.");
       }
+      const correctionLiveAuthority = liveAuthorityForGate(state, correction.human_decision_gate);
+      if (correctionLiveAuthority && (!correction.package_review || !correction.human_decision_gate || !await verifyLiveCreationAuthority({
+        authority: correctionLiveAuthority,
+        review: correction.package_review,
+        gate: correction.human_decision_gate,
+      }))) {
+        lineageError("corrected live creation authority identity, permissions или content hash не прошли проверку.");
+      }
       if (correction.execution
-        && (!correction.human_decision_gate || !await verifyPackageExecution({
+        && (!correction.package_review || !correction.human_decision_gate || !await verifyPackageExecution({
           execution: correction.execution,
+          review: correction.package_review,
           gate: correction.human_decision_gate,
           recommendationSet: correction.corrected_recommendation_set,
-        }))) {
-        lineageError("corrected package execution не прошло durable verification.");
+        }) || !liveCreationAuthorityCanContinue(correctionLiveAuthority, correction.execution.package_execution_id))) {
+        lineageError("corrected package execution или one-time live authority не прошли durable verification.");
+      }
+      if (!correction.execution && correctionLiveAuthority?.status === "CONSUMED") {
+        lineageError("consumed corrected live creation authority потеряла package execution.");
       }
     }
-  } else if (state.shortlist || state.package_review || state.human_decision_gate || state.package_execution || state.package_corrections.length) {
-    lineageError("shortlist/package authority, correction или execution существует без Strategy и Recommendation Set.");
+    const knownLiveGateIds = new Set([
+      state.human_decision_gate?.gate_id,
+      ...state.package_corrections.map((correction) => correction.human_decision_gate?.gate_id),
+    ].filter((value): value is string => Boolean(value)));
+    if (new Set(state.live_creation_authorities.map((authority) => authority.gate_id)).size !== state.live_creation_authorities.length
+      || state.live_creation_authorities.some((authority) => !knownLiveGateIds.has(authority.gate_id))) {
+      lineageError("live creation authority duplicated or lost its exact current Gate.");
+    }
+  } else if (state.shortlist || state.package_review || state.human_decision_gate || state.live_creation_authorities.length || state.package_execution || state.package_corrections.length) {
+    lineageError("shortlist/package authority, live authority, correction или execution существует без Strategy и Recommendation Set.");
   }
   if (state.last_decision_invalidation && !await verifyDecisionInvalidation(state.last_decision_invalidation)) {
     lineageError("decision invalidation audit hash verification failed.");
@@ -3170,7 +3293,10 @@ function agentHumanDecisionBoundary(state: P0Document): "MATERIAL_UNCERTAINTY" |
     return "CRITICAL_DECISION";
   }
   if (state.package_review && !state.human_decision_gate) return "CRITICAL_DECISION";
-  if (state.package_corrections.some((item) => item.status === "HUMAN_GATE_REQUIRED")) return "CRITICAL_DECISION";
+  if (state.package_review && state.human_decision_gate && !state.package_execution
+    && !liveAuthorityForGate(state, state.human_decision_gate)) return "CRITICAL_DECISION";
+  if (state.package_corrections.some((item) => item.status === "HUMAN_GATE_REQUIRED"
+    || (item.status === "READY_TO_RESUBMIT" && item.human_decision_gate && !liveAuthorityForGate(state, item.human_decision_gate)))) return "CRITICAL_DECISION";
   return null;
 }
 
@@ -3271,6 +3397,46 @@ function agentOwnerDecisionPackets(state: P0Document): P0AgentOwnerDecisionPacke
       },
     })];
   }
+  const initialLiveGate = state.package_review && state.human_decision_gate && !state.package_execution
+    && !liveAuthorityForGate(state, state.human_decision_gate)
+    ? state.human_decision_gate
+    : null;
+  if (initialLiveGate) {
+    return [packet({
+      decision_key: "campaign-package:live-creation-authority",
+      question: "Разрешить один реальный запуск создания только показанного точного пакета без показов?",
+      recommendation: {
+        answer: "Разрешить только если точный пакет и привязанный рекламный аккаунт совпадают с решением владельца.",
+        evidence: ["Предварительное решение уже сохранено без внешней записи; новый шаг отдельно разрешает только создание и обязательную остановку точных кампаний."],
+        confidence: "MEDIUM",
+        limitations: ["Полномочие одноразовое, не разрешает возобновление, показы, расходы или изменение состава."],
+      },
+      owner_decision: {
+        required: true,
+        alternatives: ["Разрешить точное создание без показов", "Не выполнять внешнюю запись"],
+        consequences: ["После разрешения агент сохранит намерение каждого элемента и выполнит официальный API-путь с обязательным подтверждением остановки."],
+      },
+    })];
+  }
+  const liveCorrection = state.package_corrections.find((item) => item.status === "READY_TO_RESUBMIT"
+    && item.human_decision_gate && !liveAuthorityForGate(state, item.human_decision_gate));
+  if (liveCorrection) {
+    return [packet({
+      decision_key: `package-correction-live:${liveCorrection.correction_id}`,
+      question: "Разрешить один реальный повтор точной исправленной редакции без запуска показов?",
+      recommendation: {
+        answer: "Разрешить только показанную исправленную редакцию, сохранив исходный результат отдельно.",
+        evidence: [liveCorrection.decision_packet?.recommendation.rationale ?? "Исправление прошло тот же редактор и точную проверку."],
+        confidence: liveCorrection.decision_packet?.confidence.status === "MEDIUM" ? "MEDIUM" : "LOW",
+        limitations: ["Разрешение одноразовое; неоднозначный результат остановит повтор до сверки."],
+      },
+      owner_decision: {
+        required: true,
+        alternatives: ["Разрешить точный повтор", "Оставить исходный отказ без новой записи"],
+        consequences: ["Исходная и исправленная редакции останутся отдельными неизменяемыми результатами."],
+      },
+    })];
+  }
   const correction = state.package_corrections.find((item) => item.status === "HUMAN_GATE_REQUIRED");
   if (correction) {
     return [packet({
@@ -3337,15 +3503,22 @@ function pendingAgentSafeWork(state: P0Document) {
 }
 
 function approvedAgentDispatch(state: P0Document) {
-  // Feature #246 deliberately stops after the local owner decision. Initial
-  // provider creation needs the separate real-execution authorization in #250.
-  // Already-started durable execution may still be reconciled fail-closed.
-  if (state.package_review && state.human_decision_gate && state.package_execution
-    && state.package_execution.items.some((item) => ["QUEUED", "DISPATCHING", "RECONCILIATION_REQUIRED"].includes(item.status))) {
+  const initialLiveAuthority = liveAuthorityForGate(state, state.human_decision_gate);
+  if (state.package_review && state.human_decision_gate && (
+    (!state.package_execution && liveCreationAuthorityCanStart(initialLiveAuthority, state.human_decision_gate))
+    || (state.package_execution
+      && liveCreationAuthorityCanContinue(initialLiveAuthority, state.package_execution.package_execution_id)
+      && state.package_execution.items.some((item) => ["QUEUED", "DISPATCHING", "RECONCILIATION_REQUIRED"].includes(item.status)))
+  )) {
     return { kind: "PACKAGE" as const, correction_id: null };
   }
-  const correction = state.package_corrections.find((item) => item.status === "READY_TO_RESUBMIT"
-    || (item.status === "RESUBMISSION_PENDING" && item.execution?.items.some((entry) => ["QUEUED", "DISPATCHING", "RECONCILIATION_REQUIRED"].includes(entry.status))));
+  const correction = state.package_corrections.find((item) => {
+    const authority = liveAuthorityForGate(state, item.human_decision_gate);
+    return (item.status === "READY_TO_RESUBMIT" && liveCreationAuthorityCanStart(authority, item.human_decision_gate))
+      || (item.status === "RESUBMISSION_PENDING" && item.execution
+        && liveCreationAuthorityCanContinue(authority, item.execution.package_execution_id)
+        && item.execution.items.some((entry) => ["QUEUED", "DISPATCHING", "RECONCILIATION_REQUIRED"].includes(entry.status)));
+  });
   return correction ? { kind: "CORRECTION" as const, correction_id: correction.correction_id } : null;
 }
 
@@ -5849,12 +6022,46 @@ export class P0Application {
         "Owner rejected the exact visible package without external change.",
         rejectedAt,
       );
+    } else if (action === "authorize_live_creation") {
+      if (payload.confirmation !== LIVE_CREATION_CONFIRMATION_TOKEN) {
+        fail("P0_LIVE_CREATION_CONFIRMATION_REQUIRED", `Нужно точное подтверждение ${LIVE_CREATION_CONFIRMATION_TOKEN}.`);
+      }
+      const correctionId = String(payload.correction_id ?? "");
+      const correction = correctionId
+        ? state.package_corrections.find((item) => item.correction_id === correctionId)
+        : null;
+      const review = correction ? correction.package_review : state.package_review;
+      const gate = correction ? correction.human_decision_gate : state.human_decision_gate;
+      if (!review || !gate || (correction && correction.status !== "READY_TO_RESUBMIT")
+        || (!correction && state.package_execution)) {
+        fail("P0_LIVE_CREATION_GATE_MISSING", "Отдельное live-разрешение требует current exact package Gate без начатого выполнения.");
+      }
+      if (payload.package_id !== gate.package_id || payload.gate_id !== gate.gate_id) {
+        fail("P0_PACKAGE_IDENTITY_STALE", "Live creation authority не совпадает с current exact package Gate.");
+      }
+      if (liveAuthorityForGate(state, gate)) {
+        fail("P0_LIVE_CREATION_AUTHORITY_EXISTS", "Для этого exact Gate уже записано live creation authority.");
+      }
+      try {
+        state.live_creation_authorities.push(await buildLiveCreationAuthority({
+          review,
+          gate,
+          authorizedAt: this.adapters.now(),
+        }));
+      } catch (error) {
+        fail("P0_LIVE_CREATION_AUTHORITY_INVALID", errorMessage(error));
+      }
     } else if (action === "dispatch_package") {
       if (!state.package_review || !state.human_decision_gate || !state.recommendation_set || !state.context_state) {
         fail("P0_PACKAGE_AUTHORITY_MISSING", "Package dispatch требует current package review, exact Human Decision Gate, Recommendation Set и Context.");
       }
       if (payload.package_id !== state.human_decision_gate.package_id || payload.gate_id !== state.human_decision_gate.gate_id) {
         fail("P0_PACKAGE_IDENTITY_STALE", "Dispatch identity не совпадает с current exact Human Decision Gate.");
+      }
+      const liveAuthority = liveAuthorityForGate(state, state.human_decision_gate);
+      if ((!state.package_execution && !liveCreationAuthorityCanStart(liveAuthority, state.human_decision_gate))
+        || (state.package_execution && !liveCreationAuthorityCanContinue(liveAuthority, state.package_execution.package_execution_id))) {
+        fail("P0_LIVE_CREATION_AUTHORITY_MISSING", "Package dispatch требует отдельное точное одноразовое live creation authority.");
       }
       const preflightAt = this.adapters.now();
       const preflightContext = sanitizeContext(await this.adapters.readContext({ owner_key: key }));
@@ -5864,7 +6071,7 @@ export class P0Application {
       if (!configuration.ready) {
         fail("P0_WRITE_NOT_READY", configuration.blockers[0] ?? "Direct production credentials не настроены.");
       }
-      if (configuration.account !== state.human_decision_gate.authority.direct_account_binding.account) {
+      if (configuration.account !== state.human_decision_gate.direct_account_binding.account) {
         fail("P0_CONTEXT_ACCOUNT_MISMATCH", "Direct write account не совпадает с exact package Gate binding.");
       }
       let plans;
@@ -5895,6 +6102,13 @@ export class P0Application {
           plans,
           startedAt: preflightAt,
         });
+        const authorityIndex = state.live_creation_authorities.findIndex((authority) => authority.gate_id === state.human_decision_gate?.gate_id);
+        if (authorityIndex < 0) fail("P0_LIVE_CREATION_AUTHORITY_MISSING", "Live creation authority исчезло до durable dispatch checkpoint.");
+        state.live_creation_authorities[authorityIndex] = await consumeLiveCreationAuthority(
+          state.live_creation_authorities[authorityIndex],
+          state.package_execution.package_execution_id,
+          preflightAt,
+        );
         await persistPackageCheckpoint(preflightAt);
       }
       for (const plan of plans) {
@@ -5917,6 +6131,7 @@ export class P0Application {
             selection: plan.selection,
             projection: plan.projection,
             draft: plan.draft,
+            review: state.package_review,
             gate: state.human_decision_gate,
           });
         } catch (error) {
@@ -5969,7 +6184,7 @@ export class P0Application {
       }
       const configuration = this.adapters.externalWriteConfiguration();
       if (!configuration.ready) fail("P0_WRITE_NOT_READY", configuration.blockers[0] ?? "Direct production credentials не настроены.");
-      if (configuration.account !== state.human_decision_gate.authority.direct_account_binding.account) {
+      if (configuration.account !== state.human_decision_gate.direct_account_binding.account) {
         fail("P0_CONTEXT_ACCOUNT_MISMATCH", "Direct poll account не совпадает с exact package Gate binding.");
       }
       let plans;
@@ -6012,6 +6227,7 @@ export class P0Application {
           projection: plan.projection,
           draft: plan.draft,
           item: state.package_execution.items.find((item) => item.item_execution_id === itemExecutionId)!,
+          review: state.package_review,
           gate: state.human_decision_gate,
         });
       } catch (error) {
@@ -6178,6 +6394,11 @@ export class P0Application {
       if (payload.package_id !== correction.human_decision_gate.package_id || payload.gate_id !== correction.human_decision_gate.gate_id) {
         fail("P0_PACKAGE_IDENTITY_STALE", "Correction resubmission identity не совпадает с новым exact Gate.");
       }
+      const correctionLiveAuthority = liveAuthorityForGate(state, correction.human_decision_gate);
+      if ((!correction.execution && !liveCreationAuthorityCanStart(correctionLiveAuthority, correction.human_decision_gate))
+        || (correction.execution && !liveCreationAuthorityCanContinue(correctionLiveAuthority, correction.execution.package_execution_id))) {
+        fail("P0_LIVE_CREATION_AUTHORITY_MISSING", "Correction resubmission требует отдельное точное одноразовое live creation authority.");
+      }
       const preflightAt = this.adapters.now();
       const preflightContext = sanitizeContext(await this.adapters.readContext({ owner_key: key }));
       this.assertContextPreflight(preflightContext, preflightAt);
@@ -6187,7 +6408,7 @@ export class P0Application {
       if (typeof this.adapters.resubmitCorrectedPackageItemOutcome !== "function") {
         fail("P0_CORRECTION_ADAPTER_UNAVAILABLE", "Corrected resubmission adapter is unavailable; creating a duplicate campaign is forbidden.");
       }
-      if (configuration.account !== correction.human_decision_gate.authority.direct_account_binding.account) {
+      if (configuration.account !== correction.human_decision_gate.direct_account_binding.account) {
         fail("P0_CONTEXT_ACCOUNT_MISMATCH", "Direct write account не совпадает с corrected package Gate binding.");
       }
       let plans;
@@ -6207,6 +6428,13 @@ export class P0Application {
           plans,
           startedAt: preflightAt,
         });
+        const authorityIndex = state.live_creation_authorities.findIndex((authority) => authority.gate_id === correction.human_decision_gate?.gate_id);
+        if (authorityIndex < 0) fail("P0_LIVE_CREATION_AUTHORITY_MISSING", "Correction live authority исчезло до durable dispatch checkpoint.");
+        state.live_creation_authorities[authorityIndex] = await consumeLiveCreationAuthority(
+          state.live_creation_authorities[authorityIndex],
+          initialized.package_execution_id,
+          preflightAt,
+        );
         correction = await recordCorrectionExecution(correction, initialized, preflightAt);
         await checkpointCorrection(correctionIndex, correction, preflightAt, "P0 изменился в другой вкладке. Correction checkpoint не сохранён.");
       }
@@ -6231,6 +6459,7 @@ export class P0Application {
             selection: plan.selection,
             projection: plan.projection,
             draft: plan.draft,
+            review: correction.package_review!,
             gate: correction.human_decision_gate!,
             source_item: correction.source.item_snapshot,
           };
@@ -6302,6 +6531,7 @@ export class P0Application {
           projection: plan.projection,
           draft: plan.draft,
           item: correction.execution!.items.find((item) => item.item_execution_id === itemExecutionId)!,
+          review: correction.package_review!,
           gate: correction.human_decision_gate!,
         });
       } catch (error) {
@@ -6391,7 +6621,7 @@ export class P0Application {
       fail("P0_REVISION_CONFLICT", "P0 изменился в другой вкладке. Обновите страницу.");
     }
     const decisionOnly = new Set<CommandName>([
-      "review_package", "confirm_package", "dispatch_package", "poll_package_moderation",
+      "review_package", "confirm_package", "authorize_live_creation", "dispatch_package", "poll_package_moderation",
       "start_package_correction", "save_package_correction", "review_package_correction",
       "confirm_package_correction", "resubmit_package_correction", "poll_package_correction_moderation",
     ]).has(action);

@@ -16,7 +16,9 @@
     "test:product-mvp": "npm run test:contract && npm run test:e2e",
     "test:package-selection": "node --test tests/package-selection-acceptance.test.mjs",
     "test:owner-decision": "node --test tests/package-owner-decision.test.mjs tests/package-owner-decision-ui.test.mjs tests/owner-decision-acceptance.test.mjs",
+    "test:live-creation": "node --test tests/live-creation-authority.test.mjs tests/execution-safety.test.mjs tests/direct-write.test.mjs",
     "capture:p0-viable-evidence": "node --env-file=.env.local scripts/capture-p0-viable-campaign-evidence.mjs",
+    "capture:p0-live-creation": "node --env-file-if-exists=.env.local scripts/capture-p0-live-creation-acceptance.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
   },

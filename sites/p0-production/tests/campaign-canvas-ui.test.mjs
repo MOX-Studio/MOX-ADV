@@ -51,8 +51,9 @@ test("owner package review shows exact business outcomes and one no-write accept
 test("safe continuation remains agent-owned while initial real creation needs a separate stage", () => {
   assert.match(ownerSource, /continueSafeWork\(ownerKey, initial, false\)/u);
   assert.match(ownerSource, /const current = await this\.application\.query\(ownerKey\);\s+return project\(ownerKey, current, agent/u);
-  assert.match(applicationSource, /Feature #246 deliberately stops after the local owner decision/u);
-  assert.match(applicationSource, /authorization in #250/u);
+  assert.match(applicationSource, /campaign-package:live-creation-authority/u);
+  assert.match(applicationSource, /LIVE_CREATION_CONFIRMATION_TOKEN/u);
+  assert.match(applicationSource, /Package dispatch требует отдельное точное одноразовое live creation authority/u);
   assert.match(applicationSource, /p0_continue_due_safe_work/u);
   assert.match(applicationSource, /p0_dispatch_approved_package/u);
   assert.match(applicationSource, /p0_prepare_rejected_correction/u);

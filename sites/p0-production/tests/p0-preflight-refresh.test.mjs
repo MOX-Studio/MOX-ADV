@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { directPreflightRefreshState } from "../lib/p0-preflight-refresh.ts";
+import { ownerProjectionNeedsRefresh } from "../lib/owner-projection-refresh.ts";
 
 const clientSource = await readFile(new URL("../app/P0Client.tsx", import.meta.url), "utf8");
 
@@ -32,6 +33,23 @@ test("does not poll terminal Direct audit outcomes", () => {
     directPreflightRefreshState({ status: "COMPLETE", next_retry_at: null }, NOW),
     { pending: false, delay_ms: null },
   );
+});
+
+test("owner action handle cannot be invalidated by background agent refresh while the owner is deciding", () => {
+  assert.equal(ownerProjectionNeedsRefresh({
+    agentActivity: { status: "working" },
+    businessOutcome: { status: "complete" },
+    primaryAction: { handle: "act-live-authority" },
+    goalInterview: null,
+    packageDecision: { acceptHandle: null, rejectHandle: null },
+  }), false);
+  assert.equal(ownerProjectionNeedsRefresh({
+    agentActivity: { status: "working" },
+    businessOutcome: { status: "working" },
+    primaryAction: null,
+    goalInterview: null,
+    packageDecision: null,
+  }), true);
 });
 
 test("owner page refreshes agent-owned continuation without a polling control", () => {

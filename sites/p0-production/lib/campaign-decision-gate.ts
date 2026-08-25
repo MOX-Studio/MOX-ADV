@@ -134,7 +134,13 @@ export type PackageAuthorityGrant = {
   issued_at: string;
   issued_by: "OWNER";
   status: "ACTIVE_UNCONSUMED";
-  exact_authority: PackageAuthority;
+  exact_authority_digest: string;
+  selected_count: number;
+  direct_account_binding: DirectAccountBinding;
+  capability_profile_identity: {
+    profile_id: string;
+    profile_version: string;
+  };
   permissions: {
     allowed_actions: ["PREPARE_SEPARATE_SUSPENDED_CREATION_STAGE"];
     forbidden_actions: [
@@ -160,7 +166,14 @@ export type PackageOwnerDecision = {
   decided_by: "OWNER";
   package_review_id: string;
   package_id: string;
-  exact_review: PackageReview;
+  exact_review: {
+    package_review_id: string;
+    package_id: string;
+    reviewed_at: string;
+    authority_digest: string;
+    selected_count: number;
+    preflight: PackageBusinessProjection["preflight"];
+  };
   explanation: {
     recommendation: string;
     alternatives: [string, string];
@@ -186,7 +199,13 @@ export type HumanDecisionGate = {
   owner_decision_id: string;
   confirmation_token: typeof PACKAGE_CONFIRMATION_TOKEN;
   confirmed_at: string;
-  authority: PackageAuthority;
+  authority_digest: string;
+  selected_count: number;
+  direct_account_binding: DirectAccountBinding;
+  capability_profile_identity: {
+    profile_id: string;
+    profile_version: string;
+  };
   authority_grant: PackageAuthorityGrant;
   independent_execution_acknowledged: true;
   external_transactionality_promised: false;
@@ -719,7 +738,13 @@ async function buildPackageAuthorityGrant(review: PackageReview, issuedAt: strin
     issued_at: issuedAt,
     issued_by: "OWNER" as const,
     status: "ACTIVE_UNCONSUMED" as const,
-    exact_authority: structuredClone(review.authority),
+    exact_authority_digest: await sha256(review.authority),
+    selected_count: review.authority.ordered_selections.length,
+    direct_account_binding: structuredClone(review.authority.direct_account_binding),
+    capability_profile_identity: {
+      profile_id: String(review.authority.capability_profile?.profile_id ?? ""),
+      profile_version: String(review.authority.capability_profile?.profile_version ?? ""),
+    },
     permissions: {
       allowed_actions: ["PREPARE_SEPARATE_SUSPENDED_CREATION_STAGE"] as ["PREPARE_SEPARATE_SUSPENDED_CREATION_STAGE"],
       forbidden_actions: [
@@ -757,7 +782,14 @@ export async function buildPackageOwnerDecision(
     decided_by: "OWNER" as const,
     package_review_id: review.package_review_id,
     package_id: review.package_id,
-    exact_review: structuredClone(review),
+    exact_review: {
+      package_review_id: review.package_review_id,
+      package_id: review.package_id,
+      reviewed_at: review.reviewed_at,
+      authority_digest: await sha256(review.authority),
+      selected_count: review.authority.ordered_selections.length,
+      preflight: structuredClone(review.business_projection.preflight),
+    },
     explanation: structuredClone(OWNER_DECISION_EXPLANATION),
     authority_grant: authorityGrant,
     external_effects: {
@@ -770,16 +802,36 @@ export async function buildPackageOwnerDecision(
   return { ...unsigned, decision_id: await sha256(unsigned) } satisfies PackageOwnerDecision;
 }
 
+export async function verifyPackageOwnerDecisionRecord(decision: PackageOwnerDecision | unknown) {
+  const candidate = record(decision) as PackageOwnerDecision;
+  if (candidate.schema_version !== PACKAGE_OWNER_DECISION_SCHEMA
+    || !["ACCEPTED", "REJECTED"].includes(String(candidate.verdict))
+    || !candidate.package_review_id
+    || !candidate.package_id
+    || !candidate.decided_at
+    || candidate.exact_review?.package_review_id !== candidate.package_review_id
+    || candidate.exact_review?.package_id !== candidate.package_id
+    || !candidate.exact_review?.reviewed_at
+    || !/^sha256:[a-f0-9]{64}$/u.test(String(candidate.exact_review?.authority_digest ?? ""))
+    || !Number.isSafeInteger(candidate.exact_review?.selected_count)
+    || candidate.exact_review.selected_count <= 0
+    || candidate.exact_review?.preflight?.status !== "PASS"
+    || candidate.exact_review?.preflight?.passed !== 9
+    || candidate.exact_review?.preflight?.total !== 9
+    || !candidate.decision_id) return false;
+  const unsigned = { ...candidate } as Record<string, unknown>;
+  delete unsigned.decision_id;
+  return candidate.decision_id === await sha256(unsigned);
+}
+
 export async function verifyPackageOwnerDecision(
   decision: PackageOwnerDecision | unknown,
   currentReview: PackageReview,
 ) {
   const candidate = record(decision) as PackageOwnerDecision;
-  if (candidate.schema_version !== PACKAGE_OWNER_DECISION_SCHEMA
-    || !["ACCEPTED", "REJECTED"].includes(String(candidate.verdict))
+  if (!await verifyPackageOwnerDecisionRecord(candidate)
     || candidate.package_review_id !== currentReview.package_review_id
-    || candidate.package_id !== currentReview.package_id
-    || !candidate.decided_at) return false;
+    || candidate.package_id !== currentReview.package_id) return false;
   let rebuilt: PackageOwnerDecision;
   try {
     rebuilt = await buildPackageOwnerDecision(currentReview, candidate.verdict, candidate.decided_at);
@@ -799,7 +851,13 @@ export async function buildHumanDecisionGate(review: PackageReview, confirmedAt:
     owner_decision_id: ownerDecision.decision_id,
     confirmation_token: PACKAGE_CONFIRMATION_TOKEN as typeof PACKAGE_CONFIRMATION_TOKEN,
     confirmed_at: confirmedAt,
-    authority: structuredClone(review.authority),
+    authority_digest: await sha256(review.authority),
+    selected_count: review.authority.ordered_selections.length,
+    direct_account_binding: structuredClone(review.authority.direct_account_binding),
+    capability_profile_identity: {
+      profile_id: String(review.authority.capability_profile?.profile_id ?? ""),
+      profile_version: String(review.authority.capability_profile?.profile_version ?? ""),
+    },
     authority_grant: structuredClone(ownerDecision.authority_grant!),
     independent_execution_acknowledged: true as const,
     external_transactionality_promised: false as const,
@@ -818,7 +876,11 @@ export async function verifyHumanDecisionGate(gate: HumanDecisionGate | unknown,
     || candidate.independent_execution_acknowledged !== true
     || candidate.external_transactionality_promised !== false
     || candidate.external_writes_performed !== false
-    || JSON.stringify(candidate.authority) !== JSON.stringify(review.authority)
+    || candidate.authority_digest !== await sha256(review.authority)
+    || candidate.selected_count !== review.authority.ordered_selections.length
+    || JSON.stringify(candidate.direct_account_binding) !== JSON.stringify(review.authority.direct_account_binding)
+    || candidate.capability_profile_identity?.profile_id !== String(review.authority.capability_profile?.profile_id ?? "")
+    || candidate.capability_profile_identity?.profile_version !== String(review.authority.capability_profile?.profile_version ?? "")
     || !candidate.confirmed_at) return false;
   const rebuilt = await buildHumanDecisionGate(review, candidate.confirmed_at);
   return JSON.stringify(rebuilt) === JSON.stringify(candidate);
