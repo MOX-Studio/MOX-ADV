@@ -181,6 +181,15 @@ export type ViabilityScoreResult = {
     frequency: Record<string, unknown>;
     cost: Record<string, unknown>;
   };
+  input_lineage: {
+    current_revision_only: true;
+    recommendation_set_id: string;
+    strategy_revision_id: string;
+    draft_revision_id: string;
+    analytics_evidence_snapshot_id: string;
+    direct_capability_snapshot_id: string;
+    measurement_readiness_id: string;
+  };
   visibility: VisibilityResult;
   explanation: {
     label: typeof SCORE_LABEL;
@@ -239,6 +248,7 @@ type PreparedDraft<T extends DraftCandidate> = Prerequisites & {
   comparableSetId: string | null;
   rank: number | null;
   tiedDraftIds: string[];
+  inputLineage: ViabilityScoreResult["input_lineage"];
   inputFingerprint: string;
 };
 
@@ -1105,9 +1115,14 @@ function campaignDraftStatus(item: PreparedDraft<DraftCandidate>): CampaignDraft
 
 function capabilityCohortDescriptor(draft: DraftCandidate) {
   const selection = record(draft.capability_selection);
+  const creationProfile = record(record(draft.publish_projection).creation_profile);
+  const advertiser = record(creationProfile.advertiser);
   return {
     capability_profile_id: boundedText(draft.capability_profile_id, 255) || "MISSING_PROFILE",
     capability_profile_version: boundedText(draft.capability_profile_version, 255) || "MISSING_VERSION",
+    direct_capability_snapshot_id: boundedText(draft.direct_capability_snapshot_id, 255) || "MISSING_SNAPSHOT",
+    advertiser_account: boundedText(advertiser.account, 255) || "MISSING_ACCOUNT",
+    currency: boundedText(advertiser.currency, 32) || "MISSING_CURRENCY",
     conditional_selection_semantics: {
       selected_capabilities: boundedStrings(selection.selected_capabilities),
       selected_fields: boundedStrings(selection.selected_fields),
@@ -1254,10 +1269,19 @@ export async function scoreCampaignDrafts<T extends DraftCandidate>({
       : null;
     const values = dimensions ? weightedResult(dimensions) : null;
     const scopes = scoreScopes(item.draft);
+    const creationProfile = record(record(item.draft.publish_projection).creation_profile);
+    const inputLineage = {
+      current_revision_only: true as const,
+      recommendation_set_id: fixedRecommendationSetId,
+      strategy_revision_id: boundedText(strategy.strategy_revision_id, 255),
+      draft_revision_id: boundedText(item.draft.draft_revision_id, 255),
+      analytics_evidence_snapshot_id: boundedText(analyticsEvidence?.snapshot_id, 255),
+      direct_capability_snapshot_id: boundedText(item.draft.direct_capability_snapshot_id, 255),
+      measurement_readiness_id: boundedText(record(creationProfile.measurement_plan).readiness_id, 255),
+    };
     const inputFingerprint = await sha256({
       contract: SCORE_CONTRACT_VERSION,
-      recommendation_set_id: fixedRecommendationSetId,
-      draft_revision_id: item.draft.draft_revision_id,
+      lineage: inputLineage,
       auction_protocol_revision_id: record(item.draft.auction_protocol).protocol_revision_id,
       auction_protocol_content_hash: record(item.draft.auction_protocol).content_hash,
       model: safeModel(model),
@@ -1278,6 +1302,7 @@ export async function scoreCampaignDrafts<T extends DraftCandidate>({
       comparableSetId: null,
       rank: null,
       tiedDraftIds: [],
+      inputLineage,
       inputFingerprint,
     });
   }
@@ -1357,6 +1382,7 @@ export async function scoreCampaignDrafts<T extends DraftCandidate>({
       },
       dimensions: item.dimensions,
       scopes: scoreScopes(item.draft),
+      input_lineage: item.inputLineage,
       visibility,
       explanation: {
         label: SCORE_LABEL,

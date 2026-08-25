@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import test from "node:test";
 
+import { buildAuctionProtocol } from "../lib/auction-protocol.ts";
 import {
   buildCampaignRecommendationSet,
   fingerprintDirectProjection,
@@ -412,6 +413,40 @@ test("preserves exact semantic ties only inside the fixed Recommendation Set cap
   assert.notEqual(a1.ranking.comparable_set_id, b1.ranking.comparable_set_id);
 });
 
+test("binds fingerprints and comparable cohorts to exact evidence and capability revisions", async () => {
+  const generated = await recommendationSet();
+  const baseline = await rescore(generated.drafts);
+
+  const replacementEvidence = evidence({ snapshot_id: "sha256:analytics-v2" });
+  const evidenceRevisionDrafts = await Promise.all(generated.drafts.map(async (source) => {
+    const draft = structuredClone(source);
+    draft.auction_protocol = await buildAuctionProtocol({
+      draft,
+      measurementGoal: model.qualified_result,
+      evidenceSnapshotId: replacementEvidence.snapshot_id,
+      registeredAt: "2026-08-21T12:01:00.000Z",
+    });
+    draft.viability_score = undefined;
+    return draft;
+  }));
+  const rescoredEvidence = await rescore(evidenceRevisionDrafts, replacementEvidence);
+  assert.ok(rescoredEvidence.every((draft) => draft.viability_score.eligibility.status === "ELIGIBLE"));
+  assert.deepEqual(rescoredEvidence.map((draft) => draft.viability_score.score), baseline.map((draft) => draft.viability_score.score));
+  assert.ok(rescoredEvidence.every((draft, index) => draft.viability_score.fingerprints.input !== baseline[index].viability_score.fingerprints.input));
+  assert.ok(rescoredEvidence.every((draft) => draft.viability_score.input_lineage.analytics_evidence_snapshot_id === replacementEvidence.snapshot_id));
+
+  const capabilityRevisionDrafts = structuredClone(generated.drafts);
+  for (const draft of capabilityRevisionDrafts) {
+    draft.direct_capability_snapshot_id = "direct-capability:owner-account:replacement";
+    draft.capability_selection.capability_snapshot_id = "direct-capability:owner-account:replacement";
+    draft.viability_score = undefined;
+  }
+  const rescoredCapability = await rescore(capabilityRevisionDrafts);
+  assert.ok(rescoredCapability.every((draft) => draft.viability_score.eligibility.status === "ELIGIBLE"));
+  assert.ok(rescoredCapability.every((draft, index) => draft.viability_score.fingerprints.input !== baseline[index].viability_score.fingerprints.input));
+  assert.ok(rescoredCapability.every((draft, index) => draft.viability_score.ranking.cohort_id !== baseline[index].viability_score.ranking.cohort_id));
+});
+
 test("applies strict score hiding gates and gives structural reasons precedence", () => {
   const hidden = evaluateScoreVisibility({
     structuralReason: null,
@@ -511,6 +546,8 @@ test("recomputes field-level score delta after a material manual edit", async ()
   const rescored = await rescore(value.drafts.map((draft) => draft.draft_id === edited.draft_id ? edited : draft));
   const current = rescored.find((draft) => draft.draft_id === edited.draft_id);
   assert.ok(current.viability_score.score < previous.viability_score.score);
+  assert.notEqual(current.viability_score.fingerprints.input, previous.viability_score.fingerprints.input);
+  assert.equal(current.viability_score.input_lineage.draft_revision_id, edited.draft_revision_id);
   const delta = explainScoreDelta(previous.viability_score, current.viability_score, ["/draft/keyword", "/draft/ad_title", "/draft/ad_text"]);
   assert.ok(delta.score.delta < 0);
   assert.deepEqual(delta.changed_pointers, ["/draft/ad_text", "/draft/ad_title", "/draft/keyword"]);

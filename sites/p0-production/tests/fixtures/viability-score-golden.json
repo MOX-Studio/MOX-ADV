@@ -38,8 +38,8 @@
       "ranking": {
         "status": "RANKED",
         "recommendation_set_id": "recommendation-set-110ea80de6d50f3fba14",
-        "cohort_id": "capability-cohort:3ad826840b790b260fa8ffe7",
-        "comparable_set_id": "comparable-set:6aa5ed49af5948238e6253c4",
+        "cohort_id": "capability-cohort:aa66a0d301b1512bf76f74c7",
+        "comparable_set_id": "comparable-set:0de5cdce250d6529a299ebc8",
         "rank": 1,
         "tied_draft_ids": [
           "draft-5ce5e98ee8ecc1a95af4",
@@ -140,8 +140,8 @@
       "ranking": {
         "status": "RANKED",
         "recommendation_set_id": "recommendation-set-110ea80de6d50f3fba14",
-        "cohort_id": "capability-cohort:3ad826840b790b260fa8ffe7",
-        "comparable_set_id": "comparable-set:6aa5ed49af5948238e6253c4",
+        "cohort_id": "capability-cohort:aa66a0d301b1512bf76f74c7",
+        "comparable_set_id": "comparable-set:0de5cdce250d6529a299ebc8",
         "rank": 1,
         "tied_draft_ids": [
           "draft-5ce5e98ee8ecc1a95af4",
@@ -242,8 +242,8 @@
       "ranking": {
         "status": "RANKED",
         "recommendation_set_id": "recommendation-set-110ea80de6d50f3fba14",
-        "cohort_id": "capability-cohort:3ad826840b790b260fa8ffe7",
-        "comparable_set_id": "comparable-set:6aa5ed49af5948238e6253c4",
+        "cohort_id": "capability-cohort:aa66a0d301b1512bf76f74c7",
+        "comparable_set_id": "comparable-set:0de5cdce250d6529a299ebc8",
         "rank": 1,
         "tied_draft_ids": [
           "draft-5ce5e98ee8ecc1a95af4",
