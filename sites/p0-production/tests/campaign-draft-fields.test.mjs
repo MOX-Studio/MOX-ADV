@@ -75,6 +75,7 @@ test("the accepted Direct v501 field registry covers every core campaign, group,
 
   const absentConditional = DIRECT_V501_DRAFT_FIELD_REGISTRY.fields.filter((field) => field.classification === "CONDITIONALLY_ELIGIBLE");
   assert.deepEqual(absentConditional.map((field) => field.pointer), [
+    "/direct/campaign/UnifiedCampaign/CounterIds",
     "/direct/keyword/AutotargetingSettings",
     "/direct/ad/ResponsiveAd/SitelinkSetId",
     "/direct/sitelink_sets",
