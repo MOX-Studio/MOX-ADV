@@ -19,6 +19,8 @@ const MINIMUM_READ_INTERVAL_MS = 3_000;
 const RETRY_DELAYS_MS = Object.freeze([10_000, 30_000]);
 const RETRYABLE_FAILURES = new Set(["TRANSIENT_NETWORK", "LOAD_TIMEOUT", "TABLE_INCOMPLETE"]);
 const TERMINAL_STATES = new Set(["AUTH_REQUIRED", "CAPTCHA_OR_CHALLENGE", "DOM_CHANGED"]);
+const TERMINAL_FAILURES = new Set(["EXPLICIT_ACCESS_BLOCK", "STOPPED"]);
+const COLLECTION_SOURCES = new Set(["YANDEX_WORDSTAT_UI", "TEST_FIXTURE"]);
 const SANITIZED_FAILURE_CODES = new Set([
   ...RETRYABLE_FAILURES,
   ...TERMINAL_STATES,
@@ -362,10 +364,12 @@ export async function collectAndSaveWordstatBatch(input) {
   const collectorVersion = normalizedText(input.collectorVersion);
   const parserVersion = normalizedText(input.uiParserVersion);
   const runId = safeIdentifier(input.runId, "runId");
+  const source = normalizedText(input.source);
   if (!collectorVersion || !parserVersion) throw new WordstatCollectionError("COLLECTOR_INVALID", "Collector and parser versions are required.");
+  if (!COLLECTION_SOURCES.has(source)) throw new WordstatCollectionError("SOURCE_INVALID", "Wordstat collection source must be explicit.");
 
   const batchStartedAt = isoTimestamp(now(), "batch_started_at");
-  const batchId = digest({ source: "YANDEX_WORDSTAT_UI", run_id: runId, plan_digest: plan.plan_digest, batch_started_at: batchStartedAt });
+  const batchId = digest({ source, run_id: runId, plan_digest: plan.plan_digest, batch_started_at: batchStartedAt });
   const observations = [];
   const failures = [];
   let terminalState = null;
@@ -390,8 +394,8 @@ export async function collectAndSaveWordstatBatch(input) {
           if (result?.state !== "COMPLETE") {
             const failure = cleanDriverFailure(result);
             failures.push(publicFailure(failure.code, seed.seed_id, surface, attempt, failure.retry_after_seconds));
-            if (TERMINAL_STATES.has(failure.state)) {
-              terminalState = failure.state;
+            if (TERMINAL_STATES.has(failure.state) || TERMINAL_FAILURES.has(failure.code)) {
+              terminalState = TERMINAL_STATES.has(failure.state) ? failure.state : "UNAVAILABLE";
               break collection;
             }
             if (!RETRYABLE_FAILURES.has(failure.code) || attempt === 3) break;
@@ -479,7 +483,7 @@ export async function collectAndSaveWordstatBatch(input) {
   const batchFinishedAt = isoTimestamp(now(), "batch_finished_at");
   const batch = {
     schema_version: WORDSTAT_OBSERVATION_BATCH_SCHEMA,
-    source: "YANDEX_WORDSTAT_UI",
+    source,
     transport: "HEADLESS_PLAYWRIGHT",
     collector_version: collectorVersion,
     ui_parser_version: parserVersion,
@@ -500,6 +504,17 @@ export async function collectAndSaveWordstatBatch(input) {
   return { ...batch, protected_batch_ref: `wordstat-batch:${digest(batch)}` };
 }
 
+export function assertWordstatBatchEligibleForProductionSnapshot(batch) {
+  if (!batch || batch.schema_version !== WORDSTAT_OBSERVATION_BATCH_SCHEMA
+    || batch.source !== "YANDEX_WORDSTAT_UI"
+    || batch.transport !== "HEADLESS_PLAYWRIGHT"
+    || batch.status !== "COMPLETE"
+    || batch.cleanup_status !== "COMPLETE") {
+    throw new WordstatCollectionError("PRODUCTION_SNAPSHOT_FORBIDDEN", "Only a complete cleaned production Wordstat UI batch may enter an Analytics Evidence Snapshot.");
+  }
+  return batch;
+}
+
 export function projectWordstatBatchForDashboard(batch) {
   if (!batch || batch.schema_version !== WORDSTAT_OBSERVATION_BATCH_SCHEMA) {
     throw new WordstatCollectionError("BATCH_INVALID", "Wordstat UI batch is invalid.");
@@ -514,8 +529,8 @@ export function projectWordstatBatchForDashboard(batch) {
       ? "Разрешите проверку вручную вне пайплайна или дождитесь восстановления доступа."
       : null;
   return {
-    source: "YANDEX_WORDSTAT_UI",
-    source_label: "Яндекс Wordstat",
+    source: batch.source,
+    source_label: batch.source === "TEST_FIXTURE" ? "Яндекс Wordstat · тестовая фикстура" : "Яндекс Wordstat",
     status: batch.status,
     scope_label: [...labels, ...devices].join(" · ") || "Область Wordstat не подтверждена",
     observed_formulations: seedCount,

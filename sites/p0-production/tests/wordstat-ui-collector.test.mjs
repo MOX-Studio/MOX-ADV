@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   WORDSTAT_SURFACES,
   WordstatCollectionError,
+  assertWordstatBatchEligibleForProductionSnapshot,
   buildWordstatCollectionPlan,
   collectAndSaveWordstatBatch,
   createWordstatFileArtifactStore,
@@ -109,6 +110,7 @@ async function collect({ plan = planWithSeeds(), readSurface, cleanup, store = m
   const calls = [];
   const batch = await collectAndSaveWordstatBatch({
     plan,
+    source: "TEST_FIXTURE",
     runId: "wordstat-run-1",
     collectorVersion: "wordstat-ui-collector/1.0",
     uiParserVersion: "wordstat-ui-parser/1.0",
@@ -157,7 +159,7 @@ test("collects every surface sequentially with at least three seconds between re
   assert.equal(result.batch.status, "COMPLETE");
   assert.equal(result.batch.cleanup_status, "COMPLETE");
   assert.equal(result.batch.schema_version, "wordstat-ui-observation-batch-v1");
-  assert.equal(result.batch.source, "YANDEX_WORDSTAT_UI");
+  assert.equal(result.batch.source, "TEST_FIXTURE");
   assert.equal(result.batch.transport, "HEADLESS_PLAYWRIGHT");
   assert.deepEqual(result.calls.map(({ seed, surface }) => `${seed}:${surface}`), [
     ...WORDSTAT_SURFACES.map((surface) => `seed-1:${surface}`),
@@ -242,6 +244,32 @@ for (const terminalState of ["AUTH_REQUIRED", "CAPTCHA_OR_CHALLENGE"]) {
     assert.doesNotMatch(JSON.stringify(projection), /provider_region_id|protected_artifact|"(?:cookie|html|har|trace|video|screenshot)"\s*:/iu);
   });
 }
+
+test("stop and explicit access block terminate collection immediately and still clean up", async () => {
+  for (const code of ["STOPPED", "EXPLICIT_ACCESS_BLOCK"]) {
+    const result = await collect({
+      plan: planWithSeeds(2),
+      readSurface: () => ({ state: "UNAVAILABLE", failure_code: code }),
+    });
+
+    assert.equal(result.batch.status, "UNAVAILABLE");
+    assert.equal(result.batch.cleanup_status, "COMPLETE");
+    assert.equal(result.calls.length, 1);
+    assert.equal(result.batch.failures[0].code, code);
+  }
+});
+
+test("controlled fixture evidence cannot enter a production Analytics Evidence Snapshot", async () => {
+  const result = await collect();
+  assert.throws(
+    () => assertWordstatBatchEligibleForProductionSnapshot(result.batch),
+    (error) => error instanceof WordstatCollectionError && error.code === "PRODUCTION_SNAPSHOT_FORBIDDEN",
+  );
+
+  const production = structuredClone(result.batch);
+  production.source = "YANDEX_WORDSTAT_UI";
+  assert.equal(assertWordstatBatchEligibleForProductionSnapshot(production), production);
+});
 
 test("cleanup failure overrides collected rows and blocks COMPLETE", async () => {
   const result = await collect({ cleanup: () => ({ cleanup_status: "FAILED" }) });

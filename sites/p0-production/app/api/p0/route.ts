@@ -40,6 +40,10 @@ function localFixtureScenario(request: Request) {
 
 async function historicalView(request: Request, key: string): Promise<PipelineHistoricalView> {
   const scenario = localFixtureScenario(request);
+  if (scenario === "pipeline-acceptance") {
+    const fixture = await import("../../../lib/pipeline-acceptance-fixture");
+    return fixture.pipelineAcceptanceHistoricalView();
+  }
   if (scenario) {
     const fixture = await import("../../../lib/p0-e2e-runtime");
     return fixture.fixtureOperatorDiagnostics(scenario, key) as unknown as PipelineHistoricalView;
@@ -77,7 +81,12 @@ export async function POST(request: Request) {
     if (pipelineAction === "START") {
       const current = await controller.current(key);
       if (current.active) throw new Error("У владельца уже есть активный запуск.");
-      const pipeline = await controller.start(key, await historicalView(request, key));
+      let pipeline = await controller.start(key, await historicalView(request, key));
+      if (localFixtureScenario(request) === "pipeline-acceptance") {
+        const fixture = await import("../../../lib/pipeline-acceptance-fixture");
+        await fixture.completePipelineAcceptanceRun(env.DB, key);
+        pipeline = await controller.current(key);
+      }
       return Response.json(projectCurrentPipelineContract(pipeline), { status: 201 });
     }
     if (pipelineAction === "CORRECT_GOAL") {
