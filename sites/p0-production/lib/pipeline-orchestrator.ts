@@ -1,9 +1,17 @@
+import {
+  verifyGoalCandidate,
+  verifyGoalFormationResult,
+  type GoalCandidate,
+  type GoalFormationResult,
+  type GoalInputReference,
+} from "./goal-revision.ts";
+
 const SHA256_DIGEST = /^sha256:[0-9a-f]{64}$/u;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$/u;
 const REASON_CODE = /^[A-Z][A-Z0-9_]{1,79}$/u;
 
 export const PIPELINE_ORCHESTRATOR_CONTRACT = "mox-adv.p0.pipeline-orchestrator";
-export const PIPELINE_ORCHESTRATOR_VERSION = "1.1.0";
+export const PIPELINE_ORCHESTRATOR_VERSION = "1.2.0";
 export const PIPELINE_RUN_SCHEMA = "p0-pipeline-run-v1";
 export const PIPELINE_INPUT_VERSIONS_SCHEMA = "p0-pipeline-input-versions-v1";
 
@@ -84,6 +92,7 @@ export type PipelineRunState = {
   };
   input_versions: PipelineInputVersions;
   input_versions_digest: string;
+  goal_formation: { status: "PENDING" } | GoalFormationResult;
   ownership: {
     state: "PIPELINE_ORCHESTRATOR";
     transitions: "PIPELINE_ORCHESTRATOR";
@@ -242,6 +251,7 @@ export function assertPipelineRunState(value: unknown): asserts value is Pipelin
     "initiator",
     "input_versions",
     "input_versions_digest",
+    "goal_formation",
     "ownership",
     "authority",
     "started_at",
@@ -270,6 +280,15 @@ export function assertPipelineRunState(value: unknown): asserts value is Pipelin
       || stage.label !== PIPELINE_STAGES[index].label
       || !["PENDING", "ACTIVE", "COMPLETED", "RETURNED", "STOPPED"].includes(stage.status))) {
     throw new PipelineOrchestratorError("PIPELINE_RUN_CORRUPT", "Pipeline stages do not match the canonical path.");
+  }
+  if (!run.goal_formation || typeof run.goal_formation !== "object"
+    || (run.goal_formation.status === "PENDING" && !exactKeys(run.goal_formation, ["status"]))
+    || !["PENDING", "VERIFIED", "MATERIAL_DECISION_REQUIRED"].includes(run.goal_formation.status)) {
+    throw new PipelineOrchestratorError("PIPELINE_RUN_CORRUPT", "Pipeline Goal formation state is invalid.");
+  }
+  const currentStageIndex = PIPELINE_STAGES.findIndex((stage) => stage.id === run.current_stage);
+  if (currentStageIndex > 0 && run.goal_formation.status !== "VERIFIED") {
+    throw new PipelineOrchestratorError("PIPELINE_RUN_CORRUPT", "A pipeline cannot pass Campaign Goal without a verified GoalRevision.");
   }
   const activeStages = run.stages.filter((stage) => stage.status === "ACTIVE");
   const stoppedStages = run.stages.filter((stage) => stage.status === "STOPPED");
@@ -308,7 +327,28 @@ export async function verifyPipelineRunState(value: unknown): Promise<PipelineRu
   if (await pipelineDigest(value.input_versions) !== value.input_versions_digest) {
     throw new PipelineOrchestratorError("PIPELINE_RUN_CORRUPT", "Pipeline input versions digest does not match the persisted inputs.");
   }
+  if (value.goal_formation.status !== "PENDING") {
+    try {
+      await verifyGoalFormationResult(value.goal_formation);
+    } catch (error) {
+      throw new PipelineOrchestratorError("PIPELINE_RUN_CORRUPT", error instanceof Error ? error.message : "Pipeline Goal result is invalid.");
+    }
+  }
   return value;
+}
+
+export function pipelineGoalInputReferences(input: PipelineInputVersions): GoalInputReference[] {
+  const references: GoalInputReference[] = [{
+    input_id: "historical_document",
+    schema_version: input.historical_document.schema_version,
+    revision_id: `historical-document:${input.historical_document.revision}`,
+    digest: input.historical_document.digest,
+  }, {
+    input_id: "business_input",
+    ...input.business_input,
+  }];
+  if (input.goal_revision) references.push({ input_id: "prior_goal_revision", ...input.goal_revision });
+  return references;
 }
 
 function transitionReason(reasonCode: unknown, reason: unknown) {
@@ -383,6 +423,7 @@ export class PipelineOrchestrator {
         initiator: { kind: "OWNER", action: "START" },
         input_versions: frozenInputs,
         input_versions_digest: inputVersionsDigest,
+        goal_formation: { status: "PENDING" },
         ownership: { state: "PIPELINE_ORCHESTRATOR", transitions: "PIPELINE_ORCHESTRATOR", authority: "PIPELINE_ORCHESTRATOR", persistence: "PIPELINE_ORCHESTRATOR" },
         authority: {
           external_write: "DENIED",
@@ -429,6 +470,51 @@ export class PipelineOrchestrator {
     return this.persist(current, next);
   }
 
+  async recordGoalCandidate(input: {
+    run_id: string;
+    expected_version: number;
+    candidate: GoalCandidate;
+  }) {
+    const current = await this.activeRun(input.run_id, input.expected_version, "CAMPAIGN_GOAL");
+    const timestamp = this.now();
+    const result = await verifyGoalCandidate({
+      candidate: input.candidate,
+      exact_inputs: pipelineGoalInputReferences(current.input_versions),
+      verified_at: timestamp,
+    });
+    const next = clone(current);
+    next.version += 1;
+    next.goal_formation = result;
+    next.updated_at = timestamp;
+    if (result.status === "MATERIAL_DECISION_REQUIRED") {
+      next.stage_attempt += 1;
+      next.last_transition = {
+        kind: "RETRY",
+        source_stage: "CAMPAIGN_GOAL",
+        target_stage: "CAMPAIGN_GOAL",
+        reason_code: "GOAL_MATERIAL_AMBIGUITY",
+        reason: result.reason,
+        recorded_at: timestamp,
+      };
+      return this.persist(current, next);
+    }
+    next.current_stage = "EVIDENCE_COLLECTION";
+    next.stage_attempt = 1;
+    next.stages = next.stages.map((stage, index) => ({
+      ...stage,
+      status: index === 0 ? "COMPLETED" : index === 1 ? "ACTIVE" : "PENDING",
+    }));
+    next.last_transition = {
+      kind: "ADVANCE",
+      source_stage: "CAMPAIGN_GOAL",
+      target_stage: "EVIDENCE_COLLECTION",
+      reason_code: "GOAL_VERIFIED",
+      reason: "Полная GoalRevision прошла детерминированную проверку.",
+      recorded_at: timestamp,
+    };
+    return this.persist(current, next);
+  }
+
   async advance(input: {
     run_id: string;
     expected_version: number;
@@ -437,6 +523,9 @@ export class PipelineOrchestrator {
     reason: string;
   }) {
     const current = await this.activeRun(input.run_id, input.expected_version, input.source_stage);
+    if (current.current_stage === "CAMPAIGN_GOAL") {
+      throw new PipelineOrchestratorError("PIPELINE_GOAL_RESULT_REQUIRED", "Campaign Goal advances only through a verified Goal Agent candidate.");
+    }
     const typedReason = transitionReason(input.reason_code, input.reason);
     const sourceIndex = PIPELINE_STAGES.findIndex((stage) => stage.id === current.current_stage);
     const timestamp = this.now();

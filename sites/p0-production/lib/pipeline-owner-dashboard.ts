@@ -1,3 +1,4 @@
+import type { GoalCandidate } from "./goal-revision.ts";
 import {
   PIPELINE_INPUT_VERSIONS_SCHEMA,
   PIPELINE_STAGES,
@@ -35,6 +36,30 @@ export type OwnerPipelineProjection = {
     reason: string;
     target: string;
   };
+  goalFormation:
+    | { status: "PENDING" }
+    | {
+        status: "VERIFIED";
+        versionLabel: string;
+        desiredOutcome: string;
+        qualifiedAction: string;
+        provenance: string[];
+        knownConstraints: string[];
+        ownerConfirmationRequired: false;
+      }
+    | {
+        status: "MATERIAL_DECISION_REQUIRED";
+        reason: string;
+        recommendation: string;
+        options: Array<{
+          id: string;
+          desiredOutcome: string;
+          qualifiedAction: string;
+          evidence: string[];
+          consequences: string[];
+          recommended: boolean;
+        }>;
+      };
   canStart: boolean;
   canStop: boolean;
 };
@@ -201,6 +226,7 @@ export function projectOwnerPipeline(run: PipelineRunState | null): OwnerPipelin
         tone: "pending",
       })),
       return: null,
+      goalFormation: { status: "PENDING" },
       canStart: true,
       canStop: false,
     };
@@ -212,6 +238,32 @@ export function projectOwnerPipeline(run: PipelineRunState | null): OwnerPipelin
       : run.status === "COMPLETED"
         ? "Пять этапов завершены. Внешняя запись не выполнялась."
         : "Запуск завершён технической ошибкой без внешней записи.";
+  const persistedGoalFormation = run.goal_formation;
+  const goalFormation: OwnerPipelineProjection["goalFormation"] = persistedGoalFormation.status === "VERIFIED"
+    ? {
+        status: "VERIFIED",
+        versionLabel: `Версия ${persistedGoalFormation.revision.version}`,
+        desiredOutcome: persistedGoalFormation.revision.desired_outcome,
+        qualifiedAction: persistedGoalFormation.revision.qualified_action,
+        provenance: persistedGoalFormation.revision.provenance.map((item) => `${item.evidence} · ${item.locator}`),
+        knownConstraints: persistedGoalFormation.revision.known_constraints.map((item) => item.constraint),
+        ownerConfirmationRequired: false,
+      }
+    : persistedGoalFormation.status === "MATERIAL_DECISION_REQUIRED"
+      ? {
+          status: "MATERIAL_DECISION_REQUIRED",
+          reason: persistedGoalFormation.reason,
+          recommendation: persistedGoalFormation.options.find((option) => option.option_id === persistedGoalFormation.recommendation)?.desired_outcome ?? "",
+          options: persistedGoalFormation.options.map((option) => ({
+            id: option.option_id,
+            desiredOutcome: option.desired_outcome,
+            qualifiedAction: option.qualified_action,
+            evidence: option.evidence.map((item) => `${item.evidence} · ${item.locator}`),
+            consequences: [...option.consequences],
+            recommended: option.recommended,
+          })),
+        }
+      : { status: "PENDING" };
   return {
     runId: run.run_id,
     version: run.version,
@@ -234,6 +286,7 @@ export function projectOwnerPipeline(run: PipelineRunState | null): OwnerPipelin
           target: stageLabel(run.last_transition.target_stage),
         }
       : null,
+    goalFormation,
     canStart: run.status !== "ACTIVE",
     canStop: run.status === "ACTIVE",
   };
@@ -252,6 +305,18 @@ export class OwnerPipelineController {
 
   async start(ownerKey: string, view: PipelineHistoricalView) {
     return projectOwnerPipeline(await this.orchestrator.start(ownerKey, await pipelineInputVersions(view)));
+  }
+
+  async recordGoalCandidate(ownerKey: string, input: { runId: string; expectedVersion: number; candidate: GoalCandidate }) {
+    const current = await this.orchestrator.current(ownerKey);
+    if (!current || current.run_id !== input.runId) {
+      throw new Error("Активный запуск изменился. Обновите Dashboard.");
+    }
+    return projectOwnerPipeline(await this.orchestrator.recordGoalCandidate({
+      run_id: input.runId,
+      expected_version: input.expectedVersion,
+      candidate: input.candidate,
+    }));
   }
 
   async stop(ownerKey: string, input: { runId: string; expectedVersion: number }) {

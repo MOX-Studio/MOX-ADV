@@ -292,6 +292,7 @@ export default function P0Client() {
 
           {activeStageStatus === "upcoming" && <StageUnavailable projection={projection} stage={activeStage} />}
           {activeStage === "goal" && activeStageStatus !== "upcoming" && <GoalStageSummary projection={projection} />}
+          {activeStage === "goal" && activeStageStatus !== "upcoming" && projection.pipeline && <GoalFormationSummary pipeline={projection.pipeline} />}
           {activeStage === "goal" && activeStageStatus !== "upcoming" && projection.goalInterview && <GoalInterview
             interview={projection.goalInterview}
             busy={busy}
@@ -684,6 +685,36 @@ function StageNavigation({ projection, selectedStage, onStage }: { projection: O
       </li>;
     })}
   </ol>;
+}
+
+function GoalFormationSummary({ pipeline }: { pipeline: PipelineProjection }) {
+  const formation = pipeline.goalFormation;
+  if (formation.status === "PENDING") {
+    return <section className="owner-goal-formation" data-goal-status="PENDING" aria-live="polite">
+      <header><div><p className="owner-eyebrow">GOAL AGENT + ПРОВЕРКА КОДОМ</p><h2>Формируется полная цель кампании</h2></div><strong>Выполняется</strong></header>
+      <p>Агент связывает желаемый бизнес-результат, квалифицированное действие, происхождение и известные ограничения.</p>
+    </section>;
+  }
+  if (formation.status === "VERIFIED") {
+    return <section className="owner-goal-formation" data-goal-status="VERIFIED" aria-labelledby="owner-verified-goal-title">
+      <header><div><p className="owner-eyebrow">ПРОВЕРЕННАЯ GOAL REVISION</p><h2 id="owner-verified-goal-title">{formation.desiredOutcome}</h2></div><strong>{formation.versionLabel} · Проверена</strong></header>
+      <article><span>Квалифицированное действие</span><h3>{formation.qualifiedAction}</h3><p>Без обязательного подтверждения владельцем: код проверил полную редакцию и точные входы.</p></article>
+      <div className="owner-goal-formation-grid">
+        <section><h3>Доказательства</h3><ul>{formation.provenance.map((item) => <li key={item}>{item}</li>)}</ul></section>
+        <section><h3>Известные ограничения</h3>{formation.knownConstraints.length ? <ul>{formation.knownConstraints.map((item) => <li key={item}>{item}</li>)}</ul> : <p>Дополнительные известные ограничения не зафиксированы.</p>}</section>
+      </div>
+    </section>;
+  }
+  return <section className="owner-goal-formation owner-goal-decision" data-goal-status="MATERIAL_DECISION_REQUIRED" aria-labelledby="owner-goal-decision-title">
+    <header><div><p className="owner-eyebrow">НУЖЕН ВЫБОР БИЗНЕС-РЕЗУЛЬТАТА</p><h2 id="owner-goal-decision-title">Варианты материально различаются</h2><p>{formation.reason}</p></div><strong>Рекомендация подготовлена</strong></header>
+    <p className="owner-goal-recommendation"><b>Рекомендация агента:</b> {formation.recommendation}</p>
+    <div className="owner-goal-options">{formation.options.map((option) => <article key={option.id} data-recommended={option.recommended}>
+      <header><span>{option.recommended ? "РЕКОМЕНДАЦИЯ" : "АЛЬТЕРНАТИВА"}</span><h3>{option.desiredOutcome}</h3></header>
+      <p><b>Квалифицированное действие:</b> {option.qualifiedAction}</p>
+      <section><h4>Доказательства</h4><ul>{option.evidence.map((item) => <li key={item}>{item}</li>)}</ul></section>
+      <section><h4>Последствия выбора</h4><ul>{option.consequences.map((item) => <li key={item}>{item}</li>)}</ul></section>
+    </article>)}</div>
+  </section>;
 }
 
 function GoalStageSummary({ projection }: { projection: OwnerJourneyProjection }) {

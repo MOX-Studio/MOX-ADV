@@ -41,6 +41,21 @@ class MemoryPipelineStore {
   }
 }
 
+function goalCandidate(materialAmbiguity = null) {
+  return {
+    schema_version: "p0-goal-candidate-v1",
+    desired_outcome: "Получать квалифицированные заявки",
+    qualified_action: "Клиент подтвердил потребность и готов обсудить предложение",
+    used_input_ids: ["business_input"],
+    provenance: [
+      { supports: "DESIRED_OUTCOME", input_id: "business_input", locator: "business_goal_decision.value", evidence: "Сохранённый бизнес-вход" },
+      { supports: "QUALIFIED_ACTION", input_id: "business_input", locator: "business_model.qualified_outcome", evidence: "Критерий квалификации" },
+    ],
+    known_constraints: [{ constraint: "Исключить случайные обращения", input_ids: ["business_input"] }],
+    material_ambiguity: materialAmbiguity,
+  };
+}
+
 function historicalView(goal = "Получать квалифицированные заявки") {
   return {
     revision: 17,
@@ -137,6 +152,49 @@ test("saved owner edits change the exact frozen input digest", async () => {
   assert.equal(before.campaign_pairs[0].draft.revision_id, "draft-1@3");
 });
 
+test("Dashboard projects material Goal options with evidence, consequences, and recommendation", async () => {
+  const store = new MemoryPipelineStore();
+  const controller = new OwnerPipelineController(store, {
+    newRunId: () => "pipeline-goal-choice",
+    now: () => "2026-08-31T12:00:00.000Z",
+  });
+  const started = await controller.start("owner", historicalView());
+  const projection = await controller.recordGoalCandidate("owner", {
+    runId: started.runId,
+    expectedVersion: started.version,
+    candidate: goalCandidate({
+      reason: "Продажа участия и регистрация посетителей меняют бизнес-результат.",
+      options: [{
+        option_id: "exhibitors",
+        desired_outcome: "Получать квалифицированные заявки",
+        qualified_action: "Клиент подтвердил потребность и готов обсудить предложение",
+        evidence: [
+          { supports: "DESIRED_OUTCOME", input_id: "business_input", locator: "product", evidence: "Предлагается участие" },
+          { supports: "QUALIFIED_ACTION", input_id: "business_input", locator: "qualified", evidence: "Задан критерий обращения" },
+        ],
+        consequences: ["Стратегия будет ориентирована на экспонентов."],
+        recommended: true,
+      }, {
+        option_id: "visitors",
+        desired_outcome: "Получать регистрации посетителей",
+        qualified_action: "Посетитель зарегистрировался на мероприятие",
+        evidence: [
+          { supports: "DESIRED_OUTCOME", input_id: "business_input", locator: "site", evidence: "Доступна регистрация" },
+          { supports: "QUALIFIED_ACTION", input_id: "business_input", locator: "action", evidence: "Регистрация наблюдаема" },
+        ],
+        consequences: ["Изменятся аудитория и измерение."],
+        recommended: false,
+      }],
+    }),
+  });
+
+  assert.equal(projection.currentStage, "goal");
+  assert.equal(projection.goalFormation.status, "MATERIAL_DECISION_REQUIRED");
+  assert.equal(projection.goalFormation.recommendation, "Получать квалифицированные заявки");
+  assert.equal(projection.goalFormation.options.length, 2);
+  assert.ok(projection.goalFormation.options.every((option) => option.evidence.length && option.consequences.length));
+});
+
 test("Dashboard projection names the return source, exact reason and deterministic target", async () => {
   const store = new MemoryPipelineStore();
   let tick = 0;
@@ -146,8 +204,12 @@ test("Dashboard projection names the return source, exact reason and determinist
     now: () => new Date(Date.parse("2026-08-31T13:00:00.000Z") + tick++ * 1_000).toISOString(),
   });
   let run = await orchestrator.start("owner", await pipelineInputVersions(historicalView()));
+  run = await orchestrator.recordGoalCandidate({
+    run_id: run.run_id,
+    expected_version: run.version,
+    candidate: goalCandidate(),
+  });
   for (const [source, code] of [
-    ["CAMPAIGN_GOAL", "GOAL_VERIFIED"],
     ["EVIDENCE_COLLECTION", "EVIDENCE_VERIFIED"],
     ["STRATEGY", "STRATEGY_VERIFIED"],
   ]) {

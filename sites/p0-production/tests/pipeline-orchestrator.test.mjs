@@ -76,6 +76,31 @@ function inputVersions() {
   };
 }
 
+function goalCandidate(materialAmbiguity = null) {
+  return {
+    schema_version: "p0-goal-candidate-v1",
+    desired_outcome: "Получать квалифицированные заявки",
+    qualified_action: "Клиент подтвердил потребность и готов обсудить предложение",
+    used_input_ids: ["business_input", "historical_document"],
+    provenance: [{
+      supports: "DESIRED_OUTCOME",
+      input_id: "business_input",
+      locator: "business_goal_decision.value",
+      evidence: "Сохранённый бизнес-вход задаёт квалифицированные заявки",
+    }, {
+      supports: "QUALIFIED_ACTION",
+      input_id: "business_input",
+      locator: "business_model.qualified_outcome",
+      evidence: "Модель бизнеса задаёт признак квалифицированного обращения",
+    }],
+    known_constraints: [{
+      constraint: "Не учитывать обращения без подтверждённой потребности",
+      input_ids: ["business_input"],
+    }],
+    material_ambiguity: materialAmbiguity,
+  };
+}
+
 function fixture(database) {
   const ids = ["pipeline-run-first", "pipeline-run-second"];
   let tick = 0;
@@ -105,6 +130,7 @@ test("Start persists a new zero-write run at Campaign Goal with five canonical s
   assert.equal(started.version, 0);
   assert.equal(started.status, "ACTIVE");
   assert.equal(started.current_stage, "CAMPAIGN_GOAL");
+  assert.deepEqual(started.goal_formation, { status: "PENDING" });
   assert.deepEqual(started.stages, PIPELINE_STAGES.map((stage, index) => ({ ...stage, status: index === 0 ? "ACTIVE" : "PENDING" })));
   assert.equal(started.input_versions.historical_document.revision, 42);
   assert.equal(started.input_versions.business_input.revision_id, "business-input-revision-1");
@@ -127,6 +153,23 @@ test("Start persists a new zero-write run at Campaign Goal with five canonical s
   assert.deepEqual({ ...historicalAfter }, { revision: 42, updated_at: "2026-08-31T09:00:00.000Z", value_json: historical });
   assert.equal(database.prepare("SELECT COUNT(*) AS count FROM p0_pipeline_runs").get().count, 1);
   assert.equal(database.prepare("SELECT COUNT(*) AS count FROM p0_pipeline_run_revisions").get().count, 1);
+  database.close();
+});
+
+test("durable 1.1 Goal-stage runs upgrade to pending formation without inventing a GoalRevision", async () => {
+  const database = new DatabaseSync(":memory:");
+  const { orchestrator } = fixture(database);
+  const started = await orchestrator.start("owner", inputVersions());
+  const legacy = structuredClone(started);
+  legacy.contract.version = "1.1.0";
+  delete legacy.goal_formation;
+  database.prepare("UPDATE p0_pipeline_runs SET value_json = ? WHERE run_id = ?").run(JSON.stringify(legacy), started.run_id);
+
+  const loaded = await new D1PipelineRunStore(d1Shim(database)).load(started.run_id);
+
+  assert.equal(loaded.contract.version, "1.2.0");
+  assert.deepEqual(loaded.goal_formation, { status: "PENDING" });
+  assert.equal(loaded.current_stage, "CAMPAIGN_GOAL");
   database.close();
 });
 
@@ -163,13 +206,13 @@ test("stop rejects stale work, retry keeps the run, and typed returns follow the
   const database = new DatabaseSync(":memory:");
   const { orchestrator } = fixture(database);
   const started = await orchestrator.start("owner", inputVersions());
-  const goalComplete = await orchestrator.advance({
+  const goalComplete = await orchestrator.recordGoalCandidate({
     run_id: started.run_id,
     expected_version: started.version,
-    source_stage: "CAMPAIGN_GOAL",
-    reason_code: "GOAL_VERIFIED",
-    reason: "Полная редакция цели прошла типизированную проверку.",
+    candidate: goalCandidate(),
   });
+  assert.equal(goalComplete.goal_formation.status, "VERIFIED");
+  assert.equal(goalComplete.goal_formation.revision.validation.owner_confirmation_required, false);
   const evidenceComplete = await orchestrator.advance({
     run_id: goalComplete.run_id,
     expected_version: goalComplete.version,
@@ -234,6 +277,47 @@ test("stop rejects stale work, retry keeps the run, and typed returns follow the
     verifyPipelineRunState(corrupted),
     (error) => error instanceof PipelineOrchestratorError && error.code === "PIPELINE_RUN_CORRUPT",
   );
+  database.close();
+});
+
+test("material Goal ambiguity stays at Campaign Goal with a prepared decision packet", async () => {
+  const database = new DatabaseSync(":memory:");
+  const { orchestrator } = fixture(database);
+  const started = await orchestrator.start("owner", inputVersions());
+  const ambiguous = await orchestrator.recordGoalCandidate({
+    run_id: started.run_id,
+    expected_version: started.version,
+    candidate: goalCandidate({
+      reason: "Продажа и регистрация посетителей являются разными бизнес-результатами.",
+      options: [{
+        option_id: "sales",
+        desired_outcome: "Получать квалифицированные заявки",
+        qualified_action: "Клиент подтвердил потребность и готов обсудить предложение",
+        evidence: [
+          { supports: "DESIRED_OUTCOME", input_id: "business_input", locator: "goal", evidence: "Вход указывает продажи" },
+          { supports: "QUALIFIED_ACTION", input_id: "business_input", locator: "qualified", evidence: "Вход задаёт квалификацию" },
+        ],
+        consequences: ["Кампании будут оптимизированы под коммерческое обращение."],
+        recommended: true,
+      }, {
+        option_id: "registrations",
+        desired_outcome: "Получать регистрации посетителей",
+        qualified_action: "Посетитель зарегистрировался на мероприятие",
+        evidence: [
+          { supports: "DESIRED_OUTCOME", input_id: "historical_document", locator: "site", evidence: "Сайт поддерживает регистрацию" },
+          { supports: "QUALIFIED_ACTION", input_id: "historical_document", locator: "action", evidence: "Регистрация наблюдаема" },
+        ],
+        consequences: ["Изменятся аудитория и измеряемое действие."],
+        recommended: false,
+      }],
+    }),
+  });
+
+  assert.equal(ambiguous.current_stage, "CAMPAIGN_GOAL");
+  assert.equal(ambiguous.stage_attempt, 2);
+  assert.equal(ambiguous.goal_formation.status, "MATERIAL_DECISION_REQUIRED");
+  assert.equal(ambiguous.goal_formation.options.length, 2);
+  assert.equal(ambiguous.last_transition.reason_code, "GOAL_MATERIAL_AMBIGUITY");
   database.close();
 });
 

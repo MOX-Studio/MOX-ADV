@@ -1,4 +1,6 @@
 import {
+  PIPELINE_ORCHESTRATOR_CONTRACT,
+  PIPELINE_ORCHESTRATOR_VERSION,
   assertPipelineRunState,
   verifyPipelineRunState,
   type PipelineRunState,
@@ -27,7 +29,18 @@ export async function ensurePipelineOrchestratorTables(db: D1Database) {
 
 function parse(row: PipelineRunRow | null) {
   if (!row) return null;
-  const state = JSON.parse(row.value_json) as PipelineRunState;
+  const persisted = JSON.parse(row.value_json) as Record<string, unknown>;
+  const contract = persisted.contract as Record<string, unknown> | undefined;
+  if (contract?.name === PIPELINE_ORCHESTRATOR_CONTRACT
+    && contract.version === "1.1.0"
+    && !Object.hasOwn(persisted, "goal_formation")) {
+    if (persisted.current_stage !== "CAMPAIGN_GOAL") {
+      throw new Error("Legacy pipeline passed Campaign Goal without a verifiable GoalRevision.");
+    }
+    persisted.contract = { name: PIPELINE_ORCHESTRATOR_CONTRACT, version: PIPELINE_ORCHESTRATOR_VERSION };
+    persisted.goal_formation = { status: "PENDING" };
+  }
+  const state = persisted as PipelineRunState;
   if (state.version !== row.version) throw new Error("Durable pipeline run version drift detected.");
   return state;
 }
