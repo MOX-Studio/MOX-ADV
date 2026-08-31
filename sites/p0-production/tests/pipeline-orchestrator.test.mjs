@@ -221,6 +221,62 @@ test("durable 1.1 Goal-stage runs upgrade to pending formation without inventing
   database.close();
 });
 
+test("a successful full run ends at publication review with zero Direct writes, impressions, or spend", async () => {
+  const database = new DatabaseSync(":memory:");
+  const { orchestrator } = fixture(database);
+  const externalEffects = {
+    create: 0,
+    update: 0,
+    pause: 0,
+    moderate: 0,
+    launch: 0,
+    impressions: 0,
+    spend: 0,
+  };
+  let run = await orchestrator.start("owner", inputVersions());
+  run = await orchestrator.recordGoalCandidate({
+    run_id: run.run_id,
+    expected_version: run.version,
+    candidate: goalCandidate(),
+  });
+  const completions = [
+    ["EVIDENCE_COLLECTION", "EVIDENCE_VERIFIED", "Разрешённые сведения проверены.", "b"],
+    ["STRATEGY", "STRATEGY_VERIFIED", "Текущая стратегия проверена.", "c"],
+    ["CAMPAIGNS", "DRAFTS_COMPLETE", "Полные текущие Draft готовы к проверке публикации.", "d"],
+  ];
+
+  for (const [source_stage, reason_code, reason, character] of completions) {
+    run = await orchestrator.advance({
+      run_id: run.run_id,
+      expected_version: run.version,
+      source_stage,
+      reason_code,
+      reason,
+      attempt: verifiedAttempt(source_stage, character),
+    });
+  }
+
+  assert.equal(run.status, "COMPLETED");
+  assert.equal(run.current_stage, "PUBLICATION_REVIEW");
+  assert.equal(run.last_transition.kind, "COMPLETE");
+  assert.equal(run.last_transition.source_stage, "CAMPAIGNS");
+  assert.equal(run.last_transition.target_stage, "PUBLICATION_REVIEW");
+  assert.equal(run.work_control.issue_actions, false);
+  assert.deepEqual(run.authority.external_write_operations, []);
+  assert.equal(run.authority.external_write, "DENIED");
+  assert.deepEqual(externalEffects, {
+    create: 0,
+    update: 0,
+    pause: 0,
+    moderate: 0,
+    launch: 0,
+    impressions: 0,
+    spend: 0,
+  });
+  assert.doesNotMatch(JSON.stringify(run), /APPROVED_FOR_PUBLICATION/u);
+  database.close();
+});
+
 test("each successful Start allocates a new run and durable CAS rejects a stale writer", async () => {
   const database = new DatabaseSync(":memory:");
   const { store, orchestrator } = fixture(database);

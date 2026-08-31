@@ -32,7 +32,7 @@ export const OWNER_JOURNEY_STAGES = [
   { id: "findings", label: "Что узнал агент" },
   { id: "strategy", label: "Стратегия" },
   { id: "campaigns", label: "Кампании" },
-  { id: "review", label: "Проверка и создание" },
+  { id: "review", label: "Проверка публикации" },
 ] as const;
 
 export type OwnerJourneyStageId = typeof OWNER_JOURNEY_STAGES[number]["id"];

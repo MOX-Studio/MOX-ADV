@@ -258,8 +258,12 @@ export default function P0Client() {
   }
 
   const activeStage = selectedStage ?? authoritativeStage(projection);
-  const activeStageStatus = projection.journey.stages.find((stage) => stage.id === activeStage)?.status ?? "upcoming";
-  const viewingCurrentStage = activeStage === projection.journey.currentStage;
+  const publicationReviewHandoff = projection.pipeline?.status === "COMPLETED"
+    && projection.pipeline.currentStage === "review";
+  const activeStageStatus = publicationReviewHandoff && activeStage === "review"
+    ? "complete"
+    : projection.journey.stages.find((stage) => stage.id === activeStage)?.status ?? "upcoming";
+  const viewingCurrentStage = activeStage === (projection.pipeline?.currentStage ?? projection.journey.currentStage);
 
   function chooseStage(stage: OwnerJourneyStageId) {
     setSelectedStage(stage);
@@ -420,8 +424,14 @@ export default function P0Client() {
             </article>)}
           </section>}
 
-          {activeStage === "campaigns" && activeStageStatus !== "upcoming" && projection.campaignOptions.length > 0 && <section className="owner-campaigns" aria-labelledby="owner-campaigns-title">
-            <header><p className="owner-eyebrow">ВАРИАНТЫ КАМПАНИЙ</p><h2 id="owner-campaigns-title">Кампании для бизнес-проверки</h2></header>
+          {activeStage === "review" && publicationReviewHandoff && <section className="owner-recommendation publication-review-boundary" role="status">
+            <span>ПРОВЕРКА ПУБЛИКАЦИИ</span>
+            <h3>Текущие Draft переданы на отдельную проверку</h3>
+            <p>Просмотр и правки доступны без решения о публикации. Этот этап не создаёт и не изменяет кампании в Директе, не запускает показы и не расходует бюджет.</p>
+          </section>}
+
+          {(activeStage === "campaigns" || (activeStage === "review" && publicationReviewHandoff)) && activeStageStatus !== "upcoming" && projection.campaignOptions.length > 0 && <section className="owner-campaigns" aria-labelledby="owner-campaigns-title">
+            <header><p className="owner-eyebrow">ТЕКУЩИЕ CAMPAIGN DRAFT</p><h2 id="owner-campaigns-title">Кампании для бизнес-проверки</h2></header>
             <div>{projection.campaignOptions.map((campaign, index) => <CampaignOption
               key={`${campaign.editor.publicationHandle ?? campaign.editor.protocolHandle ?? campaign.editor.versionLabel}-${index}`}
               campaign={campaign}

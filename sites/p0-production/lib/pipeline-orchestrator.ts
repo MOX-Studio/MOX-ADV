@@ -902,13 +902,19 @@ export class PipelineOrchestrator {
     next.version += 1;
     next.stage_attempt = 1;
     next.updated_at = timestamp;
-    if (sourceIndex === PIPELINE_STAGES.length - 1) {
+    // A successful base run hands complete Drafts to publication review; review is
+    // deliberately outside the run so it cannot acquire publication authority.
+    if (sourceIndex >= PIPELINE_STAGES.length - 2) {
+      const target = sourceIndex === PIPELINE_STAGES.length - 2
+        ? "PUBLICATION_REVIEW"
+        : null;
       next.status = "COMPLETED";
+      next.current_stage = "PUBLICATION_REVIEW";
       next.stages = next.stages.map((stage) => ({ ...stage, status: "COMPLETED" }));
       next.last_transition = {
         kind: "COMPLETE",
         source_stage: current.current_stage,
-        target_stage: null,
+        target_stage: target,
         ...typedReason,
         recorded_at: timestamp,
       };
