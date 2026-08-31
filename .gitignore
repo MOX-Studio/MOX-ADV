@@ -11,6 +11,9 @@ __pycache__/
 .pi/tasks/
 .pi/subagents/
 
+# Local temporary files
+.tmp/
+
 .env
 .env.*
 !.env.example
