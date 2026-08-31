@@ -90,6 +90,56 @@ test("deterministically fans one approved Strategy revision out into multiple co
   assert.equal(visible.every((draft) => draft.publish_projection.direct.ad), true);
 });
 
+test("compiles the maximum-clicks baseline without private Direct or Metrika", async () => {
+  const value = await recommendationSet(null, {
+    directCapabilitySnapshot: null,
+    measurementDestinationReadiness: { readiness_id: "destination-ready-1", measurement: { status: "BLOCKED" }, destination: { status: "READY" } },
+    metrikaMeasurementPlan: null,
+  });
+  for (const draft of value.drafts) {
+    const campaign = draft.publish_projection.direct.campaign.UnifiedCampaign;
+    assert.equal(Object.hasOwn(campaign, "CounterIds"), false);
+    assert.equal(Object.hasOwn(campaign, "PriorityGoals"), false);
+    assert.doesNotMatch(JSON.stringify(campaign), /GoalId/u);
+    assert.equal(draft.publish_projection.creation_profile.measurement_plan.requirement, "NOT_CONSUMED");
+    assert.equal(draft.publication_blockers.some((blocker) => /METRIKA|MEASUREMENT_READINESS/u.test(blocker.code)), false);
+    assert.ok(draft.publication_blockers.some((blocker) => blocker.code === "DIRECT_CORE_CAPABILITY_SNAPSHOT_MISSING"));
+  }
+});
+
+test("blocks a Metrika-consuming selection until exact binding and registration are verified", async () => {
+  const blocked = await recommendationSet(null, {
+    measurementRequirement: "EXACT_METRIKA_GOAL",
+    measurementDestinationReadiness: { readiness_id: "measurement-ready-1", measurement: { status: "READY" }, destination: { status: "READY" } },
+    metrikaMeasurementPlan: {
+      counter_id: "424242",
+      primary_goal_id: "1717",
+      counter_binding_matched: true,
+      goal_binding_matched: true,
+      registration_test_status: "NOT_RUN",
+      registration_test_goal_id: "1717",
+    },
+  });
+  assert.ok(blocked.drafts.every((draft) => draft.publication_blockers.some((blocker) => blocker.code === "METRIKA_REGISTRATION_TEST_REQUIRED")));
+  assert.ok(blocked.drafts.every((draft) => !Object.hasOwn(draft.publish_projection.direct.campaign.UnifiedCampaign, "CounterIds")));
+
+  const ready = await recommendationSet(null, {
+    measurementRequirement: "EXACT_METRIKA_GOAL",
+    measurementDestinationReadiness: { readiness_id: "measurement-ready-1", measurement: { status: "READY" }, destination: { status: "READY" } },
+    metrikaMeasurementPlan: {
+      counter_id: "424242",
+      primary_goal_id: "1717",
+      counter_binding_matched: true,
+      goal_binding_matched: true,
+      registration_test_status: "PASSED",
+      registration_test_goal_id: "1717",
+      registration_tested_at: "2026-08-21T10:00:00.000Z",
+    },
+  });
+  assert.ok(ready.drafts.every((draft) => !draft.publication_blockers.some((blocker) => /METRIKA/u.test(blocker.code))));
+  assert.ok(ready.drafts.every((draft) => draft.publish_projection.direct.campaign.UnifiedCampaign.CounterIds.Items[0] === 424242));
+});
+
 test("keeps evidence-gap Drafts reviewable but outside shortlist and publish", async () => {
   const value = await recommendationSet();
   for (const draft of value.drafts) {

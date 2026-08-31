@@ -1,4 +1,5 @@
 import { evaluateBrandClaimsContract } from "./campaign-creation-profile.ts";
+import { campaignMeasurementPlanBlockers } from "./campaign-measurement.ts";
 import { auctionProtocolBusinessCompletenessBlockers } from "./auction-protocol.ts";
 import { strategyAnswerValue, strategyPeriod } from "./campaign-strategy.ts";
 
@@ -587,8 +588,14 @@ function evaluateEligibility(
       "Устранить блокирующие ограничения выбранных возможностей Яндекс Директа до расчёта балла.",
     ));
   }
-  if (!text(measurementPlan.counter_id) || !text(measurementPlan.primary_goal_id) || !text(measurementPlan.readiness_id)) {
-    blockers.push(blocker("METRIKA_MEASUREMENT_PLAN_INCOMPLETE", "/draft/publish_projection/creation_profile/measurement_plan", "Зафиксировать точную Metrika measurement plan."));
+  for (const measurementCode of campaignMeasurementPlanBlockers(measurementPlan)) {
+    blockers.push(blocker(
+      measurementCode,
+      "/draft/publish_projection/creation_profile/measurement_plan",
+      measurementCode === "METRIKA_REGISTRATION_TEST_REQUIRED"
+        ? "Проверить регистрацию тестового события точной цели Метрики."
+        : "Зафиксировать exact Metrika binding только для профиля, который её потребляет.",
+    ));
   }
   for (const contractBlocker of evaluateBrandClaimsContract(
     projection.brand_claims_contract,

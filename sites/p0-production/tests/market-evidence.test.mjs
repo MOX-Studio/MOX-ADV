@@ -98,7 +98,17 @@ test("qualifies comparable Direct candidates only from one complete audit before
     status: "COMPLETE",
     graph_complete: true,
     methods_not_read: [],
+    limitations: ["История применима только к точной сопоставимой области."],
     observed_at: "2026-08-21T10:00:00.000Z",
+    snapshot: {
+      capability_snapshot_id: "direct-capability:owner-account:1",
+      capability_fingerprint: `sha256:${"a".repeat(64)}`,
+    },
+    account_binding: {
+      expected_account: "owner-account",
+      api_account: "owner-account",
+      matched: true,
+    },
   };
   const artifacts = [
     { collection: "campaigns", objects: [{
@@ -137,6 +147,19 @@ test("qualifies comparable Direct candidates only from one complete audit before
   assert.equal(candidates.qualified.length, 1);
   assert.equal(candidates.qualified[0].keyword_id, "keyword-technical-id");
   assert.equal(candidates.qualified[0].source, "YANDEX_DIRECT_REPORTS_API");
+  assert.deepEqual(candidates.qualified[0].source_contract, {
+    source_kind: "YANDEX_DIRECT_REPORTS_API_READ_ONLY",
+    authority: "READ_ONLY",
+    account: "owner-account",
+    capability_snapshot: {
+      snapshot_id: "direct-capability:owner-account:1",
+      fingerprint: `sha256:${"a".repeat(64)}`,
+    },
+    period: { from: "2026-08-01", to: "2026-08-02", inclusive: true },
+    limitations: ["История применима только к точной сопоставимой области."],
+    permitted_use: "EXACT_SCOPE_EMPIRICAL_COST_EVIDENCE",
+    universal_forecast: false,
+  });
   assert.equal(candidates.qualified[0].currency, "RUB");
   assert.equal(candidates.qualified[0].vat_treatment, "INCLUDED");
   assert.equal(candidates.qualified[0].observed_at, "2026-08-21T10:00:00.000Z");
@@ -161,6 +184,8 @@ test("qualifies comparable Direct candidates only from one complete audit before
   });
   assert.equal(history.status, "AVAILABLE");
   assert.deepEqual(history.range, { low: 120, high: 150, kind: "EMPIRICAL_IQR" });
+  assert.deepEqual(history.direct_history_source, candidates.qualified[0].source_contract);
+  assert.equal(history.direct_history_source.universal_forecast, false);
   assert.doesNotMatch(JSON.stringify(history), /technical-id|keyword_id|campaign_id|ad_group_id/iu);
 
   const partial = await qualifyDirectComparableCandidates({

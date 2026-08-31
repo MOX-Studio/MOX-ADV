@@ -1,6 +1,6 @@
 {
   "schema_version": "campaign-recommendation-set-v4",
-  "recommendation_set_id": "recommendation-set-d67f0c55279218bfba93",
+  "recommendation_set_id": "recommendation-set-d2422ba66df23dcf90bb",
   "capability_profile": "p0-campaign-creation-profile-v1@1.0.0",
   "playbook_release": "test-curated-release-default@1.0.0",
   "coverage": {
@@ -46,7 +46,7 @@
       "playbook_rule_id": null,
       "visibility": "VISIBLE",
       "suppression_reason": null,
-      "publish_fingerprint": "sha256:8769528412c5f1fad1566c850ce70f841aaa1b07be0ad0628c73b738a51cb07b",
+      "publish_fingerprint": "sha256:d4e83679dca247edca769cf893c7ab794996a63058e55967baa8e48e9adb74d9",
       "changed_fields": []
     },
     {
@@ -56,7 +56,7 @@
       "playbook_rule_id": "qualified-action-v1",
       "visibility": "VISIBLE",
       "suppression_reason": null,
-      "publish_fingerprint": "sha256:1c2ba0c0655043a86635270e5861e1de7f8e1a6e7ecb36e963d6b5e007b00a7c",
+      "publish_fingerprint": "sha256:57187881f26d390f1c82fd43f3565aa6651f6e2d9def28d778aa29030268b11b",
       "changed_fields": [
         "/direct/ad/ResponsiveAd/Texts",
         "/direct/keyword/Keyword"
@@ -69,7 +69,7 @@
       "playbook_rule_id": "audience-specificity-v1",
       "visibility": "VISIBLE",
       "suppression_reason": null,
-      "publish_fingerprint": "sha256:f11fbb1e1a179091fc38ff95ab2f7d453e8ffc47c2db2b7052ce31709cc8d195",
+      "publish_fingerprint": "sha256:f0c2f9428dd618a37d9db7901be1d6006babdcdde9d655bae76ca4fd60e13bb6",
       "changed_fields": [
         "/direct/ad/ResponsiveAd/Texts",
         "/direct/keyword/Keyword"

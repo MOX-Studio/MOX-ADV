@@ -33,7 +33,6 @@
       "HolidaysSchedule": { "SuspendOnHolidays": "NO", "BidPercent": 100, "StartHour": 0, "EndHour": 24 }
     },
     "UnifiedCampaign": {
-      "CounterIds": { "Items": [424242] },
       "TrackingParams": "utm_source=yandex&utm_medium=cpc&utm_campaign={campaign_id}&utm_content={ad_id}&utm_term={keyword}",
       "BiddingStrategy": {
         "Search": {

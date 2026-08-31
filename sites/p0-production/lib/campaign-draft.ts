@@ -4,6 +4,7 @@ import {
   buildBrandClaimsContract,
   campaignCreationProfileCapabilities,
 } from "./campaign-creation-profile.ts";
+import { buildCampaignMeasurementPlan } from "./campaign-measurement.ts";
 
 const text = (value: unknown) => String(value ?? "").replace(/\s+/g, " ").trim();
 
@@ -69,11 +70,20 @@ export function buildPublishProjection(
   const advertiserAccount = text(draft.advertiser_account);
   const currency = text(draft.currency);
   const capabilitySnapshotId = text(draft.capability_snapshot_id ?? draft.direct_capability_snapshot_id);
-  const metrikaCounterId = text(draft.metrika_counter_id);
-  const metrikaGoalId = text(draft.metrika_goal_id);
-  const measurementReadinessId = text(draft.measurement_readiness_id);
-  const counterId = /^\d+$/u.test(metrikaCounterId) && Number.isSafeInteger(Number(metrikaCounterId))
-    ? Number(metrikaCounterId) : null;
+  const measurementPlan = buildCampaignMeasurementPlan({
+    requirement: draft.measurement_requirement === "EXACT_METRIKA_GOAL" ? "EXACT_METRIKA_GOAL" : "NOT_CONSUMED",
+    counter_id: draft.metrika_counter_id,
+    primary_goal_id: draft.metrika_goal_id,
+    readiness_id: draft.measurement_readiness_id,
+    counter_binding_matched: draft.metrika_counter_binding_matched,
+    goal_binding_matched: draft.metrika_goal_binding_matched,
+    registration_test_status: draft.metrika_registration_test_status,
+    registration_test_goal_id: draft.metrika_registration_test_goal_id,
+    registration_tested_at: draft.metrika_registration_tested_at,
+  });
+  const counterId = measurementPlan.status === "READY" && measurementPlan.counter_id
+    ? Number(measurementPlan.counter_id)
+    : null;
   const titles = twoDistinct(draft.ad_title, strategyAnswerValue(strategy, "qualified_result") || model.qualified_result, 56);
   const texts = twoDistinct(draft.ad_text, strategyAnswerValue(strategy, "core_message") || model.value, 81);
   const trackingParams = "utm_source=yandex&utm_medium=cpc&utm_campaign={campaign_id}&utm_content={ad_id}&utm_term={keyword}";
@@ -96,13 +106,7 @@ export function buildPublishProjection(
       ad_group_type: "UNIFIED_AD_GROUP",
       ad_type: "RESPONSIVE_AD",
       autotargeting_policy: { mode: "EXPLICIT_KEYWORDS_ONLY", selected: false },
-      measurement_plan: {
-        source: "YANDEX_METRIKA_OFFICIAL_API",
-        counter_id: metrikaCounterId,
-        primary_goal_id: metrikaGoalId,
-        readiness_id: measurementReadinessId,
-        writes_required: false,
-      },
+      measurement_plan: measurementPlan,
       capabilities: campaignCreationProfileCapabilities(draft.direct_capability_snapshot),
     },
     brand_claims_contract: brandClaimsContract,

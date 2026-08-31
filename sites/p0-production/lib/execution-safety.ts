@@ -2,6 +2,7 @@ import JSONbigFactory from "json-bigint";
 
 import { fingerprintDirectProjection } from "./campaign-fanout.ts";
 import { evaluateBrandClaimsContract } from "./campaign-creation-profile.ts";
+import { campaignMeasurementPlanBlockers } from "./campaign-measurement.ts";
 import {
   adReadback,
   campaignReadback,
@@ -136,6 +137,7 @@ function projectionShapeIsComplete(projection: DirectProjection) {
   const advertiser = valueRecord(creationProfile.advertiser);
   const measurementPlan = valueRecord(creationProfile.measurement_plan);
   const counterItems = Array.isArray(counters.Items) ? counters.Items : [];
+  const consumesMetrika = measurementPlan.requirement === "EXACT_METRIKA_GOAL";
   const responsiveTitles = Array.isArray(responsiveAd.Titles) ? responsiveAd.Titles : [];
   const responsiveTexts = Array.isArray(responsiveAd.Texts) ? responsiveAd.Texts : [];
   const lineage = valueRecord(projection.lineage);
@@ -150,7 +152,9 @@ function projectionShapeIsComplete(projection: DirectProjection) {
   return projection.schema_version === "p0-direct-projection-v4"
     && exactKeys(direct, ["campaign", "ad_group", "keyword", "ad"])
     && exactKeys(campaign, ["Name", "StartDate", "EndDate", "TimeZone", "TimeTargeting", "UnifiedCampaign"])
-    && exactKeys(unifiedCampaign, ["BiddingStrategy", "CounterIds", "TrackingParams"])
+    && exactKeys(unifiedCampaign, consumesMetrika
+      ? ["BiddingStrategy", "CounterIds", "TrackingParams"]
+      : ["BiddingStrategy", "TrackingParams"])
     && exactKeys(bidding, ["Search", "Network"])
     && exactKeys(search, ["BiddingStrategyType", "PlacementTypes", "WbMaximumClicks"])
     && exactKeys(placementTypes, ["SearchResults", "ProductGallery"])
@@ -164,7 +168,7 @@ function projectionShapeIsComplete(projection: DirectProjection) {
     && exactKeys(responsiveAd, ["Titles", "Texts", "Href"])
     && exactKeys(timeTargeting, ["Schedule", "ConsiderWorkingWeekends", "HolidaysSchedule"])
     && exactKeys(schedule, ["Items"])
-    && exactKeys(counters, ["Items"])
+    && (!consumesMetrika || exactKeys(counters, ["Items"]))
     && ["strategy_revision_id", "draft_id", "draft_revision_id", "capability_profile_id", "capability_profile_version"]
       .every((key) => requiredText(lineage[key]))
     && [campaign.Name, campaign.StartDate, campaign.EndDate, campaign.TimeZone, adGroup.Name, keyword.Keyword, responsiveAd.Href, unifiedCampaign.TrackingParams]
@@ -172,7 +176,7 @@ function projectionShapeIsComplete(projection: DirectProjection) {
     && textArray(responsiveAd.Titles)
     && textArray(responsiveAd.Texts)
     && Array.isArray(schedule.Items) && schedule.Items.length === 7
-    && idArray(counterItems) && counterItems.length === 1
+    && (!consumesMetrika || (idArray(counterItems) && counterItems.length === 1))
     && creationProfile.profile_id === "p0-campaign-creation-profile-v1"
     && creationProfile.profile_version === "1.0.0"
     && creationProfile.delivery === "SEARCH"
@@ -180,10 +184,8 @@ function projectionShapeIsComplete(projection: DirectProjection) {
     && creationProfile.ad_group_type === "UNIFIED_AD_GROUP"
     && creationProfile.ad_type === "RESPONSIVE_AD"
     && requiredText(advertiser.account) && requiredText(advertiser.currency) && requiredText(advertiser.capability_snapshot_id)
-    && measurementPlan.source === "YANDEX_METRIKA_OFFICIAL_API"
-    && requiredText(measurementPlan.counter_id) && requiredText(measurementPlan.primary_goal_id) && requiredText(measurementPlan.readiness_id)
-    && measurementPlan.writes_required === false
-    && String(counterItems[0]) === String(measurementPlan.counter_id)
+    && campaignMeasurementPlanBlockers(measurementPlan).length === 0
+    && (!consumesMetrika || String(counterItems[0]) === String(measurementPlan.counter_id))
     && evaluateBrandClaimsContract(
       projection.brand_claims_contract,
       [...responsiveTitles, ...responsiveTexts],

@@ -935,11 +935,30 @@ export async function buildScopedDemandEvidence(batch: WordstatObservationBatch,
   };
 }
 
+export type DirectHistorySourceContract = {
+  source_kind: "YANDEX_DIRECT_REPORTS_API_READ_ONLY";
+  authority: "READ_ONLY";
+  account: string;
+  capability_snapshot: {
+    snapshot_id: string;
+    fingerprint: string;
+  };
+  period: {
+    from: string;
+    to: string;
+    inclusive: true;
+  };
+  limitations: string[];
+  permitted_use: "EXACT_SCOPE_EMPIRICAL_COST_EVIDENCE";
+  universal_forecast: false;
+};
+
 export type DirectComparableCandidate = {
   candidate_key: string;
   keyword_id: string;
   phrase: string;
   source: "YANDEX_DIRECT_REPORTS_API";
+  source_contract: DirectHistorySourceContract;
   currency: string;
   vat_treatment: "INCLUDED";
   observed_at: string;
@@ -974,6 +993,9 @@ type DirectComparableAudit = {
   graph_complete?: unknown;
   methods_not_read?: unknown;
   observed_at?: unknown;
+  limitations?: unknown;
+  snapshot?: unknown;
+  account_binding?: unknown;
 };
 
 function objectRecord(value: unknown): Record<string, unknown> {
@@ -1030,6 +1052,13 @@ export async function qualifyDirectComparableCandidates(input: {
   const evaluatedAt = Date.parse(input.observedAt);
   const auditObservedAt = Date.parse(String(input.audit.observed_at ?? ""));
   const maximumAuditAgeMs = input.maximumAuditAgeMs ?? 5 * 60_000;
+  const auditSnapshot = objectRecord(input.audit.snapshot);
+  const auditBinding = objectRecord(input.audit.account_binding);
+  const capabilitySnapshotValid = Boolean(normalizedText(auditSnapshot.capability_snapshot_id))
+    && /^sha256:[a-f0-9]{64}$/u.test(normalizedText(auditSnapshot.capability_fingerprint));
+  const accountBindingValid = auditBinding.matched === true
+    && Boolean(normalizedText(auditBinding.api_account))
+    && auditBinding.api_account === auditBinding.expected_account;
   const auditStale = Number.isFinite(evaluatedAt)
     && Number.isFinite(auditObservedAt)
     && (auditObservedAt > evaluatedAt || evaluatedAt - auditObservedAt > maximumAuditAgeMs);
@@ -1040,6 +1069,8 @@ export async function qualifyDirectComparableCandidates(input: {
       || methodsNotRead.length > 0
       || !Number.isFinite(evaluatedAt)
       || !Number.isFinite(auditObservedAt)
+      || !capabilitySnapshotValid
+      || !accountBindingValid
       ? "COMPLETE_DIRECT_AUDIT_REQUIRED" as const
       : !normalizedText(input.currency)
         ? "DIRECT_CURRENCY_UNAVAILABLE" as const
@@ -1168,6 +1199,19 @@ export async function qualifyDirectComparableCandidates(input: {
       keyword_id: keywordId,
       phrase,
       source: "YANDEX_DIRECT_REPORTS_API",
+      source_contract: {
+        source_kind: "YANDEX_DIRECT_REPORTS_API_READ_ONLY",
+        authority: "READ_ONLY",
+        account: normalizedText(auditBinding.api_account),
+        capability_snapshot: {
+          snapshot_id: normalizedText(auditSnapshot.capability_snapshot_id),
+          fingerprint: normalizedText(auditSnapshot.capability_fingerprint),
+        },
+        period: { from: period[0], to: period.at(-1) ?? period[0], inclusive: true },
+        limitations: Array.isArray(input.audit.limitations) ? input.audit.limitations.map(normalizedText).filter(Boolean) : [],
+        permitted_use: "EXACT_SCOPE_EMPIRICAL_COST_EVIDENCE",
+        universal_forecast: false,
+      },
       currency: normalizedText(input.currency),
       vat_treatment: "INCLUDED",
       observed_at: new Date(auditObservedAt).toISOString(),
@@ -1231,6 +1275,7 @@ export type CostObservation = {
   qualification: Record<string, unknown>;
   unavailable_reason?: string;
   capacity?: { forecast_clicks: number; forecast_total_spend: number };
+  direct_history_source?: DirectHistorySourceContract;
 };
 
 export function buildOwnHistoryCostObservation(
@@ -1275,6 +1320,7 @@ export function buildOwnHistoryCostObservation(
       season: "QUALIFIED",
       sample: available ? "QUALIFIED" : "UNAVAILABLE",
     },
+    direct_history_source: structuredClone(candidate.source_contract),
     ...(!available ? { unavailable_reason: "DIRECT_HISTORY_SAMPLE_UNAVAILABLE" } : {}),
   };
 }

@@ -2,6 +2,10 @@ import { buildAdText, buildAdTitle } from "./ad-copy.ts";
 import { buildPublishProjection } from "./campaign-draft.ts";
 import { DIRECT_V501_DRAFT_FIELD_REGISTRY } from "./campaign-draft-fields.ts";
 import { evaluateBrandClaimsContract } from "./campaign-creation-profile.ts";
+import {
+  campaignMeasurementPlanBlockers,
+  type CampaignMeasurementRequirement,
+} from "./campaign-measurement.ts";
 import { buildAuctionProtocol, type AuctionProtocol } from "./auction-protocol.ts";
 import {
   resolveCuratedPlaybookReleases,
@@ -794,6 +798,7 @@ export async function buildCampaignRecommendationSet({
   playbookReleases = [],
   directCapabilitySnapshot = null,
   measurementDestinationReadiness = null,
+  measurementRequirement = "NOT_CONSUMED",
   metrikaMeasurementPlan = null,
 }: {
   model: Record<string, unknown>;
@@ -803,7 +808,16 @@ export async function buildCampaignRecommendationSet({
   playbookReleases?: CuratedPlaybookRelease[];
   directCapabilitySnapshot?: DirectCapabilitySnapshot | null;
   measurementDestinationReadiness?: Record<string, unknown> | null;
-  metrikaMeasurementPlan?: { counter_id: string; primary_goal_id: string } | null;
+  measurementRequirement?: CampaignMeasurementRequirement;
+  metrikaMeasurementPlan?: {
+    counter_id: string;
+    primary_goal_id: string;
+    counter_binding_matched?: boolean;
+    goal_binding_matched?: boolean;
+    registration_test_status?: "PASSED" | "FAILED" | "NOT_RUN";
+    registration_test_goal_id?: string;
+    registration_tested_at?: string;
+  } | null;
 }): Promise<CampaignRecommendationSet> {
   const strategyRevisionId = text(strategy.strategy_revision_id);
   if (!strategyRevisionId) throw new Error("Campaign Strategy должна иметь immutable revision ID.");
@@ -980,9 +994,15 @@ export async function buildCampaignRecommendationSet({
         currency: directCapabilitySnapshot?.currency ?? "",
         capability_snapshot_id: directCapabilitySnapshot?.snapshot_id ?? "",
         direct_capability_snapshot: directCapabilitySnapshot,
+        measurement_requirement: measurementRequirement,
         metrika_counter_id: metrikaMeasurementPlan?.counter_id ?? "",
         metrika_goal_id: metrikaMeasurementPlan?.primary_goal_id ?? "",
         measurement_readiness_id: text(measurementDestinationReadiness?.readiness_id),
+        metrika_counter_binding_matched: metrikaMeasurementPlan?.counter_binding_matched,
+        metrika_goal_binding_matched: metrikaMeasurementPlan?.goal_binding_matched,
+        metrika_registration_test_status: metrikaMeasurementPlan?.registration_test_status,
+        metrika_registration_test_goal_id: metrikaMeasurementPlan?.registration_test_goal_id,
+        metrika_registration_tested_at: metrikaMeasurementPlan?.registration_tested_at,
       }) as unknown as Record<string, unknown>;
       applyConditionalProjection(projection, family);
       const actualChangedFields = comparator
@@ -1007,26 +1027,31 @@ export async function buildCampaignRecommendationSet({
       ));
       const readinessMeasurement = record(measurementDestinationReadiness?.measurement);
       const readinessDestination = record(measurementDestinationReadiness?.destination);
+      const projectionMeasurementPlan = record(record(projection.creation_profile).measurement_plan);
+      const consumesMetrika = projectionMeasurementPlan.requirement === "EXACT_METRIKA_GOAL";
       if (!measurementDestinationReadiness) publicationBlockers.push(publicationBlocker(
-        "MEASUREMENT_DESTINATION_READINESS_MISSING",
-        "Hard eligibility requires the exact measurement and destination readiness revision before scoring.",
+        "DESTINATION_READINESS_MISSING",
+        "Hard eligibility requires the exact destination readiness revision before scoring.",
       ));
       if (!directCapabilitySnapshot?.account || !directCapabilitySnapshot.currency) publicationBlockers.push(publicationBlocker(
         "CAMPAIGN_PROFILE_ADVERTISER_CURRENCY_MISSING",
         "Campaign Creation Profile v1 requires one exact advertiser and currency.",
       ));
-      if (!metrikaMeasurementPlan?.counter_id || !metrikaMeasurementPlan.primary_goal_id || !text(measurementDestinationReadiness?.readiness_id)) publicationBlockers.push(publicationBlocker(
-        "METRIKA_MEASUREMENT_PLAN_INCOMPLETE",
-        "Campaign Creation Profile v1 requires an exact Metrika counter, primary goal and readiness revision.",
-      ));
+      if (consumesMetrika) publicationBlockers.push(...campaignMeasurementPlanBlockers(projectionMeasurementPlan).map((code) => publicationBlocker(
+        code,
+        code === "METRIKA_REGISTRATION_TEST_REQUIRED"
+          ? "A Metrika-consuming profile requires a passed registration test for the exact selected goal."
+          : "A Metrika-consuming profile requires one verified exact counter, goal and readiness revision.",
+        "/creation_profile/measurement_plan",
+      )));
       const responsiveCopy = ((projection.direct as Record<string, unknown>).ad as Record<string, unknown>).ResponsiveAd as Record<string, unknown>;
       publicationBlockers.push(...evaluateBrandClaimsContract(
         projection.brand_claims_contract,
         [...(Array.isArray(responsiveCopy.Titles) ? responsiveCopy.Titles : []), ...(Array.isArray(responsiveCopy.Texts) ? responsiveCopy.Texts : [])],
       ).map((blocker) => publicationBlocker(blocker.code, blocker.message, "/brand_claims_contract")));
-      if (measurementDestinationReadiness && readinessMeasurement.status !== "READY") publicationBlockers.push(publicationBlocker(
+      if (consumesMetrika && measurementDestinationReadiness && readinessMeasurement.status !== "READY") publicationBlockers.push(publicationBlocker(
         "MEASUREMENT_READINESS_BLOCKED",
-        "Выбранный бизнес-результат пока нельзя надёжно наблюдать; выполните подготовленный measurement repair plan.",
+        "Выбранный профиль потребляет Метрику, поэтому результат нельзя показывать готовым до точной проверки измерения.",
       ));
       if (measurementDestinationReadiness && readinessDestination.status !== "READY") publicationBlockers.push(publicationBlocker(
         "DESTINATION_SCOPE_BLOCKED",

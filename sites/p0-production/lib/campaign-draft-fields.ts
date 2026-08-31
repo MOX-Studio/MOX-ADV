@@ -58,7 +58,11 @@ export const DIRECT_V501_DRAFT_FIELD_REGISTRY = Object.freeze({
     field("/direct/campaign/EndDate", "CAMPAIGN", "Дата окончания", "FIXED_BY_STRATEGY"),
     field("/direct/campaign/TimeZone", "CAMPAIGN", "Часовой пояс", "FIXED_BY_CAPABILITY"),
     field("/direct/campaign/TimeTargeting", "CAMPAIGN", "Расписание", "FIXED_BY_CAPABILITY"),
-    field("/direct/campaign/UnifiedCampaign/CounterIds", "CAMPAIGN", "Счётчик Метрики", "FIXED_BY_CAPABILITY", { reason: "Значение зафиксировано exact Metrika binding в Campaign Creation Profile v1." }),
+    field("/direct/campaign/UnifiedCampaign/CounterIds", "CAMPAIGN", "Счётчик Метрики", "CONDITIONALLY_ELIGIBLE", {
+      presence: "NOT_PRESENT",
+      capability: "METRIKA_EXACT_BINDING",
+      reason: "WB_MAXIMUM_CLICKS не потребляет Метрику; поле появляется только у профиля с проверенной exact binding и регистрацией цели.",
+    }),
     field("/direct/campaign/UnifiedCampaign/TrackingParams", "CAMPAIGN", "Параметры отслеживания", "FIXED_BY_CAPABILITY"),
     field("/direct/campaign/UnifiedCampaign/BiddingStrategy/Search/BiddingStrategyType", "CAMPAIGN", "Стратегия поиска", "FIXED_BY_CAPABILITY"),
     field("/direct/campaign/UnifiedCampaign/BiddingStrategy/Search/PlacementTypes/SearchResults", "CAMPAIGN", "Показы в результатах поиска", "FIXED_BY_CAPABILITY"),
