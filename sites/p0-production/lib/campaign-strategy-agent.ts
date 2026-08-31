@@ -1,6 +1,7 @@
 export const CAMPAIGN_STRATEGY_AGENT_CONTRACT = "mox-adv.p0.campaign-strategy-agent";
-export const CAMPAIGN_STRATEGY_AGENT_VERSION = "1.0.0";
+export const CAMPAIGN_STRATEGY_AGENT_VERSION = "1.1.0";
 export const CAMPAIGN_STRATEGY_AGENT_INPUT_SCHEMA = "p0-campaign-strategy-agent-input-v1";
+export const CAMPAIGN_STRATEGY_VALIDATION_SCHEMA = "p0-campaign-strategy-validation-v1";
 export const AUTONOMOUS_CAMPAIGN_STRATEGY_SCHEMA = "p0-autonomous-campaign-strategy-v1";
 
 const SHA256_DIGEST = /^sha256:[0-9a-f]{64}$/u;
@@ -85,10 +86,28 @@ export type CampaignStrategyAgentInput = {
   campaign_playbook: CampaignStrategyAgentArtifact;
 };
 
+export type CampaignStrategyViolation = {
+  code: string;
+  path: string;
+  message: string;
+};
+
+export type CampaignStrategyValidationPackage = {
+  schema_version: typeof CAMPAIGN_STRATEGY_VALIDATION_SCHEMA;
+  status: "CONTENT_REJECTED";
+  attempt: 1 | 2;
+  violations: CampaignStrategyViolation[];
+};
+
 export type CampaignStrategyAgentRequest = CampaignStrategyAgentInput & {
   contract: {
     name: typeof CAMPAIGN_STRATEGY_AGENT_CONTRACT;
     version: typeof CAMPAIGN_STRATEGY_AGENT_VERSION;
+  };
+  attempt: 1 | 2;
+  repair: null | {
+    rejected_proposal: unknown;
+    validation: CampaignStrategyValidationPackage;
   };
   authority: {
     external_read: false;
@@ -151,13 +170,21 @@ type ArtifactReference = {
   digest: string;
 };
 
+export type CampaignStrategyTechnicalFailure = {
+  status: "TECHNICAL_FAILURE";
+  reason: "STRATEGY_CONTENT_REJECTED_TWICE";
+  validation_attempts: [CampaignStrategyValidationPackage, CampaignStrategyValidationPackage];
+};
+
 export class CampaignStrategyAgentError extends Error {
   readonly code: string;
+  readonly details: CampaignStrategyTechnicalFailure | null;
 
-  constructor(code: string, message: string) {
+  constructor(code: string, message: string, details: CampaignStrategyTechnicalFailure | null = null) {
     super(message);
     this.name = "CampaignStrategyAgentError";
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -309,91 +336,208 @@ function allowedEvidence(input: CampaignStrategyAgentInput) {
   }))));
 }
 
-function assertEvidenceRefs(value: unknown, allowed: Set<string>, label: string) {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new CampaignStrategyAgentError("STRATEGY_EVIDENCE_REQUIRED", `${label} requires at least one exact evidence reference.`);
+const INPUT_KINDS: CampaignStrategyInputKind[] = [
+  "GOAL_REVISION",
+  "BUSINESS_INPUT",
+  "ANALYTICS_EVIDENCE_SNAPSHOT",
+  "MANDATORY_POLICY",
+  "SUPPORTED_DRAFT_PROFILE",
+  "CAMPAIGN_PLAYBOOK",
+];
+
+function formalText(value: string) {
+  return value.normalize("NFKC").replace(/\s+/gu, " ").trim();
+}
+
+function normalizeProposal(value: unknown): unknown {
+  const normalized = clone(value);
+  if (!normalized || typeof normalized !== "object" || Array.isArray(normalized)) return normalized;
+  const proposal = normalized as Record<string, unknown>;
+  if (typeof proposal.rationale === "string") proposal.rationale = formalText(proposal.rationale);
+  if (Array.isArray(proposal.dimensions)) {
+    const dimensions = proposal.dimensions.map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+      const dimension = item as Record<string, unknown>;
+      if (typeof dimension.rationale === "string") dimension.rationale = formalText(dimension.rationale);
+      if (typeof dimension.value === "string") dimension.value = formalText(dimension.value);
+      if (dimension.dimension_id === "period") {
+        const period = record(dimension.value);
+        if (typeof period.start_date === "string") period.start_date = formalText(period.start_date);
+        if (typeof period.end_date === "string") period.end_date = formalText(period.end_date);
+      }
+      return dimension;
+    });
+    const ids = dimensions.map((item) => record(item).dimension_id);
+    if (ids.length === CAMPAIGN_STRATEGY_DIMENSIONS.length
+      && new Set(ids).size === ids.length
+      && ids.every((id) => CAMPAIGN_STRATEGY_DIMENSIONS.includes(id as CampaignStrategyDimensionId))) {
+      dimensions.sort((left, right) => (
+        CAMPAIGN_STRATEGY_DIMENSIONS.indexOf(record(left).dimension_id as CampaignStrategyDimensionId)
+        - CAMPAIGN_STRATEGY_DIMENSIONS.indexOf(record(right).dimension_id as CampaignStrategyDimensionId)
+      ));
+    }
+    proposal.dimensions = dimensions;
   }
-  const keys = value.map((item) => {
+  if (Array.isArray(proposal.conflicts)) {
+    proposal.conflicts = proposal.conflicts.map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+      const conflict = item as Record<string, unknown>;
+      if (typeof conflict.description === "string") conflict.description = formalText(conflict.description);
+      return conflict;
+    });
+  }
+  return normalized;
+}
+
+function addViolation(violations: CampaignStrategyViolation[], code: string, path: string, message: string) {
+  violations.push({ code, path, message });
+}
+
+function validateEvidenceRefs(
+  value: unknown,
+  allowed: Set<string>,
+  path: string,
+  violations: CampaignStrategyViolation[],
+) {
+  if (!Array.isArray(value) || value.length === 0) {
+    addViolation(violations, "STRATEGY_EVIDENCE_REQUIRED", path, "At least one exact evidence reference is required.");
+    return;
+  }
+  const validKeys: string[] = [];
+  value.forEach((item, index) => {
     const reference = record(item);
+    const referencePath = `${path}/${index}`;
     if (!exactKeys(reference, ["input_kind", "revision_id", "evidence_id"])
-      || !["GOAL_REVISION", "BUSINESS_INPUT", "ANALYTICS_EVIDENCE_SNAPSHOT", "MANDATORY_POLICY", "SUPPORTED_DRAFT_PROFILE", "CAMPAIGN_PLAYBOOK"].includes(String(reference.input_kind))
+      || !INPUT_KINDS.includes(reference.input_kind as CampaignStrategyInputKind)
       || !IDENTIFIER.test(String(reference.revision_id))
       || !IDENTIFIER.test(String(reference.evidence_id))) {
-      throw new CampaignStrategyAgentError("STRATEGY_EVIDENCE_INVALID", `${label} contains a malformed evidence reference.`);
+      addViolation(violations, "STRATEGY_EVIDENCE_INVALID", referencePath, "Evidence reference does not match the closed typed contract.");
+      return;
     }
     const key = evidenceKey(reference as CampaignStrategyEvidenceRef);
+    validKeys.push(key);
     if (!allowed.has(key)) {
-      throw new CampaignStrategyAgentError("STRATEGY_EVIDENCE_UNKNOWN", `${label} references evidence outside the immutable inputs.`);
+      addViolation(violations, "STRATEGY_EVIDENCE_UNKNOWN", referencePath, "Evidence reference is outside the immutable inputs.");
     }
-    return key;
   });
-  if (new Set(keys).size !== keys.length) {
-    throw new CampaignStrategyAgentError("STRATEGY_EVIDENCE_INVALID", `${label} repeats an evidence reference.`);
-  }
+  validKeys.forEach((key, index) => {
+    if (validKeys.indexOf(key) !== index) {
+      addViolation(violations, "STRATEGY_EVIDENCE_DUPLICATE", `${path}/${index}`, "Evidence reference is repeated.");
+    }
+  });
 }
 
 function validDate(value: unknown) {
-  return typeof value === "string"
-    && /^\d{4}-\d{2}-\d{2}$/u.test(value)
-    && Number.isFinite(Date.parse(`${value}T00:00:00.000Z`));
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value;
 }
 
-function assertDimensionValue(dimensionId: CampaignStrategyDimensionId, value: unknown) {
+function validateDimensionValue(
+  dimensionId: CampaignStrategyDimensionId,
+  value: unknown,
+  path: string,
+  violations: CampaignStrategyViolation[],
+) {
   if (dimensionId === "period") {
     const period = record(value);
     if (!exactKeys(period, ["start_date", "end_date"])
       || !validDate(period.start_date)
       || !validDate(period.end_date)
       || String(period.start_date) > String(period.end_date)) {
-      throw new CampaignStrategyAgentError("STRATEGY_DIMENSION_INVALID", "Strategy period must be one exact valid date range.");
+      addViolation(violations, "STRATEGY_PERIOD_INVALID", path, "Strategy period must be one exact valid date range.");
     }
     return;
   }
   if (dimensionId === "weekly_budget") {
     if (!Number.isSafeInteger(value) || Number(value) <= 0) {
-      throw new CampaignStrategyAgentError("STRATEGY_DIMENSION_INVALID", "Recommended weekly budget must be a positive integer.");
+      addViolation(violations, "STRATEGY_WEEKLY_BUDGET_INVALID", path, "Recommended weekly budget must be a positive integer.");
     }
     return;
   }
-  if (dimensionId === "target_result_cost" && value === null) return;
+  if (dimensionId === "target_result_cost") {
+    if (value === null) return;
+    if (!Number.isSafeInteger(value) || Number(value) <= 0) {
+      addViolation(violations, "STRATEGY_TARGET_RESULT_COST_INVALID", path, "Target result cost must be null or a positive integer.");
+    }
+    return;
+  }
   if (!text(value)) {
-    throw new CampaignStrategyAgentError("STRATEGY_DIMENSION_INVALID", `${dimensionId} must contain a bounded business value.`);
+    addViolation(violations, "STRATEGY_DIMENSION_VALUE_INVALID", path, `${dimensionId} must contain a bounded business value.`);
   }
 }
 
-function assertProposal(proposal: CampaignStrategyAgentProposal, input: CampaignStrategyAgentInput) {
-  if (!proposal || typeof proposal !== "object" || Array.isArray(proposal)
-    || !exactKeys(proposal, ["dimensions", "rationale", "confidence", "conflicts"])
-    || !text(proposal.rationale, 2_000)
-    || !["HIGH", "MEDIUM", "LOW"].includes(proposal.confidence)
-    || !Array.isArray(proposal.dimensions)
-    || !Array.isArray(proposal.conflicts)) {
-    throw new CampaignStrategyAgentError("STRATEGY_PROPOSAL_INVALID", "Strategy Agent proposal does not match the closed output schema.");
+function proposalViolations(value: unknown, input: CampaignStrategyAgentInput) {
+  const violations: CampaignStrategyViolation[] = [];
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    addViolation(violations, "STRATEGY_PROPOSAL_INVALID", "/", "Strategy proposal must be an object.");
+    return violations;
   }
-  const dimensionIds = proposal.dimensions.map((dimension) => dimension?.dimension_id);
-  if (JSON.stringify(dimensionIds) !== JSON.stringify(CAMPAIGN_STRATEGY_DIMENSIONS)) {
-    throw new CampaignStrategyAgentError("STRATEGY_DIMENSIONS_INCOMPLETE", "Campaign Strategy must contain all twelve dimensions once and in canonical order.");
+  const proposal = value as Record<string, unknown>;
+  if (!exactKeys(proposal, ["dimensions", "rationale", "confidence", "conflicts"])) {
+    addViolation(violations, "STRATEGY_PROPOSAL_SHAPE_INVALID", "/", "Strategy proposal does not match the closed output schema.");
+  }
+  if (!text(proposal.rationale, 2_000)) {
+    addViolation(violations, "STRATEGY_RATIONALE_INVALID", "/rationale", "Strategy rationale must be non-empty bounded text.");
+  }
+  if (!["HIGH", "MEDIUM", "LOW"].includes(String(proposal.confidence))) {
+    addViolation(violations, "STRATEGY_CONFIDENCE_INVALID", "/confidence", "Strategy confidence must use the typed scale.");
   }
   const allowed = allowedEvidence(input);
-  for (const dimension of proposal.dimensions) {
-    if (!dimension || typeof dimension !== "object" || Array.isArray(dimension)
-      || !exactKeys(dimension, ["dimension_id", "value", "rationale", "confidence", "evidence_refs"])
-      || !text(dimension.rationale, 2_000)
-      || !["HIGH", "MEDIUM", "LOW"].includes(dimension.confidence)) {
-      throw new CampaignStrategyAgentError("STRATEGY_DIMENSION_INVALID", "A Strategy dimension does not match the closed schema.");
+  if (!Array.isArray(proposal.dimensions)) {
+    addViolation(violations, "STRATEGY_DIMENSIONS_INCOMPLETE", "/dimensions", "Campaign Strategy must contain all twelve dimensions once.");
+  } else {
+    const dimensionIds = proposal.dimensions.map((dimension) => record(dimension).dimension_id);
+    if (JSON.stringify(dimensionIds) !== JSON.stringify(CAMPAIGN_STRATEGY_DIMENSIONS)) {
+      addViolation(violations, "STRATEGY_DIMENSIONS_INCOMPLETE", "/dimensions", "Campaign Strategy must contain all twelve dimensions once and in canonical order.");
     }
-    assertDimensionValue(dimension.dimension_id, dimension.value);
-    assertEvidenceRefs(dimension.evidence_refs, allowed, `Strategy dimension ${dimension.dimension_id}`);
+    proposal.dimensions.forEach((item, index) => {
+      const dimension = record(item);
+      const path = `/dimensions/${index}`;
+      if (!item || typeof item !== "object" || Array.isArray(item)
+        || !exactKeys(dimension, ["dimension_id", "value", "rationale", "confidence", "evidence_refs"])) {
+        addViolation(violations, "STRATEGY_DIMENSION_INVALID", path, "Strategy dimension does not match the closed schema.");
+      }
+      if (!CAMPAIGN_STRATEGY_DIMENSIONS.includes(dimension.dimension_id as CampaignStrategyDimensionId)) {
+        addViolation(violations, "STRATEGY_DIMENSION_UNKNOWN", `${path}/dimension_id`, "Strategy dimension identifier is unknown.");
+      } else {
+        validateDimensionValue(dimension.dimension_id as CampaignStrategyDimensionId, dimension.value, `${path}/value`, violations);
+      }
+      if (!text(dimension.rationale, 2_000)) {
+        addViolation(violations, "STRATEGY_DIMENSION_RATIONALE_INVALID", `${path}/rationale`, "Dimension rationale must be non-empty bounded text.");
+      }
+      if (!["HIGH", "MEDIUM", "LOW"].includes(String(dimension.confidence))) {
+        addViolation(violations, "STRATEGY_DIMENSION_CONFIDENCE_INVALID", `${path}/confidence`, "Dimension confidence must use the typed scale.");
+      }
+      validateEvidenceRefs(dimension.evidence_refs, allowed, `${path}/evidence_refs`, violations);
+    });
   }
-  for (const conflict of proposal.conflicts) {
-    if (!conflict || typeof conflict !== "object" || Array.isArray(conflict)
-      || !exactKeys(conflict, ["code", "description", "evidence_refs"])
-      || !CONFLICT_CODE.test(String(conflict.code))
-      || !text(conflict.description, 2_000)) {
-      throw new CampaignStrategyAgentError("STRATEGY_CONFLICT_INVALID", "Strategy conflict does not match the typed contract.");
-    }
-    assertEvidenceRefs(conflict.evidence_refs, allowed, `Strategy conflict ${conflict.code}`);
+  if (!Array.isArray(proposal.conflicts)) {
+    addViolation(violations, "STRATEGY_CONFLICTS_INVALID", "/conflicts", "Strategy conflicts must be a typed array.");
+  } else {
+    proposal.conflicts.forEach((item, index) => {
+      const conflict = record(item);
+      const path = `/conflicts/${index}`;
+      if (!item || typeof item !== "object" || Array.isArray(item)
+        || !exactKeys(conflict, ["code", "description", "evidence_refs"])
+        || !CONFLICT_CODE.test(String(conflict.code))
+        || !text(conflict.description, 2_000)) {
+        addViolation(violations, "STRATEGY_CONFLICT_INVALID", path, "Strategy conflict does not match the typed contract.");
+      }
+      validateEvidenceRefs(conflict.evidence_refs, allowed, `${path}/evidence_refs`, violations);
+      addViolation(violations, "STRATEGY_CONFLICT_UNRESOLVED", path, "A Strategy with a substantive unresolved conflict cannot be accepted.");
+    });
   }
+  return violations;
+}
+
+function validationPackage(attempt: 1 | 2, violations: CampaignStrategyViolation[]): CampaignStrategyValidationPackage {
+  return deepFreeze({
+    schema_version: CAMPAIGN_STRATEGY_VALIDATION_SCHEMA,
+    status: "CONTENT_REJECTED",
+    attempt,
+    violations: clone(violations),
+  }) as CampaignStrategyValidationPackage;
 }
 
 function reference(artifact: CampaignStrategyAgentArtifact): ArtifactReference {
@@ -415,9 +559,11 @@ export async function formAutonomousCampaignStrategy(input: {
   }
   const immutableInputs = clone(input.inputs);
   await assertInputs(immutableInputs);
-  const request = deepFreeze({
+  const request = (attempt: 1 | 2, repair: CampaignStrategyAgentRequest["repair"]) => deepFreeze({
     ...immutableInputs,
     contract: { name: CAMPAIGN_STRATEGY_AGENT_CONTRACT, version: CAMPAIGN_STRATEGY_AGENT_VERSION },
+    attempt,
+    repair,
     authority: {
       external_read: false,
       persistence: false,
@@ -427,8 +573,34 @@ export async function formAutonomousCampaignStrategy(input: {
       spend: false,
     },
   } satisfies CampaignStrategyAgentRequest);
-  const proposal = clone(await input.model.formCampaignStrategy(request));
-  assertProposal(proposal, immutableInputs);
+
+  const firstProposal = normalizeProposal(await input.model.formCampaignStrategy(request(1, null)));
+  const firstViolations = proposalViolations(firstProposal, immutableInputs);
+  let proposal: CampaignStrategyAgentProposal;
+  if (firstViolations.length === 0) {
+    proposal = firstProposal as CampaignStrategyAgentProposal;
+  } else {
+    const firstValidation = validationPackage(1, firstViolations);
+    const secondProposal = normalizeProposal(await input.model.formCampaignStrategy(request(2, {
+      rejected_proposal: clone(firstProposal),
+      validation: firstValidation,
+    })));
+    const secondViolations = proposalViolations(secondProposal, immutableInputs);
+    if (secondViolations.length > 0) {
+      const secondValidation = validationPackage(2, secondViolations);
+      const details = deepFreeze({
+        status: "TECHNICAL_FAILURE" as const,
+        reason: "STRATEGY_CONTENT_REJECTED_TWICE" as const,
+        validation_attempts: [firstValidation, secondValidation] as [CampaignStrategyValidationPackage, CampaignStrategyValidationPackage],
+      }) as CampaignStrategyTechnicalFailure;
+      throw new CampaignStrategyAgentError(
+        "TECHNICAL_FAILURE",
+        "Campaign Strategy failed consolidated content validation twice.",
+        details,
+      );
+    }
+    proposal = secondProposal as CampaignStrategyAgentProposal;
+  }
 
   const inputLineage = {
     goal_revision: reference(immutableInputs.goal_revision),

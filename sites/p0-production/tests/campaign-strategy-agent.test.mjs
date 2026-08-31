@@ -137,14 +137,18 @@ test("forms and autonomously accepts all twelve evidence-linked dimensions from 
         publication: false,
         spend: false,
       });
+      assert.equal(request.attempt, 1);
+      assert.equal(request.repair, null);
       assert.deepEqual(Object.keys(request).sort(), [
         "analytics_evidence_snapshot",
+        "attempt",
         "authority",
         "business_input",
         "campaign_playbook",
         "contract",
         "goal_revision",
         "policies",
+        "repair",
         "schema_version",
         "supported_draft_profile",
       ]);
@@ -192,29 +196,111 @@ test("recommended budget is planning-only and cannot carry Mandate, publication,
   assert.equal(JSON.stringify(strategy).includes("APPROVED_FOR_PUBLICATION"), false);
 });
 
-test("rejects incomplete dimensions and evidence that does not resolve to an exact immutable input", async () => {
+test("normalizes formal presentation without a retry or change to business meaning", async () => {
   const exactInputs = await inputs();
-  const incomplete = proposal(exactInputs);
-  incomplete.dimensions.pop();
-  await assert.rejects(
-    formAutonomousCampaignStrategy({
-      inputs: exactInputs,
-      model: { model_id: "fixture-strategy-agent-v1", formCampaignStrategy: async () => incomplete },
-      acceptedAt: ACCEPTED_AT,
-    }),
-    (error) => error instanceof CampaignStrategyAgentError && error.code === "STRATEGY_DIMENSIONS_INCOMPLETE",
-  );
+  const unnormalized = proposal(exactInputs);
+  unnormalized.dimensions.reverse();
+  unnormalized.rationale = "  Стратегия   связывает подтверждённую цель  ";
+  unnormalized.dimensions.find((item) => item.dimension_id === "core_message").value = "  Настройка　учёта   под процессы магазина  ";
+  let calls = 0;
 
-  const invented = proposal(exactInputs);
-  invented.dimensions[0].evidence_refs[0].evidence_id = "model-invented-source";
+  const strategy = await formAutonomousCampaignStrategy({
+    inputs: exactInputs,
+    model: {
+      model_id: "fixture-strategy-agent-v1",
+      async formCampaignStrategy() {
+        calls += 1;
+        return unnormalized;
+      },
+    },
+    acceptedAt: ACCEPTED_AT,
+  });
+
+  assert.equal(calls, 1);
+  assert.deepEqual(strategy.dimensions.map((item) => item.dimension_id), CAMPAIGN_STRATEGY_DIMENSIONS);
+  assert.equal(strategy.rationale, "Стратегия связывает подтверждённую цель");
+  assert.equal(strategy.dimensions.find((item) => item.dimension_id === "core_message").value, "Настройка учёта под процессы магазина");
+});
+
+test("returns every first-attempt content violation to the Strategy Agent in one immutable repair package", async () => {
+  const exactInputs = await inputs();
+  const rejected = proposal(exactInputs);
+  rejected.dimensions.find((item) => item.dimension_id === "weekly_budget").value = 0;
+  rejected.dimensions.find((item) => item.dimension_id === "period").value = { start_date: "2026-10-31", end_date: "2026-09-10" };
+  rejected.dimensions[0].evidence_refs[0].evidence_id = "model-invented-source";
+  rejected.conflicts.push({
+    code: "POLICY_CONFLICT",
+    description: "Конфликт с обязательной политикой",
+    evidence_refs: [evidenceRef(exactInputs, "policies", "policy-no-performance-promise")],
+  });
+  const requests = [];
+
+  const strategy = await formAutonomousCampaignStrategy({
+    inputs: exactInputs,
+    model: {
+      model_id: "fixture-strategy-agent-v1",
+      async formCampaignStrategy(request) {
+        requests.push(request);
+        if (request.attempt === 1) return rejected;
+        assert.equal(Object.isFrozen(request.repair), true);
+        assert.equal(Object.isFrozen(request.repair.validation.violations), true);
+        assert.deepEqual(
+          new Set(request.repair.validation.violations.map((item) => item.code)),
+          new Set([
+            "STRATEGY_EVIDENCE_UNKNOWN",
+            "STRATEGY_PERIOD_INVALID",
+            "STRATEGY_WEEKLY_BUDGET_INVALID",
+            "STRATEGY_CONFLICT_UNRESOLVED",
+          ]),
+        );
+        return proposal(request);
+      },
+    },
+    acceptedAt: ACCEPTED_AT,
+  });
+
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].attempt, 2);
+  assert.equal(requests[1].repair.validation.status, "CONTENT_REJECTED");
+  assert.equal(requests[1].repair.validation.attempt, 1);
+  assert.equal(strategy.status, "AGENT_ACCEPTED");
+  assert.deepEqual(strategy.conflicts, []);
+});
+
+test("a second substantive rejection produces TECHNICAL_FAILURE after exactly one repair attempt", async () => {
+  const exactInputs = await inputs();
+  let calls = 0;
+
   await assert.rejects(
     formAutonomousCampaignStrategy({
       inputs: exactInputs,
-      model: { model_id: "fixture-strategy-agent-v1", formCampaignStrategy: async () => invented },
+      model: {
+        model_id: "fixture-strategy-agent-v1",
+        async formCampaignStrategy() {
+          calls += 1;
+          const invalid = proposal(exactInputs);
+          invalid.dimensions.pop();
+          invalid.dimensions[0].evidence_refs[0].evidence_id = "model-invented-source";
+          return invalid;
+        },
+      },
       acceptedAt: ACCEPTED_AT,
     }),
-    (error) => error instanceof CampaignStrategyAgentError && error.code === "STRATEGY_EVIDENCE_UNKNOWN",
+    (error) => {
+      assert.ok(error instanceof CampaignStrategyAgentError);
+      assert.equal(error.code, "TECHNICAL_FAILURE");
+      assert.equal(error.details.status, "TECHNICAL_FAILURE");
+      assert.equal(error.details.reason, "STRATEGY_CONTENT_REJECTED_TWICE");
+      assert.deepEqual(error.details.validation_attempts.map((item) => item.attempt), [1, 2]);
+      assert.ok(error.details.validation_attempts.every((item) => {
+        const codes = new Set(item.violations.map((violation) => violation.code));
+        return codes.has("STRATEGY_DIMENSIONS_INCOMPLETE") && codes.has("STRATEGY_EVIDENCE_UNKNOWN");
+      }));
+      assert.equal(/question|confirm|approv/iu.test(JSON.stringify(error.details)), false);
+      return true;
+    },
   );
+  assert.equal(calls, 2);
 });
 
 test("rejects mutated artifacts, non-mandatory policy, unsupported profile, and inactive Playbook before calling the agent", async () => {
