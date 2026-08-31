@@ -45,6 +45,7 @@ const DOMAIN_ORDER: AnalyticsEvidenceDomain[] = [
   "WORDSTAT",
   "COST",
   "COMPETITORS",
+  "FINANCIAL",
 ];
 
 const DOMAIN_LABELS: Record<AnalyticsEvidenceDomain, string> = {
@@ -54,6 +55,7 @@ const DOMAIN_LABELS: Record<AnalyticsEvidenceDomain, string> = {
   WORDSTAT: "Поисковый спрос",
   COST: "Сопоставимая стоимость",
   COMPETITORS: "Публичные конкуренты",
+  FINANCIAL: "Финансовая история юрлиц",
 };
 
 const DOMAIN_SOURCES: Record<AnalyticsEvidenceDomain, string> = {
@@ -63,6 +65,7 @@ const DOMAIN_SOURCES: Record<AnalyticsEvidenceDomain, string> = {
   WORDSTAT: "Официальный срез поискового спроса в выбранной области",
   COST: "Сопоставимая собственная история или текущий аукционный ориентир",
   COMPETITORS: "Ограниченный набор публичных страниц и поисковых наблюдений",
+  FINANCIAL: "Официальная отчётность ГИР БО подтверждённого юридического периметра",
 };
 
 const DOMAIN_LIMITATIONS: Record<AnalyticsEvidenceDomain, string> = {
@@ -72,6 +75,7 @@ const DOMAIN_LIMITATIONS: Record<AnalyticsEvidenceDomain, string> = {
   WORDSTAT: "Частоты являются нижней границей доступных строк в точной области и не являются прогнозом обращений.",
   COST: "Диапазон описывает только прошедший проверки сопоставимый источник и не является прогнозом цены будущего результата.",
   COMPETITORS: "Публичное позиционирование и видимость не раскрывают расходы, конверсии, прибыльность или внутреннюю стратегию конкурентов.",
+  FINANCIAL: "Бухгалтерская динамика не доказывает рекламный бюджет, эффективность рекламы, силу бренда или присутствие на всём рынке.",
 };
 
 const GAP_COPY: Record<string, { problem: string; action: string; domain: AnalyticsEvidenceDomain }> = {
@@ -125,6 +129,11 @@ const GAP_COPY: Record<string, { problem: string; action: string; domain: Analyt
     problem: "Внутренняя эффективность конкурентов недоступна из публичных источников.",
     action: "Использовать публичные наблюдения только как гипотезы позиционирования и не приписывать им эффективность.",
   },
+  FINANCIAL_COMPETITOR_INTELLIGENCE_UNAVAILABLE: {
+    domain: "FINANCIAL",
+    problem: "История ГИР БО подтверждённого юридического периметра недоступна или неполна.",
+    action: "Продолжить без финансового вывода; не заменять отсутствующую отчётность нулём и не поручать её ручной сбор владельцу.",
+  },
 };
 
 const DOMAIN_FALLBACK_REMEDIATION: Record<AnalyticsEvidenceDomain, { problem: string; action: string }> = {
@@ -134,6 +143,7 @@ const DOMAIN_FALLBACK_REMEDIATION: Record<AnalyticsEvidenceDomain, { problem: st
   WORDSTAT: GAP_COPY.WORDSTAT_AUTHORITY_UNAVAILABLE,
   COST: GAP_COPY.PRELAUNCH_COST_UNAVAILABLE,
   COMPETITORS: GAP_COPY.COMPETITOR_EVIDENCE_UNAVAILABLE,
+  FINANCIAL: GAP_COPY.FINANCIAL_COMPETITOR_INTELLIGENCE_UNAVAILABLE,
 };
 
 function record(value: unknown): Record<string, unknown> {
@@ -264,12 +274,24 @@ function competitorFinding(snapshot: AnalyticsEvidenceBundle) {
   return `Публичные предложения наблюдались у ${observed.toLocaleString("ru-RU")} из ${denominator.toLocaleString("ru-RU")} участников ограниченного набора; вывод относится только к этому набору.${adStatus}`;
 }
 
+function financialFinding(snapshot: AnalyticsEvidenceBundle) {
+  const dossier = record(snapshot.financial_competitor_intelligence);
+  if (!Object.keys(dossier).length) return "История ГИР БО не собрана; отсутствующие значения не считаются нулевыми.";
+  const coverage = record(dossier.coverage);
+  const accepted = Number(coverage.accepted_entities);
+  const observed = Number(coverage.entities_with_records);
+  const acceptedLabel = Number.isSafeInteger(accepted) && accepted >= 0 ? accepted.toLocaleString("ru-RU") : "неустановленного числа";
+  const observedLabel = Number.isSafeInteger(observed) && observed >= 0 ? observed.toLocaleString("ru-RU") : "неустановленного числа";
+  return `Финансовая история доступна для ${observedLabel} из ${acceptedLabel} подтверждённых юридических лиц; выводы ограничены бухгалтерской динамикой.`;
+}
+
 function findingForDomain(snapshot: AnalyticsEvidenceBundle, domain: AnalyticsEvidenceDomain, claims: EvidenceClaim[]) {
   if (domain === "BUSINESS_MODEL") return businessFinding(snapshot);
   if (domain === "DIRECT") return directFinding(claims);
   if (domain === "METRIKA") return metrikaFinding(claims);
   if (domain === "WORDSTAT") return wordstatFinding(snapshot);
   if (domain === "COST") return costFinding(snapshot);
+  if (domain === "FINANCIAL") return financialFinding(snapshot);
   return competitorFinding(snapshot);
 }
 

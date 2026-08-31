@@ -15,6 +15,7 @@ export const ANALYTICS_EVIDENCE_DOMAINS: AnalyticsEvidenceDomain[] = [
   "WORDSTAT",
   "COST",
   "COMPETITORS",
+  "FINANCIAL",
 ];
 
 export type AnalyticsEvidenceCollectionTrigger =

@@ -22,6 +22,12 @@ import {
   type CompetitorMatrix,
   type CompetitorMatrixRowInput,
 } from "./competitor-research.ts";
+import {
+  buildFinancialCompetitorIntelligence,
+  verifyFinancialCompetitorIntelligence,
+  type FinancialCompetitorIntelligence,
+  type FinancialCompetitorIntelligenceInput,
+} from "./financial-competitor-intelligence.ts";
 
 export const ANALYTICS_EVIDENCE_SCHEMA = "p0-analytics-evidence-v7";
 export const ANALYTICS_EVIDENCE_CONTRACT_VERSION = "7.0.0";
@@ -58,7 +64,7 @@ export type EvidenceSource = {
   source_id: string;
   title: string;
   source_kind: string;
-  provenance_class: "FIRST_PARTY_PUBLIC" | "OWNER_CONFIRMED" | "DIRECT_OFFICIAL_API" | "METRIKA_OFFICIAL_API" | "COMPETITOR_PUBLIC" | "WORDSTAT_OFFICIAL_API";
+  provenance_class: "FIRST_PARTY_PUBLIC" | "OWNER_CONFIRMED" | "DIRECT_OFFICIAL_API" | "METRIKA_OFFICIAL_API" | "COMPETITOR_PUBLIC" | "WORDSTAT_OFFICIAL_API" | "GIR_BO_OFFICIAL";
   status: EvidenceSourceStatus;
   observed_at: string | null;
   generated_at: string;
@@ -153,7 +159,7 @@ export type EvidenceGap = {
   limitations: string[];
 };
 
-export type AnalyticsEvidenceDomain = "BUSINESS_MODEL" | "DIRECT" | "METRIKA" | "WORDSTAT" | "COST" | "COMPETITORS";
+export type AnalyticsEvidenceDomain = "BUSINESS_MODEL" | "DIRECT" | "METRIKA" | "WORDSTAT" | "COST" | "COMPETITORS" | "FINANCIAL";
 
 export type AnalyticsEvidenceDomainEntry = {
   domain: AnalyticsEvidenceDomain;
@@ -214,6 +220,7 @@ export type AnalyticsEvidenceBundle = {
   domain_manifest: AnalyticsEvidenceDomainManifest;
   competitor_ad_observation: CompetitorMatrix["ad_observation"];
   competitor_matrix: CompetitorMatrix | null;
+  financial_competitor_intelligence: FinancialCompetitorIntelligence | null;
   product_catalog: OfferCatalog;
   focus_opportunities: FocusOpportunitySet;
   market_evidence: Awaited<ReturnType<typeof buildMarketEvidence>>;
@@ -229,6 +236,7 @@ export type AnalyticsEvidenceBundle = {
     metrika_adapter: string;
     wordstat_adapter: string;
     competitor_policy: string;
+    financial_adapter: string;
   };
   hashes: {
     input_root_sha256: string;
@@ -239,6 +247,7 @@ export type AnalyticsEvidenceBundle = {
     gaps_sha256: string;
     domain_manifest_sha256: string;
     competitor_matrix_sha256: string;
+    financial_competitor_intelligence_sha256: string;
     product_catalog_sha256: string;
     focus_opportunities_sha256: string;
     market_evidence_sha256: string;
@@ -801,12 +810,16 @@ export async function buildAnalyticsEvidence({
     scopes: [],
     limitation: "Одобренный источник фактических рекламных показов не предоставлен; рекламная активность и отсутствие рекламы не установлены.",
   };
+  const rawFinancialInput = record(context.financial_competitor_intelligence_input);
+  const financialCompetitorIntelligence = Object.keys(rawFinancialInput).length
+    ? await buildFinancialCompetitorIntelligence(rawFinancialInput as unknown as FinancialCompetitorIntelligenceInput)
+    : null;
   const competitorObservedAts = competitorInputs.map((item) => isoTimestamp(item.observed_at));
   const ownerObservedAts = Object.values(fieldEvidence).map((item) => isoTimestamp(record(item).owner_confirmed_at));
   const rawMarketInput = record(context.market_evidence_input);
   const marketBatchObservedAt = isoTimestamp(record(rawMarketInput.wordstat_batch).batch_finished_at);
   const marketCostObservedAts = list(rawMarketInput.cost_observations).map((item) => isoTimestamp(record(item).as_of));
-  const asOf = latestTimestamp([siteObservedAt, directObservedAt, metrikaObservedAt, marketBatchObservedAt, ...marketCostObservedAts, ...competitorObservedAts, ...ownerObservedAts])
+  const asOf = latestTimestamp([siteObservedAt, directObservedAt, metrikaObservedAt, marketBatchObservedAt, financialCompetitorIntelligence?.generated_at ?? null, ...marketCostObservedAts, ...competitorObservedAts, ...ownerObservedAts])
     ?? "1970-01-01T00:00:00.000Z";
   const generated = isoTimestamp(generatedAt) ?? asOf;
   const marketInput = rawMarketInput.wordstat_batch
@@ -1687,6 +1700,15 @@ export async function buildAnalyticsEvidence({
     material: false,
     limitations: ["Public observations cannot establish hidden competitor performance facts."],
   }));
+  if (!financialCompetitorIntelligence || financialCompetitorIntelligence.capability_status === "UNAVAILABLE") {
+    gaps.push(await makeGap({
+      code: "FINANCIAL_COMPETITOR_INTELLIGENCE_UNAVAILABLE",
+      source_id: "financial",
+      description: "Confirmed legal-perimeter GIR BO financial history is unavailable; missing accounting data is unknown, not zero.",
+      material: false,
+      limitations: financialCompetitorIntelligence?.limitations ?? ["Official GIR BO subscription input was not collected for this snapshot."],
+    }));
+  }
   for (const gap of marketEvidence.frequency.gaps) {
     gaps.push(await makeGap({
       code: gap.code,
@@ -1731,6 +1753,8 @@ export async function buildAnalyticsEvidence({
     ? metrikaPartial ? "PARTIAL" : "VERIFIED"
     : metrikaManagementReady ? "PARTIAL" : "UNAVAILABLE";
   const competitorStatus: EvidenceSourceStatus = sourceEvidence.competitors.length ? "PARTIAL" : "UNAVAILABLE";
+  const financialStatus: EvidenceSourceStatus = financialCompetitorIntelligence?.capability_status === "AVAILABLE" ? "VERIFIED"
+    : financialCompetitorIntelligence?.capability_status === "PARTIAL" ? "PARTIAL" : "UNAVAILABLE";
   const wordstatStatus: EvidenceSourceStatus = marketEvidence.frequency.status === "AVAILABLE"
     && ["AVAILABLE", "INSUFFICIENT_HISTORY"].includes(marketEvidence.frequency.seasonality.status)
     && marketEvidence.frequency.geo_evidence.status === "AVAILABLE"
@@ -1874,6 +1898,36 @@ export async function buildAnalyticsEvidence({
       evidence_ids: sourceEvidence.competitors,
     }),
     makeSource({
+      source_id: "financial",
+      title: "Финансовая история подтверждённого юридического периметра",
+      source_kind: "gir_bo_financial_evidence_records",
+      provenance_class: "GIR_BO_OFFICIAL",
+      status: financialStatus,
+      observed_at: financialCompetitorIntelligence?.generated_at ?? null,
+      generated_at: generated,
+      scope: financialCompetitorIntelligence ? {
+        frame_id: financialCompetitorIntelligence.frozen_frame.frame_id,
+        accepted_entities: financialCompetitorIntelligence.coverage.accepted_entities,
+        reporting_years: financialCompetitorIntelligence.frozen_frame.period.reporting_years,
+      } : {},
+      access: financialStatus === "UNAVAILABLE" ? "unavailable" : "owner_authorized",
+      collection_policy: {
+        policy_id: "official-gir-bo-financial-history",
+        version: "1.0.0",
+        allowed_source: "GIR_BO_FNS",
+        undocumented_endpoints_allowed: false,
+        browser_scraping_allowed: false,
+      },
+      versions: { schema: ANALYTICS_EVIDENCE_SCHEMA, extractor: "gir-bo-financial-evidence-record-v1", policy: "official-gir-bo-financial-history/1.0.0" },
+      facts: financialCompetitorIntelligence ? [
+        `${financialCompetitorIntelligence.coverage.accepted_entities} confirmed legal entities`,
+        `${financialCompetitorIntelligence.accepted_records.length} accepted GIR BO financial records`,
+        `${financialCompetitorIntelligence.strategy_claims.length} financial Strategy claims paired with independent non-financial evidence`,
+      ] : [],
+      limitations: financialCompetitorIntelligence?.limitations ?? ["Official GIR BO financial history was not collected for this snapshot."],
+      evidence_ids: [],
+    }),
+    makeSource({
       source_id: "wordstat",
       title: "Спрос и Wordstat",
       source_kind: "wordstat_api",
@@ -1999,6 +2053,14 @@ export async function buildAnalyticsEvidence({
         claimFilter: (claim) => claim.subject.startsWith("competitor:"),
         gapFilter: (gap) => gap.source_id === "competitors",
       }),
+      makeDomainEntry({
+        domain: "FINANCIAL",
+        artifactPaths: ["financial_competitor_intelligence"],
+        status: financialStatus,
+        sourceIds: ["financial"],
+        claimFilter: () => false,
+        gapFilter: (gap) => gap.source_id === "financial",
+      }),
     ],
   };
 
@@ -2043,6 +2105,7 @@ export async function buildAnalyticsEvidence({
     metrika_adapter: "metrika-management-and-stat-v2",
     wordstat_adapter: "wordstat-v1-canonical-observation-v2",
     competitor_policy: "public-competitor-pages-v2",
+    financial_adapter: "gir-bo-financial-evidence-record-v1",
   };
   const hashes = {
     input_root_sha256: await contentHash({
@@ -2058,6 +2121,7 @@ export async function buildAnalyticsEvidence({
       domain_manifest: domainManifest,
       competitor_ad_observation: competitorAdObservation,
       competitor_matrix: competitorMatrix,
+      financial_competitor_intelligence: financialCompetitorIntelligence,
       product_catalog: productFocus.catalog,
       focus_opportunities: productFocus.focus_opportunities,
       market_evidence: marketEvidence,
@@ -2069,6 +2133,7 @@ export async function buildAnalyticsEvidence({
     gaps_sha256: await contentHash(gaps),
     domain_manifest_sha256: await contentHash(domainManifest),
     competitor_matrix_sha256: await contentHash(competitorMatrix),
+    financial_competitor_intelligence_sha256: await contentHash(financialCompetitorIntelligence),
     product_catalog_sha256: await contentHash(productFocus.catalog),
     focus_opportunities_sha256: await contentHash(productFocus.focus_opportunities),
     market_evidence_sha256: await contentHash(marketEvidence),
@@ -2103,6 +2168,7 @@ export async function buildAnalyticsEvidence({
     domain_manifest: domainManifest,
     competitor_ad_observation: competitorAdObservation,
     competitor_matrix: competitorMatrix,
+    financial_competitor_intelligence: financialCompetitorIntelligence,
     product_catalog: productFocus.catalog,
     focus_opportunities: productFocus.focus_opportunities,
     market_evidence: marketEvidence,
@@ -2177,7 +2243,9 @@ export async function verifyAnalyticsEvidenceSnapshot(snapshot: AnalyticsEvidenc
     const hasDomainManifest = Object.hasOwn(current as unknown as Record<string, unknown>, "domain_manifest");
     if (candidate.schema_version === ANALYTICS_EVIDENCE_SCHEMA && !hasDomainManifest) return false;
     if (hasDomainManifest) {
-      const requiredDomains: AnalyticsEvidenceDomain[] = ["BUSINESS_MODEL", "DIRECT", "METRIKA", "WORDSTAT", "COST", "COMPETITORS"];
+      const requiredDomains: AnalyticsEvidenceDomain[] = candidate.schema_version === ANALYTICS_EVIDENCE_SCHEMA
+        ? ["BUSINESS_MODEL", "DIRECT", "METRIKA", "WORDSTAT", "COST", "COMPETITORS", "FINANCIAL"]
+        : ["BUSINESS_MODEL", "DIRECT", "METRIKA", "WORDSTAT", "COST", "COMPETITORS"];
       if (current.domain_manifest.schema_version !== ANALYTICS_EVIDENCE_DOMAIN_MANIFEST_SCHEMA) return false;
       if (canonicalizeEvidence(current.domain_manifest.domains.map((entry) => entry.domain)) !== canonicalizeEvidence(requiredDomains)) return false;
       const expectedArtifactPaths: Record<AnalyticsEvidenceDomain, string[]> = {
@@ -2187,6 +2255,7 @@ export async function verifyAnalyticsEvidenceSnapshot(snapshot: AnalyticsEvidenc
         WORDSTAT: ["market_evidence.frequency"],
         COST: ["prelaunch_cost"],
         COMPETITORS: ["competitor_ad_observation", "competitor_matrix"],
+        FINANCIAL: ["financial_competitor_intelligence"],
       };
       const expectedSourceIds: Record<AnalyticsEvidenceDomain, string[]> = {
         BUSINESS_MODEL: ["first-party-web", "owner-confirmed"],
@@ -2195,6 +2264,7 @@ export async function verifyAnalyticsEvidenceSnapshot(snapshot: AnalyticsEvidenc
         WORDSTAT: ["wordstat"],
         COST: ["direct"],
         COMPETITORS: ["competitors"],
+        FINANCIAL: ["financial"],
       };
       const claimBelongsToDomain = (domain: AnalyticsEvidenceDomain, claim: EvidenceClaim) => domain === "BUSINESS_MODEL"
         ? claim.subject === "business_model" || claim.subject.startsWith("offer:")
@@ -2202,14 +2272,14 @@ export async function verifyAnalyticsEvidenceSnapshot(snapshot: AnalyticsEvidenc
           : domain === "METRIKA" ? claim.subject === "metrika_goal"
             : domain === "WORDSTAT" ? claim.subject === "market_demand"
               : domain === "COST" ? claim.subject === "prelaunch_cost"
-                : claim.subject.startsWith("competitor:");
+                : domain === "COMPETITORS" ? claim.subject.startsWith("competitor:") : false;
       const gapBelongsToDomain = (domain: AnalyticsEvidenceDomain, gap: EvidenceGap) => domain === "BUSINESS_MODEL"
         ? gap.code === "BUSINESS_MODEL_EVIDENCE_MISSING"
         : domain === "DIRECT" ? gap.code === "CURRENT_DIRECT_INVENTORY_UNAVAILABLE"
           : domain === "METRIKA" ? gap.code === "METRIKA_REPORT_UNAVAILABLE"
             : domain === "WORDSTAT" ? gap.source_id === "wordstat"
               : domain === "COST" ? gap.code === "PRELAUNCH_COST_UNAVAILABLE"
-                : gap.source_id === "competitors";
+                : domain === "COMPETITORS" ? gap.source_id === "competitors" : gap.source_id === "financial";
       for (const domain of current.domain_manifest.domains) {
         const expectedClaimIndexes = current.claims.flatMap((claim, index) => claimBelongsToDomain(domain.domain, claim) ? [index] : []);
         const expectedClaimIds = new Set(expectedClaimIndexes.map((index) => current.claims[index].claim_id));
@@ -2240,6 +2310,11 @@ export async function verifyAnalyticsEvidenceSnapshot(snapshot: AnalyticsEvidenc
     const hasCompetitorMatrix = Object.hasOwn(current as unknown as Record<string, unknown>, "competitor_matrix");
     if (candidate.schema_version === ANALYTICS_EVIDENCE_SCHEMA && !hasCompetitorMatrix) return false;
     if (hasCompetitorMatrix && current.hashes.competitor_matrix_sha256 !== await contentHash(current.competitor_matrix)) return false;
+    const hasFinancialCompetitorIntelligence = Object.hasOwn(current as unknown as Record<string, unknown>, "financial_competitor_intelligence");
+    if (candidate.schema_version === ANALYTICS_EVIDENCE_SCHEMA && !hasFinancialCompetitorIntelligence) return false;
+    if (hasFinancialCompetitorIntelligence
+      && (current.hashes.financial_competitor_intelligence_sha256 !== await contentHash(current.financial_competitor_intelligence)
+        || (current.financial_competitor_intelligence !== null && !await verifyFinancialCompetitorIntelligence(current.financial_competitor_intelligence)))) return false;
     const hasMarketEvidence = Boolean((current as unknown as Record<string, unknown>).market_evidence);
     if (hasMarketEvidence && current.hashes.market_evidence_sha256 !== await contentHash(current.market_evidence)) return false;
     const hasProductFocus = Boolean(
@@ -2269,6 +2344,7 @@ export async function verifyAnalyticsEvidenceSnapshot(snapshot: AnalyticsEvidenc
       ...(hasDomainManifest ? { domain_manifest: current.domain_manifest } : {}),
       ...(hasCompetitorAdObservation ? { competitor_ad_observation: current.competitor_ad_observation } : {}),
       ...(hasCompetitorMatrix ? { competitor_matrix: current.competitor_matrix } : {}),
+      ...(hasFinancialCompetitorIntelligence ? { financial_competitor_intelligence: current.financial_competitor_intelligence } : {}),
       ...(hasProductFocus ? {
         product_catalog: current.product_catalog,
         focus_opportunities: current.focus_opportunities,

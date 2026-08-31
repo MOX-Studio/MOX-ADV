@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { projectAnalyticsEvidenceForOwner } from "../lib/analytics-owner-summary.ts";
 
-const DOMAIN_ORDER = ["BUSINESS_MODEL", "DIRECT", "METRIKA", "WORDSTAT", "COST", "COMPETITORS"];
+const DOMAIN_ORDER = ["BUSINESS_MODEL", "DIRECT", "METRIKA", "WORDSTAT", "COST", "COMPETITORS", "FINANCIAL"];
 
 function claim(subject, predicate, value) {
   return {
@@ -34,6 +34,7 @@ function fullSnapshot() {
     claim("market_demand", "scoped_frequency", { observed_unique_count: 67 }),
     claim("prelaunch_cost", "qualified_cost_range", { range: { low: 110, high: 170 } }),
     claim("competitor:alpha", "published_offer", "Пакет участия"),
+    claim("financial:dossier", "confirmed_legal_history", { accepted_entities: 2 }),
   ];
   return {
     recommendation_status: "EVIDENCE_READY_WITH_GAPS",
@@ -71,6 +72,9 @@ function fullSnapshot() {
       candidate_set: { candidates: [{ competitor: "Альфа" }, { competitor: "Бета" }] },
       rows: [{ competitor: "Альфа" }],
     },
+    financial_competitor_intelligence: {
+      coverage: { accepted_entities: 2, entities_with_records: 2 },
+    },
   };
 }
 
@@ -82,7 +86,7 @@ test("complete evidence produces business findings and readiness without provide
   const summary = projectAnalyticsEvidenceForOwner(fullSnapshot());
 
   assert.equal(summary.status, "Готово к стратегии");
-  assert.equal(summary.findings.length, 6);
+  assert.equal(summary.findings.length, 7);
   assert.deepEqual(summary.findings.map((item) => item.area), [
     "Модель бизнеса",
     "Текущее продвижение",
@@ -90,6 +94,7 @@ test("complete evidence produces business findings and readiness without provide
     "Поисковый спрос",
     "Сопоставимая стоимость",
     "Публичные конкуренты",
+    "Финансовая история юрлиц",
   ]);
   assert.equal(summary.findings.every((item) => item.status === "Подтверждено"), true);
   assert.match(summary.findings.find((item) => item.area === "Текущее продвижение").finding, /3 кампании/u);

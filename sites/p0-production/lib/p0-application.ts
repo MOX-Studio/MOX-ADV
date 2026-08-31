@@ -44,6 +44,7 @@ import {
   type ProductFocusState,
 } from "./business-model.ts";
 import type { CuratedPlaybookRelease } from "./campaign-playbook.ts";
+import type { FinancialCompetitorIntelligenceInput } from "./financial-competitor-intelligence.ts";
 import {
   buildCampaignNames,
   buildPublishProjection,
@@ -505,6 +506,12 @@ export interface P0ApplicationAdapters {
     competitor_candidate_set: Record<string, unknown>;
     competitor_observations: Array<Record<string, unknown>>;
   }>;
+  readFinancialCompetitorIntelligence?(input: {
+    ownerKey: string;
+    model: BusinessModel;
+    context: P0Context;
+    generatedAt: string;
+  }): Promise<FinancialCompetitorIntelligenceInput>;
   landingAdvisory?: LandingAdvisoryAdapter;
   readPlaybookReleases?(): Promise<CuratedPlaybookRelease[]>;
   externalWriteConfiguration(): P0ExternalWriteConfiguration;
@@ -4280,9 +4287,10 @@ export class P0Application {
   }
 
   private async buildModelEvidence(ownerKey: string, site: SiteAnalysis, model: BusinessModel, context: P0Context, generatedAt: string) {
-    const [marketEvidenceInput, competitorResearch] = await Promise.all([
+    const [marketEvidenceInput, competitorResearch, financialCompetitorIntelligenceInput] = await Promise.all([
       this.adapters.readMarketEvidence?.({ ownerKey, model, context, generatedAt }),
       this.adapters.readCompetitorResearch?.({ model, site, generatedAt }),
+      this.adapters.readFinancialCompetitorIntelligence?.({ ownerKey, model, context, generatedAt }),
     ]);
     return buildAnalyticsEvidence({
       site: site as unknown as Record<string, unknown>,
@@ -4291,6 +4299,7 @@ export class P0Application {
         ...context as unknown as Record<string, unknown>,
         ...(marketEvidenceInput ? { market_evidence_input: marketEvidenceInput } : {}),
         ...(competitorResearch ?? {}),
+        ...(financialCompetitorIntelligenceInput ? { financial_competitor_intelligence_input: financialCompetitorIntelligenceInput } : {}),
       },
       generatedAt,
     });
@@ -4966,7 +4975,13 @@ export class P0Application {
       }
       const competitorChanged = JSON.stringify(state.analytics_evidence_snapshot.competitor_matrix)
         !== JSON.stringify(refreshedEvidence.competitor_matrix);
-      if (competitorChanged) {
+      const financialChanged = JSON.stringify(state.analytics_evidence_snapshot.financial_competitor_intelligence)
+        !== JSON.stringify(refreshedEvidence.financial_competitor_intelligence);
+      if (competitorChanged || financialChanged) {
+        const changedDomains: AnalyticsEvidenceDomain[] = [
+          ...(competitorChanged ? ["COMPETITORS" as const] : []),
+          ...(financialChanged ? ["FINANCIAL" as const] : []),
+        ];
         const invalidatedAnalyticsOutputs = analyticsEvidenceDependentOutputs(state);
         state.last_cascade = cascadeRecord(
           state,
@@ -4977,13 +4992,13 @@ export class P0Application {
         await invalidateDecisionAuthority(
           state,
           "EVIDENCE_LINEAGE_CHANGED",
-          "Bounded public competitor evidence changed Analytics Evidence lineage.",
+          "Competitor or financial evidence changed Analytics Evidence lineage.",
           refreshedAt,
         );
         await persistAnalyticsEvidenceSnapshot(state, refreshedEvidence, {
           recordedAt: refreshedAt,
           trigger: analyticsEvidenceCollectionTrigger(state, "COMPETITOR_EVIDENCE_REFRESH"),
-          changedDomains: ["COMPETITORS"],
+          changedDomains,
           invalidatedOutputs: invalidatedAnalyticsOutputs,
         });
         const focusArtifacts = productFocusArtifacts(refreshedEvidence);

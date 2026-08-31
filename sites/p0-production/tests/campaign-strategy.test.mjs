@@ -118,6 +118,8 @@ test("builds a complete adaptive Campaign Strategy recommendation from exact lin
   assert.equal(questionnaire.recommendation.economics.target_result_cost_rub, 40_000);
   assert.equal(questionnaire.recommendation.economics.uncertainty, null);
   assert.equal(questionnaire.recommendation.prelaunch_cost.status, "QUALIFIED_RANGE");
+  assert.equal(questionnaire.recommendation.financial_context.status, "NOT_USED");
+  assert.equal(questionnaire.recommendation.financial_context.advertising_performance_inference_allowed, false);
   assert.deepEqual(questionnaire.recommendation.prelaunch_cost.range, { low: 110, high: 170, currency: "RUB", unit: "COST_PER_CLICK" });
   assert.equal(questionnaire.recommendation.prelaunch_cost.source.kind, "DIRECT_HISTORY_OWN_EMPIRICAL");
   assert.equal(questionnaire.recommendation.prelaunch_cost.effectiveness_forecast, false);
@@ -195,6 +197,34 @@ test("conflicting qualified cost fails closed instead of selecting or averaging 
   assert.equal(questionnaire.recommendation.prelaunch_cost.range, null);
   assert.match(questionnaire.recommendation.prelaunch_cost.owner_action, /обнов/iu);
   assert.ok(questionnaire.human_decision_gate.evidence.some((item) => /конфликт/iu.test(item)));
+});
+
+test("Strategy receives only pre-gated financial claims that retain independent non-financial evidence", async () => {
+  const base = input();
+  base.analyticsEvidence.financial_competitor_intelligence = {
+    schema_version: "p0-financial-competitor-intelligence-v1",
+    capability_status: "PARTIAL",
+    strategy_claims: [{
+      interpretation_id: "niche-positioning",
+      statement: "Наблюдаемая разница масштаба поддерживает проверку более узкого сообщения.",
+      financial_record_refs: ["fer-company-2024", "fer-competitor-2024"],
+      independent_nonfinancial_evidence_refs: ["claim:public-positioning"],
+      affected_strategy_fields: ["campaign_focus", "core_message"],
+      limitations: ["Выручка не доказывает рекламную эффективность."],
+    }],
+    suppressed_strategy_claims: [{
+      interpretation_id: "financial-only",
+      reason: "INDEPENDENT_NONFINANCIAL_EVIDENCE_REQUIRED",
+    }],
+  };
+
+  const questionnaire = await buildStrategyQuestionnaire(base);
+
+  assert.equal(questionnaire.recommendation.financial_context.status, "AVAILABLE");
+  assert.deepEqual(questionnaire.recommendation.financial_context.claims.map((claim) => claim.interpretation_id), ["niche-positioning"]);
+  assert.deepEqual(questionnaire.recommendation.financial_context.claims[0].independent_nonfinancial_evidence_refs, ["claim:public-positioning"]);
+  assert.equal(questionnaire.recommendation.financial_context.claims.some((claim) => claim.interpretation_id === "financial-only"), false);
+  assert.equal(questionnaire.recommendation.financial_context.advertising_performance_inference_allowed, false);
 });
 
 test("unsupported exact account capability stays explicit and fails closed without a provider default", async () => {

@@ -86,6 +86,19 @@ export type StrategyDeliveryRecommendation = {
     uncertainty: string | null;
     provenance: "CONFIRMED_BUSINESS_MODEL_ECONOMICS" | "MATERIAL_UNCERTAINTY";
   };
+  financial_context: {
+    status: "AVAILABLE" | "NOT_USED";
+    claims: Array<{
+      interpretation_id: string;
+      statement: string;
+      financial_record_refs: string[];
+      independent_nonfinancial_evidence_refs: string[];
+      affected_strategy_fields: string[];
+      limitations: string[];
+    }>;
+    limitation: string;
+    advertising_performance_inference_allowed: false;
+  };
   prelaunch_cost: StrategyPrelaunchCostDecision;
 };
 
@@ -273,6 +286,35 @@ function measurementEvidence(analyticsEvidence: Record<string, unknown>) {
   };
 }
 
+function financialContext(analyticsEvidence: Record<string, unknown>): StrategyDeliveryRecommendation["financial_context"] {
+  const dossier = record(analyticsEvidence.financial_competitor_intelligence);
+  const dossierEligible = dossier.schema_version === "p0-financial-competitor-intelligence-v1"
+    && ["AVAILABLE", "PARTIAL"].includes(normalizedText(dossier.capability_status, 100));
+  const claims = (dossierEligible ? list(dossier.strategy_claims) : []).map(record).flatMap((claim) => {
+    const interpretationId = normalizedText(claim.interpretation_id, 300);
+    const statement = normalizedText(claim.statement, 2_000);
+    const financialRecordRefs = list(claim.financial_record_refs).map((item) => normalizedText(item, 300)).filter(Boolean);
+    const independentRefs = list(claim.independent_nonfinancial_evidence_refs).map((item) => normalizedText(item, 500)).filter(Boolean);
+    if (!interpretationId || !statement || !financialRecordRefs.length || !independentRefs.length) return [];
+    return [{
+      interpretation_id: interpretationId,
+      statement,
+      financial_record_refs: financialRecordRefs,
+      independent_nonfinancial_evidence_refs: independentRefs,
+      affected_strategy_fields: list(claim.affected_strategy_fields).map((item) => normalizedText(item, 100)).filter(Boolean),
+      limitations: list(claim.limitations).map((item) => normalizedText(item, 1_000)).filter(Boolean),
+    }];
+  });
+  return {
+    status: claims.length ? "AVAILABLE" : "NOT_USED",
+    claims,
+    limitation: claims.length
+      ? "Финансовые утверждения уже связаны с независимыми нефинансовыми доказательствами совпадающей области; они не доказывают рекламу или весь рынок."
+      : "Финансовый контекст не влияет на Strategy без независимого нефинансового evidence совпадающей области.",
+    advertising_performance_inference_allowed: false,
+  };
+}
+
 export function buildStrategyPrelaunchCostDecision(
   analyticsEvidence: Record<string, unknown>,
   confirmedEconomics: boolean,
@@ -422,6 +464,7 @@ async function buildRecommendation(
       uncertainty: confirmedEconomics ? null : normalizedText(economics.limitation, 1_000) || "Target result cost неизвестна: economics не подтверждена.",
       provenance: confirmedEconomics ? "CONFIRMED_BUSINESS_MODEL_ECONOMICS" : "MATERIAL_UNCERTAINTY",
     },
+    financial_context: financialContext(analyticsEvidence),
     prelaunch_cost: buildStrategyPrelaunchCostDecision(analyticsEvidence, confirmedEconomics),
   };
 }

@@ -219,6 +219,7 @@ test("builds a deeply immutable content-addressed snapshot with stable IDs, comp
     "conflicts_sha256",
     "domain_manifest_sha256",
     "evidence_sha256",
+    "financial_competitor_intelligence_sha256",
     "focus_opportunities_sha256",
     "gaps_sha256",
     "input_root_sha256",
@@ -254,6 +255,7 @@ test("indexes every P0 analytics domain and gives every material claim direct so
     "WORDSTAT",
     "COST",
     "COMPETITORS",
+    "FINANCIAL",
   ]);
   assert.deepEqual(result.domain_manifest.domains.map((domain) => domain.artifact_paths), [
     ["product_catalog", "focus_opportunities"],
@@ -262,6 +264,7 @@ test("indexes every P0 analytics domain and gives every material claim direct so
     ["market_evidence.frequency"],
     ["prelaunch_cost"],
     ["competitor_ad_observation", "competitor_matrix"],
+    ["financial_competitor_intelligence"],
   ]);
   assert.ok(result.claims.length > 0);
   assert.ok(result.claims.every((claim) => ["current", "aging", "stale", "unknown"].includes(claim.confidence.freshness)));
@@ -274,6 +277,9 @@ test("indexes every P0 analytics domain and gives every material claim direct so
   assert.ok(result.domain_manifest.domains.every((domain) => domain.source_ids.length > 0));
   assert.ok(result.domain_manifest.domains.every((domain) => domain.claim_indexes.every((index) => result.claims[index])));
   assert.ok(result.domain_manifest.domains.every((domain) => domain.evidence_indexes.every((index) => result.evidence[index])));
+  assert.equal(result.financial_competitor_intelligence, null);
+  assert.equal(result.domain_manifest.domains.find((domain) => domain.domain === "FINANCIAL").status, "UNAVAILABLE");
+  assert.equal(result.sources.find((source) => source.source_id === "financial").provenance_class, "GIR_BO_OFFICIAL");
   assert.equal(await verifyAnalyticsEvidenceSnapshot(result), true);
 
   const corrupted = structuredClone(result);
