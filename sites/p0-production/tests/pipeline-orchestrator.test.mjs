@@ -23,6 +23,9 @@ function d1Shim(database) {
     async first() {
       return statement.get(...values) ?? null;
     },
+    async all() {
+      return { results: statement.all(...values) };
+    },
   });
   return {
     prepare(sql) {
@@ -117,6 +120,29 @@ function goalCandidate(materialAmbiguity = null) {
   };
 }
 
+function verifiedAttempt(stage, character) {
+  const versions = inputVersions();
+  return {
+    actor: { actor_id: `strategy-agent-${stage.toLowerCase()}`, actor_type: "AGENT", role: "STAGE_EXECUTOR" },
+    inputs: [reference(`${stage.toLowerCase()}-input`, character)],
+    evidence: [reference(`${stage.toLowerCase()}-evidence`, character)],
+    output: reference(`${stage.toLowerCase()}-output`, character),
+    checks: [{ check_id: `${stage}_CHECK`, status: "PASSED", policy: versions.pipeline_policy }],
+    schemas: [reference(`${stage.toLowerCase()}-schema`, character)],
+    policies: [versions.pipeline_policy],
+    campaign_playbook: versions.campaign_playbook,
+  };
+}
+
+function discardedAttempt(stage, character) {
+  const attempt = verifiedAttempt(stage, character);
+  return {
+    ...attempt,
+    output: reference(`${stage.toLowerCase()}-partial`, character),
+    checks: [{ ...attempt.checks[0], status: "FAILED" }],
+  };
+}
+
 function fixture(database) {
   const ids = ["pipeline-run-first", "pipeline-run-second"];
   let tick = 0;
@@ -169,6 +195,12 @@ test("Start persists a new zero-write run at Campaign Goal with five canonical s
   assert.deepEqual({ ...historicalAfter }, { revision: 42, updated_at: "2026-08-31T09:00:00.000Z", value_json: historical });
   assert.equal(database.prepare("SELECT COUNT(*) AS count FROM p0_pipeline_runs").get().count, 1);
   assert.equal(database.prepare("SELECT COUNT(*) AS count FROM p0_pipeline_run_revisions").get().count, 1);
+  const audit = await orchestrator.audit(started.run_id);
+  assert.equal(audit.length, 1);
+  assert.equal(audit[0].event_kind, "RUN_STARTED");
+  assert.equal(audit[0].actor.actor_id, "owner");
+  assert.equal(audit[0].previous_event_digest, null);
+  assert.match(audit[0].event_digest, /^sha256:[0-9a-f]{64}$/u);
   database.close();
 });
 
@@ -235,6 +267,7 @@ test("stop rejects stale work, retry keeps the run, and typed returns follow the
     source_stage: "EVIDENCE_COLLECTION",
     reason_code: "EVIDENCE_VERIFIED",
     reason: "Снимок сведений сохранён и проверен.",
+    attempt: verifiedAttempt("EVIDENCE_COLLECTION", "4"),
   });
   const strategyComplete = await orchestrator.advance({
     run_id: evidenceComplete.run_id,
@@ -242,6 +275,7 @@ test("stop rejects stale work, retry keeps the run, and typed returns follow the
     source_stage: "STRATEGY",
     reason_code: "STRATEGY_VERIFIED",
     reason: "Стратегия прошла обязательные проверки.",
+    attempt: verifiedAttempt("STRATEGY", "5"),
   });
 
   const retry = await orchestrator.retry({
@@ -250,6 +284,7 @@ test("stop rejects stale work, retry keeps the run, and typed returns follow the
     source_stage: "CAMPAIGNS",
     reason_code: "TRANSIENT_READ",
     reason: "Временное безопасное чтение будет повторено в текущем запуске.",
+    attempt: discardedAttempt("CAMPAIGNS", "6"),
   });
   assert.equal(retry.run_id, started.run_id);
   assert.equal(retry.current_stage, "CAMPAIGNS");
@@ -261,6 +296,7 @@ test("stop rejects stale work, retry keeps the run, and typed returns follow the
     source_stage: "CAMPAIGNS",
     cause: "STRATEGY_DEFECT",
     reason: "Стратегия не задаёт точную географию для полного черновика.",
+    attempt: discardedAttempt("CAMPAIGNS", "7"),
   });
   assert.equal(returned.run_id, started.run_id);
   assert.equal(returned.current_stage, "STRATEGY");
@@ -269,6 +305,24 @@ test("stop rejects stale work, retry keeps the run, and typed returns follow the
   assert.equal(returned.last_transition.reason_code, "STRATEGY_DEFECT");
   assert.equal(returned.stages.find((stage) => stage.id === "STRATEGY").status, "ACTIVE");
   assert.equal(returned.stages.find((stage) => stage.id === "CAMPAIGNS").status, "RETURNED");
+
+  const trail = await orchestrator.audit(returned.run_id);
+  assert.equal(trail.length, returned.version + 1);
+  for (const event of trail.filter((item) => item.event_kind === "STAGE_VERIFIED")) {
+    assert.equal(event.output.status, "VERIFIED");
+    assert.deepEqual(event.current_product_link, event.output.reference);
+    assert.ok(event.inputs.length > 0);
+    assert.ok(event.evidence.length > 0);
+    assert.ok(event.schemas.length > 0);
+    assert.ok(event.policies.some((policy) => policy.digest === inputVersions().pipeline_policy.digest));
+    assert.deepEqual(event.campaign_playbook, inputVersions().campaign_playbook);
+  }
+  const discarded = trail.filter((event) => event.event_kind === "ATTEMPT_DISCARDED");
+  assert.equal(discarded.length, 2);
+  assert.ok(discarded.every((event) => event.output.status === "DISCARDED" && event.current_product_link === null));
+  assert.equal(discarded[0].retry.next_attempt, 2);
+  assert.equal(discarded[1].return.target_stage, "STRATEGY");
+  assert.ok(trail.every((event) => !Object.hasOwn(event, "raw_model_message") && !Object.hasOwn(event, "personal_data")));
 
   const stopped = await orchestrator.stop({
     run_id: returned.run_id,
@@ -282,6 +336,7 @@ test("stop rejects stale work, retry keeps the run, and typed returns follow the
       source_stage: "CAMPAIGNS",
       reason_code: "STALE_OUTPUT",
       reason: "Устаревший исполнитель пытается сохранить завершение.",
+      attempt: verifiedAttempt("CAMPAIGNS", "8"),
     }),
     (error) => error instanceof PipelineOrchestratorError && error.code === "PIPELINE_RUN_NOT_ACTIVE",
   );
@@ -334,6 +389,72 @@ test("material Goal ambiguity stays at Campaign Goal with a prepared decision pa
   assert.equal(ambiguous.goal_formation.status, "MATERIAL_DECISION_REQUIRED");
   assert.equal(ambiguous.goal_formation.options.length, 2);
   assert.equal(ambiguous.last_transition.reason_code, "GOAL_MATERIAL_AMBIGUITY");
+  const ambiguityTrail = await orchestrator.audit(started.run_id);
+  assert.equal(ambiguityTrail[1].event_kind, "ATTEMPT_DISCARDED");
+  assert.equal(ambiguityTrail[1].current_product_link, null);
+  database.close();
+});
+
+test("audit survives store restart, detects mutation, and is protected from update and delete", async () => {
+  const database = new DatabaseSync(":memory:");
+  const { orchestrator } = fixture(database);
+  const started = await orchestrator.start("owner", inputVersions());
+  await orchestrator.recordGoalCandidate({
+    run_id: started.run_id,
+    expected_version: started.version,
+    candidate: goalCandidate(),
+  });
+
+  const restarted = new PipelineOrchestrator({ store: new D1PipelineRunStore(d1Shim(database)) });
+  const trail = await restarted.audit(started.run_id);
+  assert.equal(trail.length, 2);
+  assert.equal(trail[1].event_kind, "STAGE_VERIFIED");
+  assert.equal(trail[1].previous_event_digest, trail[0].event_digest);
+  assert.throws(
+    () => database.prepare("UPDATE p0_pipeline_audit_events SET actor_id = 'other' WHERE run_id = ? AND sequence = 0").run(started.run_id),
+    /pipeline audit events are immutable/u,
+  );
+  assert.throws(
+    () => database.prepare("DELETE FROM p0_pipeline_audit_events WHERE run_id = ? AND sequence = 0").run(started.run_id),
+    /pipeline audit events are immutable/u,
+  );
+
+  database.exec("DROP TRIGGER p0_pipeline_audit_events_no_update");
+  const tampered = JSON.parse(database.prepare("SELECT value_json FROM p0_pipeline_audit_events WHERE run_id = ? AND sequence = 1").get(started.run_id).value_json);
+  tampered.actor.actor_id = "tampered-agent";
+  database.prepare("UPDATE p0_pipeline_audit_events SET value_json = ? WHERE run_id = ? AND sequence = 1").run(JSON.stringify(tampered), started.run_id);
+  await assert.rejects(
+    restarted.audit(started.run_id),
+    (error) => error instanceof PipelineOrchestratorError && error.code === "PIPELINE_AUDIT_CORRUPT",
+  );
+  database.close();
+});
+
+test("verified output without exact policy and Playbook bindings is rejected before persistence", async () => {
+  const database = new DatabaseSync(":memory:");
+  const { orchestrator } = fixture(database);
+  const started = await orchestrator.start("owner", inputVersions());
+  const goalComplete = await orchestrator.recordGoalCandidate({
+    run_id: started.run_id,
+    expected_version: started.version,
+    candidate: goalCandidate(),
+  });
+  const incomplete = verifiedAttempt("EVIDENCE_COLLECTION", "a");
+  incomplete.policies = [];
+
+  await assert.rejects(
+    orchestrator.advance({
+      run_id: goalComplete.run_id,
+      expected_version: goalComplete.version,
+      source_stage: "EVIDENCE_COLLECTION",
+      reason_code: "EVIDENCE_VERIFIED",
+      reason: "Сведения проверены.",
+      attempt: incomplete,
+    }),
+    (error) => error instanceof PipelineOrchestratorError && error.code === "PIPELINE_VERIFIED_ATTEMPT_INVALID",
+  );
+  assert.equal((await orchestrator.current("owner")).version, goalComplete.version);
+  assert.equal((await orchestrator.audit(started.run_id)).length, 2);
   database.close();
 });
 

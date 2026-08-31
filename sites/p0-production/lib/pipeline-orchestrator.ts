@@ -18,6 +18,7 @@ export const PIPELINE_ORCHESTRATOR_CONTRACT = "mox-adv.p0.pipeline-orchestrator"
 export const PIPELINE_ORCHESTRATOR_VERSION = "1.2.0";
 export const PIPELINE_RUN_SCHEMA = "p0-pipeline-run-v1";
 export const PIPELINE_INPUT_VERSIONS_SCHEMA = "p0-pipeline-input-versions-v2";
+export const PIPELINE_AUDIT_EVENT_SCHEMA = "p0-pipeline-audit-event-v1";
 
 export const PIPELINE_STAGES = [
   { id: "CAMPAIGN_GOAL", label: "Цель кампании" },
@@ -32,6 +33,7 @@ export type PipelineStageStatus = "PENDING" | "ACTIVE" | "COMPLETED" | "RETURNED
 export type PipelineRunStatus = "ACTIVE" | "STOPPED" | "COMPLETED" | "FAILED";
 export type PipelineReturnCause = "GOAL_CONFLICT" | "EVIDENCE_REQUEST" | "STRATEGY_DEFECT";
 export type PipelineTransitionKind = "START" | "ADVANCE" | "RETURN" | "RETRY" | "STOP" | "COMPLETE";
+export type PipelineAuditEventKind = "RUN_STARTED" | "STAGE_VERIFIED" | "ATTEMPT_DISCARDED" | "RUN_STOPPED" | "RUN_COMPLETED";
 
 export type PipelineVersionReference = {
   schema_version: string;
@@ -66,6 +68,63 @@ export type PipelineTransition = {
   reason_code: string;
   reason: string;
   recorded_at: string;
+};
+
+export type PipelineAuditActor = {
+  actor_id: string;
+  actor_type: "OWNER" | "AGENT" | "DETERMINISTIC_SERVICE";
+  role: string;
+};
+
+export type PipelineAuditCheck = {
+  check_id: string;
+  status: "PASSED" | "FAILED";
+  policy: PipelineVersionReference;
+};
+
+export type PipelineVerifiedAttempt = {
+  actor: PipelineAuditActor;
+  inputs: PipelineVersionReference[];
+  evidence: PipelineVersionReference[];
+  output: PipelineVersionReference;
+  checks: PipelineAuditCheck[];
+  schemas: PipelineVersionReference[];
+  policies: PipelineVersionReference[];
+  campaign_playbook: PipelineVersionReference;
+};
+
+export type PipelineDiscardedAttempt = Omit<PipelineVerifiedAttempt, "output"> & {
+  output: PipelineVersionReference | null;
+};
+
+export type PipelineAuditEvent = {
+  schema_version: typeof PIPELINE_AUDIT_EVENT_SCHEMA;
+  run_id: string;
+  sequence: number;
+  run_version: number;
+  event_kind: PipelineAuditEventKind;
+  stage: PipelineStageId;
+  attempt: number;
+  actor: PipelineAuditActor;
+  input_versions_digest: string;
+  inputs: PipelineVersionReference[];
+  evidence: PipelineVersionReference[];
+  output: {
+    status: "NONE" | "VERIFIED" | "DISCARDED";
+    reference: PipelineVersionReference | null;
+  };
+  checks: PipelineAuditCheck[];
+  schemas: PipelineVersionReference[];
+  policies: PipelineVersionReference[];
+  campaign_playbook: PipelineVersionReference;
+  retry: { next_attempt: number } | null;
+  return: { target_stage: PipelineStageId } | null;
+  handoff: { target_stage: PipelineStageId } | null;
+  current_product_link: PipelineVersionReference | null;
+  reason_code: string;
+  recorded_at: string;
+  previous_event_digest: string | null;
+  event_digest: string;
 };
 
 export type PipelineRunState = {
@@ -123,8 +182,9 @@ export interface PipelineRunStore {
   load(runId: string): Promise<PipelineRunState | null>;
   loadCurrent(ownerKey: string): Promise<PipelineRunState | null>;
   loadActive(ownerKey: string): Promise<PipelineRunState | null>;
-  initialize(state: PipelineRunState): Promise<boolean>;
-  compareAndSwap(runId: string, expectedVersion: number, state: PipelineRunState): Promise<boolean>;
+  loadAudit(runId: string): Promise<PipelineAuditEvent[]>;
+  initialize(state: PipelineRunState, event: PipelineAuditEvent): Promise<boolean>;
+  compareAndSwap(runId: string, expectedVersion: number, state: PipelineRunState, event: PipelineAuditEvent): Promise<boolean>;
 }
 
 export class PipelineOrchestratorError extends Error {
@@ -222,6 +282,159 @@ export async function pipelineDigest(value: unknown) {
   const bytes = new TextEncoder().encode(JSON.stringify(canonicalize(value)));
   const result = await crypto.subtle.digest("SHA-256", bytes);
   return `sha256:${[...new Uint8Array(result)].map((item) => item.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function sameReference(left: PipelineVersionReference, right: PipelineVersionReference) {
+  return left.schema_version === right.schema_version
+    && left.revision_id === right.revision_id
+    && left.digest === right.digest;
+}
+
+function validActor(value: unknown): value is PipelineAuditActor {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const actor = value as Record<string, unknown>;
+  return exactKeys(actor, ["actor_id", "actor_type", "role"])
+    && IDENTIFIER.test(String(actor.actor_id))
+    && ["OWNER", "AGENT", "DETERMINISTIC_SERVICE"].includes(String(actor.actor_type))
+    && REASON_CODE.test(String(actor.role));
+}
+
+function validReferences(value: unknown, minimum = 0): value is PipelineVersionReference[] {
+  return Array.isArray(value) && value.length >= minimum && value.every(validVersionReference);
+}
+
+function validChecks(value: unknown, minimum = 0): value is PipelineAuditCheck[] {
+  return Array.isArray(value) && value.length >= minimum && value.every((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+    const check = item as Record<string, unknown>;
+    return exactKeys(check, ["check_id", "status", "policy"])
+      && REASON_CODE.test(String(check.check_id))
+      && ["PASSED", "FAILED"].includes(String(check.status))
+      && validVersionReference(check.policy);
+  });
+}
+
+function assertVerifiedAttempt(attempt: PipelineVerifiedAttempt, inputs: PipelineInputVersions) {
+  if (!attempt || typeof attempt !== "object" || Array.isArray(attempt)
+    || !exactKeys(attempt, ["actor", "inputs", "evidence", "output", "checks", "schemas", "policies", "campaign_playbook"])
+    || !validActor(attempt.actor)
+    || !validReferences(attempt.inputs, 1)
+    || !validReferences(attempt.evidence, 1)
+    || !validVersionReference(attempt.output)
+    || !validChecks(attempt.checks, 1)
+    || attempt.checks.some((check) => check.status !== "PASSED")
+    || !validReferences(attempt.schemas, 1)
+    || !validReferences(attempt.policies, 1)
+    || !validVersionReference(attempt.campaign_playbook)
+    || !attempt.policies.some((policy) => sameReference(policy, inputs.pipeline_policy))
+    || !sameReference(attempt.campaign_playbook, inputs.campaign_playbook)) {
+    throw new PipelineOrchestratorError("PIPELINE_VERIFIED_ATTEMPT_INVALID", "A verified output requires typed inputs, evidence, passed checks, schemas, policy, and Campaign Playbook bindings.");
+  }
+}
+
+function assertDiscardedAttempt(attempt: PipelineDiscardedAttempt, inputs: PipelineInputVersions) {
+  if (!attempt || typeof attempt !== "object" || Array.isArray(attempt)
+    || !exactKeys(attempt, ["actor", "inputs", "evidence", "output", "checks", "schemas", "policies", "campaign_playbook"])
+    || !validActor(attempt.actor)
+    || !validReferences(attempt.inputs)
+    || !validReferences(attempt.evidence)
+    || (attempt.output !== null && !validVersionReference(attempt.output))
+    || !validChecks(attempt.checks)
+    || !validReferences(attempt.schemas)
+    || !validReferences(attempt.policies)
+    || !validVersionReference(attempt.campaign_playbook)
+    || !sameReference(attempt.campaign_playbook, inputs.campaign_playbook)) {
+    throw new PipelineOrchestratorError("PIPELINE_DISCARDED_ATTEMPT_INVALID", "A discarded attempt may persist only typed sanitized provenance metadata.");
+  }
+}
+
+export async function verifyPipelineAuditTrail(events: unknown, run?: PipelineRunState): Promise<PipelineAuditEvent[]> {
+  if (!Array.isArray(events)) {
+    throw new PipelineOrchestratorError("PIPELINE_AUDIT_CORRUPT", "Pipeline audit trail is not an array.");
+  }
+  let previousDigest: string | null = null;
+  for (let index = 0; index < events.length; index += 1) {
+    const value = events[index];
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new PipelineOrchestratorError("PIPELINE_AUDIT_CORRUPT", "Pipeline audit event is not an object.");
+    }
+    const event = value as PipelineAuditEvent;
+    if (!exactKeys(event, [
+      "schema_version", "run_id", "sequence", "run_version", "event_kind", "stage", "attempt", "actor",
+      "input_versions_digest", "inputs", "evidence", "output", "checks", "schemas", "policies", "campaign_playbook",
+      "retry", "return", "handoff", "current_product_link", "reason_code", "recorded_at", "previous_event_digest", "event_digest",
+    ])
+      || event.schema_version !== PIPELINE_AUDIT_EVENT_SCHEMA
+      || !IDENTIFIER.test(String(event.run_id))
+      || event.sequence !== index || event.run_version !== index
+      || !["RUN_STARTED", "STAGE_VERIFIED", "ATTEMPT_DISCARDED", "RUN_STOPPED", "RUN_COMPLETED"].includes(event.event_kind)
+      || !stageId(event.stage)
+      || !Number.isSafeInteger(event.attempt) || event.attempt < 1
+      || !validActor(event.actor)
+      || !SHA256_DIGEST.test(String(event.input_versions_digest))
+      || !validReferences(event.inputs) || !validReferences(event.evidence)
+      || !event.output || !exactKeys(event.output, ["status", "reference"])
+      || !["NONE", "VERIFIED", "DISCARDED"].includes(event.output.status)
+      || (event.output.reference !== null && !validVersionReference(event.output.reference))
+      || !validChecks(event.checks) || !validReferences(event.schemas) || !validReferences(event.policies)
+      || !validVersionReference(event.campaign_playbook)
+      || (event.retry !== null && (!exactKeys(event.retry, ["next_attempt"]) || !Number.isSafeInteger(event.retry.next_attempt) || event.retry.next_attempt <= event.attempt))
+      || (event.return !== null && (!exactKeys(event.return, ["target_stage"]) || !stageId(event.return.target_stage)))
+      || (event.handoff !== null && (!exactKeys(event.handoff, ["target_stage"]) || !stageId(event.handoff.target_stage)))
+      || (event.current_product_link !== null && !validVersionReference(event.current_product_link))
+      || !REASON_CODE.test(String(event.reason_code))
+      || !validText(event.recorded_at)
+      || event.previous_event_digest !== previousDigest
+      || !SHA256_DIGEST.test(String(event.event_digest))) {
+      throw new PipelineOrchestratorError("PIPELINE_AUDIT_CORRUPT", "Pipeline audit event violates the closed sanitized schema.");
+    }
+    if (["STAGE_VERIFIED", "RUN_COMPLETED"].includes(event.event_kind)) {
+      if (event.output.status !== "VERIFIED" || event.output.reference === null || event.current_product_link === null
+        || !sameReference(event.output.reference, event.current_product_link)
+        || event.inputs.length === 0 || event.evidence.length === 0 || event.checks.length === 0
+        || event.checks.some((check) => check.status !== "PASSED") || event.schemas.length === 0 || event.policies.length === 0) {
+        throw new PipelineOrchestratorError("PIPELINE_AUDIT_CORRUPT", "Verified audit output is missing reproducibility bindings.");
+      }
+    } else if (event.current_product_link !== null) {
+      throw new PipelineOrchestratorError("PIPELINE_AUDIT_CORRUPT", "Only a verified output may receive a current product link.");
+    }
+    if (event.event_kind === "RUN_STARTED"
+      && (event.sequence !== 0 || event.output.status !== "NONE" || event.handoff?.target_stage !== event.stage
+        || event.retry !== null || event.return !== null)) {
+      throw new PipelineOrchestratorError("PIPELINE_AUDIT_CORRUPT", "Pipeline start provenance is inconsistent.");
+    }
+    if (event.event_kind === "STAGE_VERIFIED" && event.handoff === null) {
+      throw new PipelineOrchestratorError("PIPELINE_AUDIT_CORRUPT", "A verified stage must record its handoff.");
+    }
+    if (event.event_kind === "RUN_COMPLETED" && (event.handoff !== null || event.retry !== null || event.return !== null)) {
+      throw new PipelineOrchestratorError("PIPELINE_AUDIT_CORRUPT", "Completed run provenance cannot transfer more work.");
+    }
+    if (event.event_kind === "ATTEMPT_DISCARDED"
+      && (event.output.status !== "DISCARDED" || Number(event.retry !== null) + Number(event.return !== null) !== 1
+        || event.handoff !== null)) {
+      throw new PipelineOrchestratorError("PIPELINE_AUDIT_CORRUPT", "An unverified attempt must be discarded as one retry or return.");
+    }
+    if (event.event_kind === "RUN_STOPPED"
+      && (event.output.status !== "NONE" || event.retry !== null || event.return !== null || event.handoff !== null)) {
+      throw new PipelineOrchestratorError("PIPELINE_AUDIT_CORRUPT", "Stopped run provenance cannot retain or transfer output.");
+    }
+    const unsigned = Object.fromEntries(Object.entries(event).filter(([key]) => key !== "event_digest"));
+    if (await pipelineDigest(unsigned) !== event.event_digest) {
+      throw new PipelineOrchestratorError("PIPELINE_AUDIT_CORRUPT", "Pipeline audit digest chain does not verify.");
+    }
+    if (run && (event.run_id !== run.run_id
+      || event.input_versions_digest !== run.input_versions_digest
+      || !sameReference(event.campaign_playbook, run.input_versions.campaign_playbook)
+      || (["STAGE_VERIFIED", "RUN_COMPLETED"].includes(event.event_kind)
+        && !event.policies.some((policy) => sameReference(policy, run.input_versions.pipeline_policy))))) {
+      throw new PipelineOrchestratorError("PIPELINE_AUDIT_CORRUPT", "Pipeline audit event is not bound to the persisted run inputs.");
+    }
+    previousDigest = event.event_digest;
+  }
+  if (run && (events.length !== run.version + 1 || events.at(-1)?.run_version !== run.version)) {
+    throw new PipelineOrchestratorError("PIPELINE_AUDIT_CORRUPT", "Pipeline state does not have one immutable audit event per revision.");
+  }
+  return events as PipelineAuditEvent[];
 }
 
 function clone<T>(value: T): T {
@@ -383,6 +596,62 @@ const RETURN_TARGETS: Record<PipelineReturnCause, PipelineStageId> = {
   STRATEGY_DEFECT: "STRATEGY",
 };
 
+type AuditEventValues = {
+  event_kind: PipelineAuditEventKind;
+  stage: PipelineStageId;
+  attempt: number;
+  actor: PipelineAuditActor;
+  inputs?: PipelineVersionReference[];
+  evidence?: PipelineVersionReference[];
+  output?: PipelineAuditEvent["output"];
+  checks?: PipelineAuditCheck[];
+  schemas?: PipelineVersionReference[];
+  policies?: PipelineVersionReference[];
+  retry?: PipelineAuditEvent["retry"];
+  return?: PipelineAuditEvent["return"];
+  handoff?: PipelineAuditEvent["handoff"];
+  current_product_link?: PipelineVersionReference | null;
+  reason_code: string;
+};
+
+async function sealAuditEvent(input: {
+  run: PipelineRunState;
+  sequence: number;
+  recorded_at: string;
+  previous_event_digest: string | null;
+  values: AuditEventValues;
+}): Promise<PipelineAuditEvent> {
+  const eventWithoutDigest: Omit<PipelineAuditEvent, "event_digest"> = {
+    schema_version: PIPELINE_AUDIT_EVENT_SCHEMA,
+    run_id: input.run.run_id,
+    sequence: input.sequence,
+    run_version: input.sequence,
+    event_kind: input.values.event_kind,
+    stage: input.values.stage,
+    attempt: input.values.attempt,
+    actor: clone(input.values.actor),
+    input_versions_digest: input.run.input_versions_digest,
+    inputs: clone(input.values.inputs ?? []),
+    evidence: clone(input.values.evidence ?? []),
+    output: clone(input.values.output ?? { status: "NONE", reference: null }),
+    checks: clone(input.values.checks ?? []),
+    schemas: clone(input.values.schemas ?? []),
+    policies: clone(input.values.policies ?? []),
+    campaign_playbook: clone(input.run.input_versions.campaign_playbook),
+    retry: clone(input.values.retry ?? null),
+    return: clone(input.values.return ?? null),
+    handoff: clone(input.values.handoff ?? null),
+    current_product_link: clone(input.values.current_product_link ?? null),
+    reason_code: input.values.reason_code,
+    recorded_at: input.recorded_at,
+    previous_event_digest: input.previous_event_digest,
+  };
+  return {
+    ...eventWithoutDigest,
+    event_digest: await pipelineDigest(eventWithoutDigest),
+  };
+}
+
 export class PipelineOrchestrator {
   private readonly store: PipelineRunStore;
   private readonly now: () => string;
@@ -404,8 +673,16 @@ export class PipelineOrchestrator {
     return state ? clone(state) : null;
   }
 
+  async audit(runId: string) {
+    const state = await this.store.load(runId);
+    if (!state) throw new PipelineOrchestratorError("PIPELINE_RUN_NOT_FOUND", "Pipeline run was not found.");
+    const events = await this.store.loadAudit(runId);
+    await verifyPipelineAuditTrail(events, state);
+    return clone(events);
+  }
+
   async start(ownerKey: string, inputVersions: PipelineInputVersions) {
-    if (!validText(ownerKey)) {
+    if (!IDENTIFIER.test(ownerKey)) {
       throw new PipelineOrchestratorError("PIPELINE_OWNER_INVALID", "Pipeline owner key is required.");
     }
     assertPipelineInputVersions(inputVersions);
@@ -451,7 +728,22 @@ export class PipelineOrchestrator {
         updated_at: timestamp,
       };
       await verifyPipelineRunState(state);
-      if (await this.store.initialize(state)) return clone(state);
+      const event = await sealAuditEvent({
+        run: state,
+        sequence: 0,
+        recorded_at: timestamp,
+        previous_event_digest: null,
+        values: {
+          event_kind: "RUN_STARTED",
+          stage: "CAMPAIGN_GOAL",
+          attempt: 1,
+          actor: { actor_id: ownerKey, actor_type: "OWNER", role: "PIPELINE_OWNER" },
+          handoff: { target_stage: "CAMPAIGN_GOAL" },
+          reason_code: "OWNER_START",
+        },
+      });
+      await verifyPipelineAuditTrail([event], state);
+      if (await this.store.initialize(state, event)) return clone(state);
       if (await this.store.loadActive(ownerKey)) {
         throw new PipelineOrchestratorError("PIPELINE_RUN_ALREADY_ACTIVE", "Another start action created the active pipeline run.");
       }
@@ -484,7 +776,13 @@ export class PipelineOrchestrator {
     };
     next.work_control = { issue_actions: false, cancellation: "REQUESTED", unverified_output: "NEVER_PERSISTED" };
     next.updated_at = timestamp;
-    return this.persist(current, next);
+    return this.persist(current, next, {
+      event_kind: "RUN_STOPPED",
+      stage: current.current_stage,
+      attempt: current.stage_attempt,
+      actor: { actor_id: current.owner_key, actor_type: "OWNER", role: "PIPELINE_OWNER" },
+      reason_code: typedReason.reason_code,
+    });
   }
 
   async recordGoalCandidate(input: {
@@ -503,6 +801,21 @@ export class PipelineOrchestrator {
     next.version += 1;
     next.goal_formation = result;
     next.updated_at = timestamp;
+    const exactInputs = pipelineGoalInputReferences(current.input_versions).map((reference) => ({
+      schema_version: reference.schema_version,
+      revision_id: reference.revision_id,
+      digest: reference.digest,
+    }));
+    const goalSchema = {
+      schema_version: "p0-goal-revision-contract",
+      revision_id: "1.0.0",
+      digest: await pipelineDigest({ schema_version: "p0-goal-revision-v1", contract_version: "1.0.0" }),
+    };
+    const actor: PipelineAuditActor = {
+      actor_id: "goal-revision-verifier",
+      actor_type: "DETERMINISTIC_SERVICE",
+      role: "GOAL_VALIDATOR",
+    };
     if (result.status === "MATERIAL_DECISION_REQUIRED") {
       next.stage_attempt += 1;
       next.last_transition = {
@@ -513,7 +826,25 @@ export class PipelineOrchestrator {
         reason: result.reason,
         recorded_at: timestamp,
       };
-      return this.persist(current, next);
+      const discardedDecision = {
+        schema_version: "p0-goal-material-decision-v1",
+        revision_id: `${current.run_id}:goal-attempt:${current.stage_attempt}`,
+        digest: await pipelineDigest(result),
+      };
+      return this.persist(current, next, {
+        event_kind: "ATTEMPT_DISCARDED",
+        stage: "CAMPAIGN_GOAL",
+        attempt: current.stage_attempt,
+        actor,
+        inputs: exactInputs,
+        evidence: exactInputs,
+        output: { status: "DISCARDED", reference: discardedDecision },
+        checks: [{ check_id: "GOAL_MATERIAL_AMBIGUITY", status: "FAILED", policy: current.input_versions.pipeline_policy }],
+        schemas: [goalSchema],
+        policies: [current.input_versions.pipeline_policy],
+        retry: { next_attempt: next.stage_attempt },
+        reason_code: "GOAL_MATERIAL_AMBIGUITY",
+      });
     }
     next.current_stage = "EVIDENCE_COLLECTION";
     next.stage_attempt = 1;
@@ -529,7 +860,26 @@ export class PipelineOrchestrator {
       reason: "Полная GoalRevision прошла детерминированную проверку.",
       recorded_at: timestamp,
     };
-    return this.persist(current, next);
+    const goalRevision = {
+      schema_version: result.revision.schema_version,
+      revision_id: result.revision.goal_revision_id,
+      digest: result.revision.digest,
+    };
+    return this.persist(current, next, {
+      event_kind: "STAGE_VERIFIED",
+      stage: "CAMPAIGN_GOAL",
+      attempt: current.stage_attempt,
+      actor,
+      inputs: exactInputs,
+      evidence: exactInputs,
+      output: { status: "VERIFIED", reference: goalRevision },
+      checks: [{ check_id: "GOAL_REVISION_VERIFIED", status: "PASSED", policy: current.input_versions.pipeline_policy }],
+      schemas: [goalSchema],
+      policies: [current.input_versions.pipeline_policy],
+      handoff: { target_stage: "EVIDENCE_COLLECTION" },
+      current_product_link: goalRevision,
+      reason_code: "GOAL_VERIFIED",
+    });
   }
 
   async advance(input: {
@@ -538,12 +888,14 @@ export class PipelineOrchestrator {
     source_stage: PipelineStageId;
     reason_code: string;
     reason: string;
+    attempt: PipelineVerifiedAttempt;
   }) {
     const current = await this.activeRun(input.run_id, input.expected_version, input.source_stage);
     if (current.current_stage === "CAMPAIGN_GOAL") {
       throw new PipelineOrchestratorError("PIPELINE_GOAL_RESULT_REQUIRED", "Campaign Goal advances only through a verified Goal Agent candidate.");
     }
     const typedReason = transitionReason(input.reason_code, input.reason);
+    assertVerifiedAttempt(input.attempt, current.input_versions);
     const sourceIndex = PIPELINE_STAGES.findIndex((stage) => stage.id === current.current_stage);
     const timestamp = this.now();
     const next = clone(current);
@@ -561,7 +913,20 @@ export class PipelineOrchestrator {
         recorded_at: timestamp,
       };
       next.work_control = { issue_actions: false, cancellation: "NONE", unverified_output: "NEVER_PERSISTED" };
-      return this.persist(current, next);
+      return this.persist(current, next, {
+        event_kind: "RUN_COMPLETED",
+        stage: current.current_stage,
+        attempt: current.stage_attempt,
+        actor: input.attempt.actor,
+        inputs: input.attempt.inputs,
+        evidence: input.attempt.evidence,
+        output: { status: "VERIFIED", reference: input.attempt.output },
+        checks: input.attempt.checks,
+        schemas: input.attempt.schemas,
+        policies: input.attempt.policies,
+        current_product_link: input.attempt.output,
+        reason_code: typedReason.reason_code,
+      });
     }
     const target = PIPELINE_STAGES[sourceIndex + 1].id;
     next.current_stage = target;
@@ -582,7 +947,21 @@ export class PipelineOrchestrator {
       ...typedReason,
       recorded_at: timestamp,
     };
-    return this.persist(current, next);
+    return this.persist(current, next, {
+      event_kind: "STAGE_VERIFIED",
+      stage: current.current_stage,
+      attempt: current.stage_attempt,
+      actor: input.attempt.actor,
+      inputs: input.attempt.inputs,
+      evidence: input.attempt.evidence,
+      output: { status: "VERIFIED", reference: input.attempt.output },
+      checks: input.attempt.checks,
+      schemas: input.attempt.schemas,
+      policies: input.attempt.policies,
+      handoff: { target_stage: target },
+      current_product_link: input.attempt.output,
+      reason_code: typedReason.reason_code,
+    });
   }
 
   async returnTo(input: {
@@ -591,8 +970,10 @@ export class PipelineOrchestrator {
     source_stage: PipelineStageId;
     cause: PipelineReturnCause;
     reason: string;
+    attempt: PipelineDiscardedAttempt;
   }) {
     const current = await this.activeRun(input.run_id, input.expected_version, input.source_stage);
+    assertDiscardedAttempt(input.attempt, current.input_versions);
     const target = RETURN_TARGETS[input.cause];
     if (!target) {
       throw new PipelineOrchestratorError("PIPELINE_RETURN_CAUSE_INVALID", "The return cause is not supported by the deterministic transition table.");
@@ -626,7 +1007,20 @@ export class PipelineOrchestrator {
       recorded_at: timestamp,
     };
     next.updated_at = timestamp;
-    return this.persist(current, next);
+    return this.persist(current, next, {
+      event_kind: "ATTEMPT_DISCARDED",
+      stage: current.current_stage,
+      attempt: current.stage_attempt,
+      actor: input.attempt.actor,
+      inputs: input.attempt.inputs,
+      evidence: input.attempt.evidence,
+      output: { status: "DISCARDED", reference: input.attempt.output },
+      checks: input.attempt.checks,
+      schemas: input.attempt.schemas,
+      policies: input.attempt.policies,
+      return: { target_stage: target },
+      reason_code: typedReason.reason_code,
+    });
   }
 
   async retry(input: {
@@ -635,9 +1029,11 @@ export class PipelineOrchestrator {
     source_stage: PipelineStageId;
     reason_code: string;
     reason: string;
+    attempt: PipelineDiscardedAttempt;
   }) {
     const current = await this.activeRun(input.run_id, input.expected_version, input.source_stage);
     const typedReason = transitionReason(input.reason_code, input.reason);
+    assertDiscardedAttempt(input.attempt, current.input_versions);
     const timestamp = this.now();
     const next = clone(current);
     next.version += 1;
@@ -650,7 +1046,20 @@ export class PipelineOrchestrator {
       recorded_at: timestamp,
     };
     next.updated_at = timestamp;
-    return this.persist(current, next);
+    return this.persist(current, next, {
+      event_kind: "ATTEMPT_DISCARDED",
+      stage: current.current_stage,
+      attempt: current.stage_attempt,
+      actor: input.attempt.actor,
+      inputs: input.attempt.inputs,
+      evidence: input.attempt.evidence,
+      output: { status: "DISCARDED", reference: input.attempt.output },
+      checks: input.attempt.checks,
+      schemas: input.attempt.schemas,
+      policies: input.attempt.policies,
+      retry: { next_attempt: next.stage_attempt },
+      reason_code: typedReason.reason_code,
+    });
   }
 
   private async activeRun(runId: string, expectedVersion: number, sourceStage?: PipelineStageId) {
@@ -669,9 +1078,19 @@ export class PipelineOrchestrator {
     return current;
   }
 
-  private async persist(current: PipelineRunState, next: PipelineRunState) {
+  private async persist(current: PipelineRunState, next: PipelineRunState, values: AuditEventValues) {
     await verifyPipelineRunState(next);
-    if (!await this.store.compareAndSwap(current.run_id, current.version, next)) {
+    const trail = await this.store.loadAudit(current.run_id);
+    await verifyPipelineAuditTrail(trail, current);
+    const event = await sealAuditEvent({
+      run: next,
+      sequence: next.version,
+      recorded_at: next.updated_at,
+      previous_event_digest: trail.at(-1)?.event_digest ?? null,
+      values,
+    });
+    await verifyPipelineAuditTrail([...trail, event], next);
+    if (!await this.store.compareAndSwap(current.run_id, current.version, next, event)) {
       throw new PipelineOrchestratorError("PIPELINE_RUN_STALE", "Another deterministic transition won the compare-and-swap.");
     }
     return clone(next);

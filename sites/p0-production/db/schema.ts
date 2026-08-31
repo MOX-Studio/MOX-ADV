@@ -39,6 +39,21 @@ export const p0PipelineRunRevisions = sqliteTable("p0_pipeline_run_revisions", {
   recordedAt: text("recorded_at").notNull(),
 }, (table) => [primaryKey({ columns: [table.runId, table.version] })]);
 
+export const p0PipelineAuditEvents = sqliteTable("p0_pipeline_audit_events", {
+  runId: text("run_id").notNull(),
+  sequence: integer("sequence").notNull(),
+  runVersion: integer("run_version").notNull(),
+  eventKind: text("event_kind").notNull(),
+  stage: text("stage").notNull(),
+  attempt: integer("attempt").notNull(),
+  actorId: text("actor_id").notNull(),
+  inputVersionsDigest: text("input_versions_digest").notNull(),
+  previousEventDigest: text("previous_event_digest"),
+  eventDigest: text("event_digest").notNull().unique(),
+  valueJson: text("value_json").notNull(),
+  recordedAt: text("recorded_at").notNull(),
+}, (table) => [primaryKey({ columns: [table.runId, table.sequence] })]);
+
 export const p0Executions = sqliteTable("p0_executions", {
   executionId: text("execution_id").primaryKey(),
   userKey: text("user_key").notNull(),
