@@ -54,6 +54,17 @@ export const p0PipelineAuditEvents = sqliteTable("p0_pipeline_audit_events", {
   recordedAt: text("recorded_at").notNull(),
 }, (table) => [primaryKey({ columns: [table.runId, table.sequence] })]);
 
+export const p0PipelineLegacyAudit = sqliteTable("p0_pipeline_legacy_audit", {
+  ownerKey: text("owner_key").notNull(),
+  revision: integer("revision").notNull(),
+  auditSchema: text("audit_schema").notNull(),
+  sourceSchema: text("source_schema").notNull(),
+  sourceUpdatedAt: text("source_updated_at").notNull(),
+  sourceDigest: text("source_digest").notNull(),
+  valueJson: text("value_json").notNull(),
+  archivedAt: text("archived_at").notNull(),
+}, (table) => [primaryKey({ columns: [table.ownerKey, table.revision] })]);
+
 export const p0Executions = sqliteTable("p0_executions", {
   executionId: text("execution_id").primaryKey(),
   userKey: text("user_key").notNull(),
