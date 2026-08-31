@@ -4,10 +4,7 @@ import type {
   AccessReadinessAdapter,
 } from "./access-readiness.ts";
 import { cleanText } from "./text.ts";
-import {
-  WORDSTAT_SCOPE_ENDPOINT,
-  validateWordstatProviderScope,
-} from "./market-evidence.ts";
+import { validateWordstatProviderScope } from "./market-evidence.ts";
 import {
   verifyDirectAccountBinding,
   verifyMetrikaCounterBinding,
@@ -23,8 +20,8 @@ type YandexAccessConfiguration = {
   metrikaToken: string;
   metrikaExpectedCounterId?: string;
   metrikaGoalId: string;
-  wordstatToken: string;
-  wordstatClientId: string;
+  wordstatUiBridgeUrl: string;
+  wordstatUiBridgeToken: string;
   wordstatRegionIds: unknown[];
   wordstatRegionNames: unknown[];
   wordstatDevice: unknown;
@@ -211,42 +208,29 @@ export class YandexAccessReadinessAdapter implements AccessReadinessAdapter {
   }
 
   private async verifyWordstatScope() {
-    if (!this.configuration.wordstatToken || !this.configuration.wordstatClientId) {
-      throw new Error("Wordstat server credential or registered client binding is unavailable.");
-    }
-    const scope = validateWordstatProviderScope({
+    validateWordstatProviderScope({
       regionIds: this.configuration.wordstatRegionIds,
       regionNames: this.configuration.wordstatRegionNames,
       device: this.configuration.wordstatDevice,
     });
-    const payload = await jsonResponse(await this.fetcher(WORDSTAT_SCOPE_ENDPOINT, {
-      method: "POST",
+    if (!this.configuration.wordstatUiBridgeUrl || !this.configuration.wordstatUiBridgeToken) {
+      throw new Error("Headless Wordstat UI bridge is unavailable.");
+    }
+    const url = new URL(this.configuration.wordstatUiBridgeUrl);
+    if (url.protocol !== "http:" || url.hostname !== "127.0.0.1") {
+      throw new Error("Headless Wordstat UI bridge must use loopback HTTP.");
+    }
+    const health = new URL("/health", url);
+    const payload = await jsonResponse(await this.fetcher(health, {
+      method: "GET",
       redirect: "error",
       headers: {
-        Authorization: `Bearer ${this.configuration.wordstatToken}`,
+        Authorization: `Bearer ${this.configuration.wordstatUiBridgeToken}`,
         Accept: "application/json",
-        "Content-Type": "application/json",
       },
-      body: JSON.stringify({}),
-    }), "Wordstat");
-    const supported = new Map<number, string>();
-    const visit = (value: unknown) => {
-      if (Array.isArray(value)) {
-        value.forEach(visit);
-        return;
-      }
-      if (!value || typeof value !== "object") return;
-      const item = record(value);
-      const id = Number(item.id ?? item.regionId);
-      const name = cleanText(String(item.name ?? item.regionName ?? ""), 255);
-      if (Number.isSafeInteger(id) && id > 0 && name) supported.set(id, name);
-      for (const child of Object.values(item)) {
-        if (child && typeof child === "object") visit(child);
-      }
-    };
-    visit(payload.regions ?? payload);
-    const exact = scope.regionIds.every((id, index) =>
-      cleanText(supported.get(id) ?? "", 255).toLocaleLowerCase("ru-RU") === scope.regionNames[index].toLocaleLowerCase("ru-RU"));
-    if (!exact) throw new Error("Configured Wordstat region IDs and names do not match the official region tree.");
+    }), "Wordstat UI bridge");
+    if (payload.ok !== true || payload.provider !== "yandex-wordstat-ui" || payload.transport !== "HEADLESS_PLAYWRIGHT") {
+      throw new Error("Headless Wordstat UI bridge did not confirm its production transport.");
+    }
   }
 }

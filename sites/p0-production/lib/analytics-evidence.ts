@@ -64,7 +64,7 @@ export type EvidenceSource = {
   source_id: string;
   title: string;
   source_kind: string;
-  provenance_class: "FIRST_PARTY_PUBLIC" | "OWNER_CONFIRMED" | "DIRECT_OFFICIAL_API" | "METRIKA_OFFICIAL_API" | "COMPETITOR_PUBLIC" | "WORDSTAT_OFFICIAL_API" | "GIR_BO_OFFICIAL";
+  provenance_class: "FIRST_PARTY_PUBLIC" | "OWNER_CONFIRMED" | "DIRECT_OFFICIAL_API" | "METRIKA_OFFICIAL_API" | "COMPETITOR_PUBLIC" | "WORDSTAT_OFFICIAL_API" | "WORDSTAT_OFFICIAL_UI" | "GIR_BO_OFFICIAL";
   status: EvidenceSourceStatus;
   observed_at: string | null;
   generated_at: string;
@@ -1760,6 +1760,7 @@ export async function buildAnalyticsEvidence({
     && marketEvidence.frequency.geo_evidence.status === "AVAILABLE"
     ? "VERIFIED"
     : marketEvidence.frequency.status === "UNAVAILABLE" ? "UNAVAILABLE" : "PARTIAL";
+  const wordstatUi = marketEvidence.frequency.source === "YANDEX_WORDSTAT_UI";
 
   const sources = await Promise.all([
     makeSource({
@@ -1930,8 +1931,8 @@ export async function buildAnalyticsEvidence({
     makeSource({
       source_id: "wordstat",
       title: "Спрос и Wordstat",
-      source_kind: "wordstat_api",
-      provenance_class: "WORDSTAT_OFFICIAL_API",
+      source_kind: wordstatUi ? "wordstat_ui" : "wordstat_api",
+      provenance_class: wordstatUi ? "WORDSTAT_OFFICIAL_UI" : "WORDSTAT_OFFICIAL_API",
       status: wordstatStatus,
       observed_at: wordstatStatus === "UNAVAILABLE" ? null : marketEvidence.batch_finished_at,
       generated_at: generated,
@@ -1942,21 +1943,34 @@ export async function buildAnalyticsEvidence({
         source_window_end: marketEvidence.frequency.source_window_end,
       },
       access: wordstatStatus === "UNAVAILABLE" ? "unavailable" : "owner_authorized",
-      collection_policy: {
+      collection_policy: wordstatUi ? {
+        policy_id: "official-yandex-wordstat-headless-ui-read-only",
+        version: "v1",
+        allowed_host: "wordstat.yandex.com",
+        transport: "HEADLESS_PLAYWRIGHT",
+        profile_session: "ISOLATED_CLONE",
+        api_fallback_allowed: false,
+      } : {
         policy_id: "official-yandex-wordstat-read-only",
         version: "v1",
         allowed_host: "api.wordstat.yandex.net",
         allowed_methods: ["POST /v1/topRequests", "POST /v1/dynamics", "POST /v1/regions"],
         browser_cabinet_allowed: false,
       },
-      versions: { schema: ANALYTICS_EVIDENCE_SCHEMA, extractor: "wordstat-v1-canonical-observation-v2", policy: "official-yandex-wordstat-read-only/v1" },
+      versions: {
+        schema: ANALYTICS_EVIDENCE_SCHEMA,
+        extractor: wordstatUi ? "wordstat-headless-ui-canonical-observation-v1" : "wordstat-v1-canonical-observation-v2",
+        policy: wordstatUi ? "official-yandex-wordstat-headless-ui-read-only/v1" : "official-yandex-wordstat-read-only/v1",
+      },
       facts: marketEvidence.frequency.status === "UNAVAILABLE" ? [] : [
         `${marketEvidence.frequency.unique_assigned_rows.length} unique assigned Wordstat top rows`,
         "Cluster frequency is LOWER_BOUND_OBSERVED_TOP_ROWS.",
       ],
       limitations: [
         "Wordstat frequency is not CPC, users, clicks, guaranteed impressions or a budget forecast.",
-        "The exact rolling 30-day source window end is undisclosed by the API.",
+        wordstatUi
+          ? "The exact scope and window are retained from the authenticated provider UI collection."
+          : "The exact rolling 30-day source window end is undisclosed by the API.",
         ...marketEvidence.frequency.gaps.map((gap) => gap.detail),
       ],
       evidence_ids: sourceEvidence.wordstat,

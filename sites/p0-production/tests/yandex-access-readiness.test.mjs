@@ -39,8 +39,8 @@ function fetcher(requests, { wrongCounter = false, directProUnavailable = false,
     if (url.endsWith("/management/v1/counter/1717/goals")) {
       return Response.json({ goals: [{ id: 77 }] });
     }
-    if (url === "https://api.wordstat.yandex.net/v1/getRegionsTree") {
-      return Response.json({ regions: [{ id: 213, name: "Москва", children: [] }] });
+    if (url === "http://127.0.0.1:19246/health") {
+      return Response.json({ ok: true, provider: "yandex-wordstat-ui", transport: "HEADLESS_PLAYWRIGHT", active: false });
     }
     throw new Error(`Unexpected request: ${url}`);
   };
@@ -54,15 +54,15 @@ function adapter(requests, options) {
     directBusinessLabel: "Основной бизнес",
     metrikaToken: "server-metrika-secret",
     metrikaGoalId: "77",
-    wordstatToken: "server-wordstat-secret",
-    wordstatClientId: "server-wordstat-client",
+    wordstatUiBridgeUrl: "http://127.0.0.1:19246",
+    wordstatUiBridgeToken: "server-wordstat-bridge-secret",
     wordstatRegionIds: [213],
     wordstatRegionNames: ["Москва"],
     wordstatDevice: "desktop",
   }, fetcher(requests, options), () => "2026-08-24T10:00:00.000Z");
 }
 
-test("discovers understandable account/counter choices only through official APIs", async () => {
+test("discovers understandable account/counter choices through official APIs and confirms the headless Wordstat bridge", async () => {
   const requests = [];
   const discovery = await adapter(requests).discover();
   assert.deepEqual(discovery.scopes, {
@@ -72,15 +72,14 @@ test("discovers understandable account/counter choices only through official API
   });
   assert.equal(discovery.accounts[0].label, "Промышленная выставка");
   assert.equal(discovery.counters[0].label, "Основной сайт");
-  assert.ok(requests.every((request) => /^https:\/\/(?:api\.direct\.yandex\.com|api-metrika\.yandex\.net|api\.wordstat\.yandex\.net)\//u.test(request.url)));
-  assert.ok(requests.every((request) => !/direct\.yandex\.(?:ru|com)\/loggedin|metrika\.yandex\.(?:ru|com)/iu.test(request.url)));
-  const wordstatRequest = requests.find((request) => request.url.includes("api.wordstat.yandex.net"));
-  assert.equal(wordstatRequest.init.method, "POST");
+  assert.ok(requests.every((request) => /^https:\/\/(?:api\.direct\.yandex\.com|api-metrika\.yandex\.net)\//u.test(request.url)
+    || request.url === "http://127.0.0.1:19246/health"));
+  assert.ok(requests.every((request) => !/direct\.yandex\.(?:ru|com)\/loggedin|metrika\.yandex\.(?:ru|com)|api\.wordstat\.yandex\.net/iu.test(request.url)));
+  const wordstatRequest = requests.find((request) => request.url === "http://127.0.0.1:19246/health");
+  assert.equal(wordstatRequest.init.method, "GET");
   assert.equal(wordstatRequest.init.redirect, "error");
-  assert.deepEqual(JSON.parse(String(wordstatRequest.init.body)), {});
-  assert.equal(wordstatRequest.init.headers.Authorization, "Bearer server-wordstat-secret");
-  assert.ok(!Object.keys(wordstatRequest.init.headers).some((key) => /client.?id/iu.test(key)));
-  assert.doesNotMatch(JSON.stringify(discovery), /server-(?:direct|metrika|wordstat)-secret|server-wordstat-client/u);
+  assert.equal(wordstatRequest.init.headers.Authorization, "Bearer server-wordstat-bridge-secret");
+  assert.doesNotMatch(JSON.stringify(discovery), /server-(?:direct|metrika|wordstat)-secret|server-wordstat-bridge-secret/u);
 });
 
 test("falls back to exact configured Campaigns.get read proof when Clients.get requires Direct Pro", async () => {
@@ -115,7 +114,7 @@ test("falls back to exact configured Campaigns.get read proof when Clients.get r
   assert.deepEqual(missing.accounts, []);
 });
 
-test("validates configured Wordstat region and device scope before evidence collection", async () => {
+test("validates configured Wordstat region and device scope before headless collection", async () => {
   const unsupportedRegionRequests = [];
   const unsupportedRegion = new YandexAccessReadinessAdapter({
     directToken: "server-direct-secret",
@@ -123,15 +122,15 @@ test("validates configured Wordstat region and device scope before evidence coll
     directCampaignId: "818181",
     metrikaToken: "server-metrika-secret",
     metrikaGoalId: "77",
-    wordstatToken: "server-wordstat-secret",
-    wordstatClientId: "server-wordstat-client",
-    wordstatRegionIds: [2],
-    wordstatRegionNames: ["Санкт-Петербург"],
+    wordstatUiBridgeUrl: "http://127.0.0.1:19246",
+    wordstatUiBridgeToken: "server-wordstat-bridge-secret",
+    wordstatRegionIds: [0],
+    wordstatRegionNames: ["Некорректный регион"],
     wordstatDevice: "desktop",
   }, fetcher(unsupportedRegionRequests));
   const unsupportedDiscovery = await unsupportedRegion.discover();
   assert.equal(unsupportedDiscovery.scopes.wordstat.granted, false);
-  assert.equal(unsupportedRegionRequests.filter((request) => request.url.includes("api.wordstat.yandex.net")).length, 1);
+  assert.equal(unsupportedRegionRequests.filter((request) => request.url === "http://127.0.0.1:19246/health").length, 0);
 
   const invalidDeviceRequests = [];
   const invalidDevice = new YandexAccessReadinessAdapter({
@@ -140,15 +139,15 @@ test("validates configured Wordstat region and device scope before evidence coll
     directCampaignId: "818181",
     metrikaToken: "server-metrika-secret",
     metrikaGoalId: "77",
-    wordstatToken: "server-wordstat-secret",
-    wordstatClientId: "server-wordstat-client",
+    wordstatUiBridgeUrl: "http://127.0.0.1:19246",
+    wordstatUiBridgeToken: "server-wordstat-bridge-secret",
     wordstatRegionIds: [213],
     wordstatRegionNames: ["Москва"],
     wordstatDevice: "smart-tv",
   }, fetcher(invalidDeviceRequests));
   const invalidDiscovery = await invalidDevice.discover();
   assert.equal(invalidDiscovery.scopes.wordstat.granted, false);
-  assert.equal(invalidDeviceRequests.some((request) => request.url.includes("api.wordstat.yandex.net")), false);
+  assert.equal(invalidDeviceRequests.some((request) => request.url === "http://127.0.0.1:19246/health"), false);
 });
 
 test("exact binding and scope are rechecked by official APIs and wrong counter fails closed", async () => {

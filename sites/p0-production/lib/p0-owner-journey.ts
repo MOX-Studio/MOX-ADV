@@ -177,6 +177,10 @@ export type OwnerJourneyProjection = {
       explanation: string;
     };
     materialQuestions: Array<{ question: string; consequence: string }>;
+    editor: null | {
+      handle: string;
+      fields: OwnerActionField[];
+    };
   } | null;
   campaignStrategy: {
     status: "Готова к решению" | "Нужны существенные решения";
@@ -1049,6 +1053,16 @@ async function matchingStrategyReviewAction(ownerKey: string, view: InternalView
   return null;
 }
 
+async function businessModelEditActionHandle(ownerKey: string, view: InternalView) {
+  return opaqueHandle({ ownerKey, state: view.revision, kind: "edit-business-model" });
+}
+
+async function matchingBusinessModelEditAction(ownerKey: string, view: InternalView, handle: string) {
+  return Boolean(view.state.business_model)
+    && allowed(view, "save_business_model")
+    && handle === await businessModelEditActionHandle(ownerKey, view);
+}
+
 const BUSINESS_MODEL_LABELS: Record<string, string> = {
   qualified_outcome: "Квалифицированный результат",
   customer_context: "Клиент и его контекст",
@@ -1270,8 +1284,8 @@ export function projectDemandCostResearchForOwner(snapshot: unknown): OwnerJourn
   };
 }
 
-function businessModelProjection(state: InternalState): OwnerJourneyProjection["businessModel"] {
-  const contract = record(record(state.business_model).owner_contract);
+async function businessModelProjection(ownerKey: string, view: InternalView): Promise<OwnerJourneyProjection["businessModel"]> {
+  const contract = record(record(view.state.business_model).owner_contract);
   const fields = record(contract.fields);
   if (!Object.keys(fields).length) return null;
   const economics = record(contract.economics);
@@ -1308,6 +1322,10 @@ function businessModelProjection(state: InternalState): OwnerJourneyProjection["
       const question = record(value);
       return { question: ownerText(question.question), consequence: ownerText(question.why_material) };
     }),
+    editor: allowed(view, "save_business_model") ? {
+      handle: await businessModelEditActionHandle(ownerKey, view),
+      fields: businessModelFields(view.state),
+    } : null,
   };
 }
 
@@ -2242,7 +2260,7 @@ async function project(
     competitorMatrix: projectCompetitorMatrixForOwner(view.state),
     analyticsSummary: projectAnalyticsEvidenceForOwner(view.state.analytics_evidence_snapshot),
     demandCostResearch: projectDemandCostResearchForOwner(view.state.analytics_evidence_snapshot),
-    businessModel: businessModelProjection(view.state),
+    businessModel: await businessModelProjection(ownerKey, view),
     campaignStrategy: await campaignStrategyProjection(ownerKey, view),
     appliedPractice: appliedPractice(view.state),
     businessReadiness: businessReadinessProjection(view.state),
@@ -2411,6 +2429,28 @@ function required(values: Record<string, unknown>, key: string) {
   const value = String(values[key] ?? "").normalize("NFKC").replace(/\s+/gu, " ").trim();
   if (!value) throw new P0ApplicationError("P0_OWNER_INPUT_REQUIRED", "Заполните обязательное бизнес-поле.");
   return value;
+}
+
+function ownerBusinessModelValue(values: Record<string, unknown>) {
+  return {
+    product: required(values, "product"),
+    audience: required(values, "customerContext"),
+    value: required(values, "value"),
+    qualified_result: required(values, "qualifiedResult"),
+    exclusions: required(values, "exclusions"),
+    qualified_outcome: required(values, "qualifiedResult"),
+    customer_context: required(values, "customerContext"),
+    buying_context: values.buyingContext,
+    revenue_model: values.revenueModel,
+    sales_cycle: values.salesCycle,
+    average_sale_value_rub: values.averageSaleValueRub,
+    gross_margin_percent: values.grossMarginPercent,
+    lead_to_sale_percent: values.leadToSalePercent,
+    capacity: values.capacity,
+    seasonality: values.seasonality,
+    geography: values.geography,
+    key_constraints: values.keyConstraints,
+  };
 }
 
 function ownerStrategyAnswers(values: Record<string, unknown>) {
@@ -2586,6 +2626,18 @@ export class P0OwnerJourney {
       const access = accessState && this.accessReadiness ? this.accessReadiness.project(accessState) : null;
       return project(ownerKey, view, agent, access);
     }
+    const businessModelEditAction = await matchingBusinessModelEditAction(ownerKey, view, submission.handle);
+    if (businessModelEditAction) {
+      view = await this.application.command(ownerKey, {
+        action: "save_business_model",
+        expected_revision: view.revision,
+        value: ownerBusinessModelValue(record(submission.values)),
+      });
+      const agent = this.agentProjection ? await this.agentProjection(ownerKey) : null;
+      if (agent) view = await this.application.query(ownerKey);
+      const access = accessState && this.accessReadiness ? this.accessReadiness.project(accessState) : null;
+      return project(ownerKey, view, agent, access);
+    }
     const packageDecisionAction = await matchingPackageDecisionAction(ownerKey, view, submission.handle);
     if (packageDecisionAction) {
       const review = view.state.package_review!;
@@ -2712,25 +2764,7 @@ export class P0OwnerJourney {
     } else if (descriptor.kind === "confirm-business-model") {
       await command({
         action: "save_business_model",
-        value: {
-          product: required(values, "product"),
-          audience: required(values, "customerContext"),
-          value: required(values, "value"),
-          qualified_result: required(values, "qualifiedResult"),
-          exclusions: required(values, "exclusions"),
-          qualified_outcome: required(values, "qualifiedResult"),
-          customer_context: required(values, "customerContext"),
-          buying_context: values.buyingContext,
-          revenue_model: values.revenueModel,
-          sales_cycle: values.salesCycle,
-          average_sale_value_rub: values.averageSaleValueRub,
-          gross_margin_percent: values.grossMarginPercent,
-          lead_to_sale_percent: values.leadToSalePercent,
-          capacity: values.capacity,
-          seasonality: values.seasonality,
-          geography: values.geography,
-          key_constraints: values.keyConstraints,
-        },
+        value: ownerBusinessModelValue(values),
       });
     } else if (descriptor.kind === "select-focus") {
       await command({

@@ -68,13 +68,14 @@ import {
   buildDemandCostResearchPlan,
   buildOwnHistoryCostObservation,
   collectCurrentAuctionCostObservation,
-  collectOfficialWordstatBatch,
   qualifyDirectComparableCandidates,
   unavailableWordstatBatch,
   validateWordstatProviderScope,
   type CostObservation,
+  type DemandCostResearchPlan,
   type MarketEvidenceInput,
 } from "./market-evidence.ts";
+import { adaptCompleteWordstatUiBatch } from "./wordstat-ui-market-adapter.ts";
 import {
   verifyDirectAccountBinding,
   verifyMetrikaCounterBinding,
@@ -487,6 +488,57 @@ async function readMetrika() {
   };
 }
 
+function wordstatUiDevice(device: DemandCostResearchPlan["seeds"][number]["device"]) {
+  return device === "all" ? "ALL"
+    : device === "desktop" ? "DESKTOP"
+      : device === "phone" ? "SMARTPHONE" : "TABLET";
+}
+
+async function collectHeadlessWordstatUiBatch(
+  researchPlan: DemandCostResearchPlan,
+  runtime: ReturnType<typeof runtimeEnv>,
+) {
+  const configuredUrl = cleanText(runtime.P0_WORDSTAT_BRIDGE_URL ?? "", 1_000);
+  const bridgeToken = cleanText(runtime.P0_WORDSTAT_BRIDGE_TOKEN ?? "", 1_000);
+  if (!configuredUrl || !bridgeToken) throw new Error("Headless Wordstat UI bridge is not configured.");
+  const bridgeUrl = new URL(configuredUrl);
+  if (bridgeUrl.protocol !== "http:" || bridgeUrl.hostname !== "127.0.0.1") {
+    throw new Error("Headless Wordstat UI bridge must use loopback HTTP.");
+  }
+  const endpoint = new URL("/collect", bridgeUrl);
+  const response = await fetch(endpoint, {
+    method: "POST",
+    redirect: "error",
+    headers: {
+      Authorization: `Bearer ${bridgeToken}`,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      run_id: `wordstat-ui-${crypto.randomUUID()}`,
+      plan_input: {
+        seeds: researchPlan.seeds.map((seed) => ({
+          seed_id: seed.seed_id,
+          exact_query: seed.phrase,
+          operator_profile: seed.operator_profile,
+        })),
+        scope: {
+          regions: researchPlan.scope.regions.map((region) => ({ provider_id: region.id, label: region.name })),
+          device: wordstatUiDevice(researchPlan.seeds[0].device),
+          dynamics: {
+            granularity: "MONTH",
+            from_date: researchPlan.scope.seasonality.from_date,
+            to_date: researchPlan.scope.seasonality.to_date,
+          },
+        },
+      },
+    }),
+  });
+  if (!response.ok) throw new Error(`Headless Wordstat UI bridge returned HTTP ${response.status}.`);
+  const payload = await response.json() as { batch?: unknown };
+  return adaptCompleteWordstatUiBatch(payload.batch, researchPlan);
+}
+
 async function readMarketEvidence({
   ownerKey,
   model,
@@ -524,8 +576,8 @@ async function readMarketEvidence({
   }
   const configuredDevice = providerScope.device;
   const observedDate = new Date(generatedAt);
-  const dynamicsTo = new Date(Date.UTC(observedDate.getUTCFullYear(), observedDate.getUTCMonth(), 0));
-  const dynamicsFrom = new Date(Date.UTC(dynamicsTo.getUTCFullYear() - 3, dynamicsTo.getUTCMonth(), 1));
+  const dynamicsFrom = new Date(Date.UTC(observedDate.getUTCFullYear(), observedDate.getUTCMonth() - 23, 1));
+  const dynamicsTo = new Date(Date.UTC(observedDate.getUTCFullYear(), observedDate.getUTCMonth() + 1, 0));
   const researchPlan = await buildDemandCostResearchPlan({
     generatedAt,
     offerLanguage: cleanText(String(model.product ?? ""), 500),
@@ -557,20 +609,18 @@ async function readMarketEvidence({
       excluded_tokens: researchPlan.exclusions,
     },
   }));
-  const configurationMissing = context.access_profile?.evidence_scope?.wordstat !== "AVAILABLE"
-    || !runtime.YANDEX_WORDSTAT_OAUTH_TOKEN
-    || !runtime.YANDEX_WORDSTAT_CLIENT_ID
-    || providerScope.regionIds.length === 0;
-  const wordstatBatch = configurationMissing
-    ? await unavailableWordstatBatch(
-        "Scoped Wordstat authority is unavailable for this bounded research plan.",
-        generatedAt,
-      )
-    : await collectOfficialWordstatBatch({
-        token: runtime.YANDEX_WORDSTAT_OAUTH_TOKEN ?? "",
-        clientId: runtime.YANDEX_WORDSTAT_CLIENT_ID ?? "",
-        seeds: researchPlan.seeds,
-      }, fetch, now);
+  let wordstatBatch;
+  try {
+    if (providerScope.regionIds.length === 0) throw new Error("Wordstat UI requires an exact provider region.");
+    wordstatBatch = await collectHeadlessWordstatUiBatch(researchPlan, runtime);
+  } catch (error) {
+    wordstatBatch = await unavailableWordstatBatch(
+      errorMessage(error),
+      generatedAt,
+      "WORDSTAT_UI_UNAVAILABLE",
+      "YANDEX_WORDSTAT_UI",
+    );
+  }
 
   const direct = record(context.direct);
   const audit = record(direct.audit);
@@ -949,8 +999,8 @@ function accessConfiguration() {
     metrikaToken: runtime.YANDEX_METRICA_OAUTH_TOKEN ?? "",
     metrikaExpectedCounterId: runtime.YANDEX_METRICA_COUNTER_ID ?? "",
     metrikaGoalId: runtime.YANDEX_METRICA_GOAL_ID ?? "",
-    wordstatToken: runtime.YANDEX_WORDSTAT_OAUTH_TOKEN ?? "",
-    wordstatClientId: runtime.YANDEX_WORDSTAT_CLIENT_ID ?? "",
+    wordstatUiBridgeUrl: runtime.P0_WORDSTAT_BRIDGE_URL ?? "",
+    wordstatUiBridgeToken: runtime.P0_WORDSTAT_BRIDGE_TOKEN ?? "",
     wordstatRegionIds,
     wordstatRegionNames,
     wordstatDevice: runtime.YANDEX_WORDSTAT_DEVICE ?? "all",

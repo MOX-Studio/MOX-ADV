@@ -204,6 +204,26 @@ export default function P0Client() {
     }
   }
 
+  async function submitBusinessModelEdit(event: FormEvent<HTMLFormElement>, handle: string, fields: OwnerActionField[]) {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const next = await request("/api/p0", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ handle, values: actionValues(event.currentTarget, fields) }),
+      });
+      setProjection(next);
+      setSelectedStage("findings");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function submitGoalCorrection(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (busy) return;
@@ -356,6 +376,11 @@ export default function P0Client() {
               <dl><div><dt>Источник</dt><dd>{field.provenance}</dd></div><div><dt>Наблюдение</dt><dd>{field.observedAt}</dd></div><div><dt>Свежесть</dt><dd>{field.freshness}</dd></div><div><dt>Уверенность</dt><dd>{field.confidence}</dd></div><div><dt>Ограничение</dt><dd>{field.limitation}</dd></div><div><dt>Предположение</dt><dd>{field.assumption}</dd></div></dl>
             </article>)}</div>
             {projection.businessModel.materialQuestions.length > 0 && <div className="owner-model-questions"><h3>Только существенные вопросы</h3><ul>{projection.businessModel.materialQuestions.map((item) => <li key={item.question}><strong>{item.question}</strong><span>{item.consequence}</span></li>)}</ul></div>}
+            {projection.businessModel.editor && <BusinessModelEditor
+              editor={projection.businessModel.editor}
+              busy={busy}
+              onEdit={submitBusinessModelEdit}
+            />}
           </section>}
 
           {activeStage === "strategy" && activeStageStatus !== "upcoming" && projection.campaignStrategy && <section className="owner-business-readiness" aria-labelledby="owner-campaign-strategy-title">
@@ -469,6 +494,28 @@ export default function P0Client() {
       </fieldset>
     </main>
   </div>;
+}
+
+type BusinessModelEditorProjection = NonNullable<NonNullable<OwnerJourneyProjection["businessModel"]>["editor"]>;
+
+function BusinessModelEditor({
+  editor,
+  busy,
+  onEdit,
+}: {
+  editor: BusinessModelEditorProjection;
+  busy: boolean;
+  onEdit: (event: FormEvent<HTMLFormElement>, handle: string, fields: OwnerActionField[]) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  return <section className="owner-strategy-version-editor owner-business-model-editor">
+    <button type="button" onClick={() => setEditing((value) => !value)} aria-expanded={editing}>{editing ? "Закрыть редактор модели бизнеса" : "Изменить модель бизнеса"}</button>
+    {editing && <form onSubmit={(event) => onEdit(event, editor.handle, editor.fields)}>
+      <p>Сохранение создаст новую текущую версию модели бизнеса и заново соберёт зависимые сведения, Strategy и Campaign Draft.</p>
+      <div className="owner-fields">{editor.fields.map((field) => <OwnerField key={field.key} field={field} />)}</div>
+      <footer><button type="button" onClick={(event) => { event.currentTarget.form?.reset(); setEditing(false); }}>Отменить правки</button><button type="submit" disabled={busy}>{busy ? "Сохраняю…" : "Сохранить и пересобрать"}</button></footer>
+    </form>}
+  </section>;
 }
 
 type StrategyOwnerReviewProjection = NonNullable<NonNullable<OwnerJourneyProjection["campaignStrategy"]>["ownerReview"]>;

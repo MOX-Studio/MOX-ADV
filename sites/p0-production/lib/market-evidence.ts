@@ -95,12 +95,12 @@ export type WordstatCall = {
 };
 export type WordstatObservationBatch = {
   schema_version: typeof WORDSTAT_BATCH_SCHEMA;
-  source: "YANDEX_WORDSTAT_V1";
+  source: "YANDEX_WORDSTAT_V1" | "YANDEX_WORDSTAT_UI";
   batch_id: string;
   batch_started_at: string;
   batch_finished_at: string;
-  declared_window: "rolling_last_30_days";
-  source_window_end: "undisclosed_by_api";
+  declared_window: string;
+  source_window_end: string;
   calls: WordstatCall[];
 };
 
@@ -574,8 +574,8 @@ type AssignedDemandRow = {
   scope_fingerprint: string;
   provenance: { call_ids: string[]; seed_ids: string[]; request_fingerprints: string[] };
   provider_provenance: {
-    source: "YANDEX_WORDSTAT_V1";
-    endpoint: typeof WORDSTAT_ENDPOINTS.top_requests;
+    source: "YANDEX_WORDSTAT_V1" | "YANDEX_WORDSTAT_UI";
+    endpoint: string;
     batch_id: string;
     call_ids: string[];
     seed_ids: string[];
@@ -714,8 +714,8 @@ async function assignedRowsForScope(calls: WordstatCall[], clusterSpecs: Map<str
         request_fingerprints: requestFingerprints,
       },
       provider_provenance: {
-        source: "YANDEX_WORDSTAT_V1",
-        endpoint: WORDSTAT_ENDPOINTS.top_requests,
+        source: assigned.call.endpoint === WORDSTAT_ENDPOINTS.top_requests ? "YANDEX_WORDSTAT_V1" : "YANDEX_WORDSTAT_UI",
+        endpoint: assigned.call.endpoint,
         batch_id: assigned.call.batch_id,
         call_ids: callIds,
         seed_ids: seedIds,
@@ -766,7 +766,7 @@ function normalizedSeasonality(calls: WordstatCall[]) {
       : scopes.every((scope) => scope.status === "AVAILABLE") ? "AVAILABLE" : "INSUFFICIENT_HISTORY";
   return {
     status,
-    source: "/v1/dynamics",
+    source: available.some((call) => call.endpoint !== WORDSTAT_ENDPOINTS.dynamics) ? "WORDSTAT_UI_DYNAMICS" : "/v1/dynamics",
     operator_profile: "DYNAMICS_BROAD",
     period: scopes.length === 1 ? scopes[0].period : null,
     from_date: scopes.length === 1 ? scopes[0].from_date : null,
@@ -885,8 +885,8 @@ export async function buildScopedDemandEvidence(batch: WordstatObservationBatch,
   const canonicalObservations = allRows.sort((left, right) => left.observation_id.localeCompare(right.observation_id));
   return {
     status,
-    source: "YANDEX_WORDSTAT_V1",
-    method: "/v1/topRequests",
+    source: batch.source,
+    method: batch.source === "YANDEX_WORDSTAT_UI" ? "WORDSTAT_UI_TOP_POPULAR" : "/v1/topRequests",
     snapshot_batch_id: batch.batch_id,
     batch_started_at: batch.batch_started_at,
     batch_finished_at: batch.batch_finished_at,
@@ -928,7 +928,7 @@ export async function buildScopedDemandEvidence(batch: WordstatObservationBatch,
       status: regions.length && regions.every((call) => call.status === "AVAILABLE")
         ? "AVAILABLE"
         : regions.some((call) => call.status === "AVAILABLE") ? "PARTIAL" : "UNAVAILABLE",
-      source: "/v1/regions",
+      source: batch.source === "YANDEX_WORDSTAT_UI" ? "WORDSTAT_UI_REGIONS" : "/v1/regions",
       observations: regions.map((call) => ({ call_id: call.call_id, scope: call.scope, rows: call.rows, gaps: call.gaps })),
     },
     gaps,
@@ -1912,11 +1912,13 @@ export async function unavailableWordstatBatch(
   reason: string,
   generatedAt: string,
   code = "WORDSTAT_AUTHORITY_UNAVAILABLE",
+  source: WordstatObservationBatch["source"] = "YANDEX_WORDSTAT_V1",
 ): Promise<WordstatObservationBatch> {
-  const batchId = await sha256({ source: "YANDEX_WORDSTAT_V1", generated_at: generatedAt, unavailable: normalizedText(reason) });
+  const endpoint = source === "YANDEX_WORDSTAT_UI" ? "https://wordstat.yandex.com/" : WORDSTAT_ENDPOINTS.top_requests;
+  const batchId = await sha256({ source, generated_at: generatedAt, unavailable: normalizedText(reason) });
   return {
     schema_version: WORDSTAT_BATCH_SCHEMA,
-    source: "YANDEX_WORDSTAT_V1",
+    source,
     batch_id: batchId,
     batch_started_at: generatedAt,
     batch_finished_at: generatedAt,
@@ -1928,7 +1930,7 @@ export async function unavailableWordstatBatch(
       seed_id: "unavailable",
       cluster_id: "unavailable",
       method: "top_requests",
-      endpoint: WORDSTAT_ENDPOINTS.top_requests,
+      endpoint,
       requested_at: generatedAt,
       status: "UNAVAILABLE",
       operator_profile: "BROAD_CONTAINING",
@@ -1937,7 +1939,7 @@ export async function unavailableWordstatBatch(
       from_date: null,
       to_date: null,
       scope: { region_ids: [], region_names: [], device: "all", region_filter_applied: true },
-      request_fingerprint: await sha256({ endpoint: WORDSTAT_ENDPOINTS.top_requests, unavailable: true }),
+      request_fingerprint: await sha256({ endpoint, unavailable: true }),
       rows: [],
       gaps: [{ code, detail: normalizedText(reason) || "Wordstat evidence unavailable.", retry_after_seconds: null }],
     }],

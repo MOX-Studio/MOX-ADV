@@ -178,6 +178,36 @@ test("collects every surface sequentially with at least three seconds between re
   assert.ok(result.batch.observations.every((item) => item.protected_artifact_ref.startsWith("wordstat-csv:sha256:")));
 });
 
+test("accepts a provider metadata-only CSV only with complete stable provider-rendered rows", async () => {
+  const store = memoryStore();
+  const result = await collect({
+    store,
+    readSurface: (value) => {
+      const loaded = completeResult(value);
+      if (value.surface === "TOP_POPULAR") {
+        loaded.official_csv = {
+          headers: headersBySurface.TOP_POPULAR,
+          rows: [],
+          metadata_only: true,
+          provider_content_type: "text/csv",
+          provider_export_row_count: 0,
+          provider_payload: "Запросы со словами;Число запросов;Россия, все устройства\r",
+        };
+      }
+      return loaded;
+    },
+  });
+
+  assert.equal(result.batch.status, "COMPLETE");
+  const popular = result.batch.observations.find((item) => item.surface === "TOP_POPULAR");
+  assert.equal(popular.rows.length, 1);
+  assert.equal(popular.parser_contract.capture_mode, "OFFICIAL_CSV_METADATA_WITH_PROVIDER_RENDERED_ROWS");
+  assert.match(popular.limitations.join(" "), /provider export contains scope metadata only/iu);
+  const protectedArtifact = store.csv.find((item) => item.surface === "TOP_POPULAR");
+  assert.equal(protectedArtifact.csv, "Запросы со словами;Число запросов;Россия, все устройства\r");
+  assert.equal(protectedArtifact.capture_mode, "OFFICIAL_CSV_METADATA_WITH_PROVIDER_RENDERED_ROWS");
+});
+
 test("keeps an explicit empty surface complete without representing missing demand as zero", async () => {
   const result = await collect({
     readSurface: (value) => value.surface === "TOP_POPULAR"

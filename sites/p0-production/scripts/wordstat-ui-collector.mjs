@@ -229,18 +229,43 @@ function canonicalRows(surface, source, label) {
 }
 
 function compareCsvAndDom(surface, result) {
-  const csvRows = canonicalRows(surface, result.official_csv, "CSV");
+  const official = result.official_csv && typeof result.official_csv === "object" ? result.official_csv : {};
   const domRows = canonicalRows(surface, result.dom, "DOM");
   const displayedRowCount = Number(result.dom.displayed_row_count);
   const explicitEmptyState = result.dom.explicit_empty_state === true;
   if (result.dom.stable !== true || !Number.isSafeInteger(displayedRowCount) || displayedRowCount < 0) {
     throw new WordstatCollectionError("TABLE_INCOMPLETE", "Wordstat DOM did not reach a stable completed state.");
   }
+  const providerPayload = typeof official.provider_payload === "string" ? official.provider_payload : null;
+  const providerContentType = normalizedText(official.provider_content_type).toLocaleLowerCase("en-US");
+  if (official.metadata_only === true) {
+    assertHeaders(surface, official.headers);
+    if (!providerPayload || !providerContentType.includes("text/csv") || official.provider_export_row_count !== 0) {
+      throw new WordstatCollectionError("CSV_SCHEMA_CHANGED", "Wordstat metadata-only CSV provenance is invalid.");
+    }
+    if (explicitEmptyState ? displayedRowCount !== 0 || domRows.length !== 0 : displayedRowCount === 0 || domRows.length !== displayedRowCount) {
+      throw new WordstatCollectionError("TABLE_INCOMPLETE", "Wordstat provider-rendered rows did not reach a complete stable state.");
+    }
+    return {
+      rows: domRows,
+      displayedRowCount,
+      explicitEmptyState,
+      protectedCsv: providerPayload,
+      captureMode: "OFFICIAL_CSV_METADATA_WITH_PROVIDER_RENDERED_ROWS",
+    };
+  }
+  const csvRows = canonicalRows(surface, official, "CSV");
   if (csvRows.length === 0) {
     if (!explicitEmptyState || displayedRowCount !== 0 || domRows.length !== 0) {
       throw new WordstatCollectionError("TABLE_INCOMPLETE", "Empty Wordstat rows were not confirmed by the explicit empty state.");
     }
-    return { rows: csvRows, displayedRowCount, explicitEmptyState };
+    return {
+      rows: csvRows,
+      displayedRowCount,
+      explicitEmptyState,
+      protectedCsv: providerPayload ?? sanitizedCsv(surface, csvRows),
+      captureMode: providerPayload ? "OFFICIAL_CSV_ROWS" : "CANONICAL_TEST_ROWS",
+    };
   }
   if (explicitEmptyState || displayedRowCount !== csvRows.length || domRows.length === 0) {
     throw new WordstatCollectionError("TABLE_INCOMPLETE", "Wordstat CSV and displayed row counts disagree.");
@@ -249,7 +274,13 @@ function compareCsvAndDom(surface, result) {
   if (domRows.some((row) => !csvSet.has(JSON.stringify(row)))) {
     throw new WordstatCollectionError("CSV_SCHEMA_CHANGED", "Wordstat CSV and DOM control rows disagree.");
   }
-  return { rows: csvRows, displayedRowCount, explicitEmptyState };
+  return {
+    rows: csvRows,
+    displayedRowCount,
+    explicitEmptyState,
+    protectedCsv: providerPayload ?? sanitizedCsv(surface, csvRows),
+    captureMode: providerPayload ? "OFFICIAL_CSV_ROWS" : "CANONICAL_TEST_ROWS",
+  };
 }
 
 function assertConfirmedScope(plan, seed, surface, result) {
@@ -406,8 +437,8 @@ export async function collectAndSaveWordstatBatch(input) {
             const compared = compareCsvAndDom(surface, result);
             const observedAt = isoTimestamp(result.observed_at, "observed_at");
             const observationId = digest({ batch_id: batchId, seed_id: seed.seed_id, surface, observed_at: observedAt });
-            const cleanCsv = sanitizedCsv(surface, compared.rows);
-            const csvDigest = digest(cleanCsv);
+            const protectedCsv = compared.protectedCsv;
+            const csvDigest = digest(protectedCsv);
             const artifactRef = `wordstat-csv:${csvDigest}`;
             try {
               await input.artifactStore.saveCsv({
@@ -415,8 +446,9 @@ export async function collectAndSaveWordstatBatch(input) {
                 observation_id: observationId,
                 surface,
                 parser_version: parserVersion,
+                capture_mode: compared.captureMode,
                 digest: csvDigest,
-                csv: cleanCsv,
+                csv: protectedCsv,
               });
             } catch {
               failures.push(publicFailure("ARTIFACT_SAVE_FAILED", seed.seed_id, surface, attempt));
@@ -438,12 +470,21 @@ export async function collectAndSaveWordstatBatch(input) {
               result_state: compared.explicitEmptyState ? "NO_ROWS_RETURNED" : "ROWS_RETURNED",
               request_fingerprint: digest({ plan_digest: plan.plan_digest, seed_id: seed.seed_id, surface, scope }),
               response_fingerprint: digest({ rows: compared.rows, displayed_row_count: compared.displayedRowCount }),
-              parser_contract: { version: parserVersion, csv_headers: [...ROW_FIELDS[surface]] },
+              parser_contract: {
+                version: parserVersion,
+                csv_headers: [...ROW_FIELDS[surface]],
+                capture_mode: compared.captureMode,
+              },
               protected_artifact_ref: String(artifactRef),
               protected_artifact_digest: csvDigest,
-              limitations: surface === "TOP_POPULAR"
-                ? ["LOWER_BOUND_OBSERVED_TOP_ROWS", "Missing seed rows remain UNKNOWN and are not zero demand."]
-                : ["This Wordstat observation is demand evidence, not CPC, budget, clicks, conversions, users, or a performance forecast."],
+              limitations: [
+                ...(surface === "TOP_POPULAR"
+                  ? ["LOWER_BOUND_OBSERVED_TOP_ROWS", "Missing seed rows remain UNKNOWN and are not zero demand."]
+                  : ["This Wordstat observation is demand evidence, not CPC, budget, clicks, conversions, users, or a performance forecast."]),
+                ...(compared.captureMode === "OFFICIAL_CSV_METADATA_WITH_PROVIDER_RENDERED_ROWS"
+                  ? ["The current provider export contains scope metadata only; canonical rows come from the stable provider-rendered table and retain the official CSV as protected provenance."]
+                  : []),
+              ],
             });
             completed = true;
             break;

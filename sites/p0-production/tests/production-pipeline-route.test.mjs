@@ -22,10 +22,25 @@ test("production route keeps pipeline actions typed and denies editing while a r
   assert.match(routeSource, /Редактирование недоступно во время активного запуска/u);
 });
 
+test("production Wordstat evidence uses only the authenticated headless UI bridge", () => {
+  assert.match(productionSource, /collectHeadlessWordstatUiBatch/u);
+  assert.match(productionSource, /P0_WORDSTAT_BRIDGE_URL/u);
+  assert.match(productionSource, /adaptCompleteWordstatUiBatch/u);
+  assert.doesNotMatch(productionSource, /collectOfficialWordstatBatch/u);
+  assert.doesNotMatch(productionSource, /YANDEX_WORDSTAT_OAUTH_TOKEN|YANDEX_WORDSTAT_CLIENT_ID/u);
+});
+
 test("cold-start Strategy planning does not require Direct read credentials", () => {
   assert.match(productionSource, /async function readPlanningCurrencyLimits\(\)/u);
   assert.match(productionSource, /readCurrencyLimits: readPlanningCurrencyLimits/u);
   assert.match(productionSource, /minimum_weekly_budget_rub: null/u);
+});
+
+test("Dashboard lets the owner revise economics and rebuild dependent evidence without assistance", () => {
+  assert.match(clientSource, /projection\.businessModel\.editor && <BusinessModelEditor/u);
+  assert.match(clientSource, /function BusinessModelEditor\(/u);
+  assert.match(clientSource, /Сохранить и пересобрать/u);
+  assert.match(productionSource, /wordstatUiBridgeUrl: runtime\.P0_WORDSTAT_BRIDGE_URL/u);
 });
 
 test("Dashboard exposes the exact Strategy Review decision instead of a terminal placeholder", () => {
