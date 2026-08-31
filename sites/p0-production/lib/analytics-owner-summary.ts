@@ -115,6 +115,11 @@ const GAP_COPY: Record<string, { problem: string; action: string; domain: Analyt
     problem: "Публичный конкурентный срез не покрывает утверждённый набор.",
     action: "Завершить ограниченный публичный срез по точным страницам, сохранив размер исходного набора.",
   },
+  UNAVAILABLE_NO_APPROVED_SOURCE: {
+    domain: "COMPETITORS",
+    problem: "Одобренный источник фактических рекламных показов конкурентов отсутствует.",
+    action: "Сохранять рекламное наблюдение недоступным; принимать только артефакт владельца с provenance и digest либо проверенного лицензированного провайдера.",
+  },
   COMPETITOR_INTERNAL_PERFORMANCE_UNAVAILABLE: {
     domain: "COMPETITORS",
     problem: "Внутренняя эффективность конкурентов недоступна из публичных источников.",
@@ -247,10 +252,16 @@ function costFinding(snapshot: AnalyticsEvidenceBundle) {
 
 function competitorFinding(snapshot: AnalyticsEvidenceBundle) {
   const matrix = record(snapshot.competitor_matrix);
-  if (!Object.keys(matrix).length) return "Публичный конкурентный срез недоступен; это не означает отсутствие конкурентов.";
+  const adObservation = record(snapshot.competitor_ad_observation);
+  if (!Object.keys(matrix).length) return adObservation.status === "UNAVAILABLE_NO_APPROVED_SOURCE"
+    ? "Публичный конкурентный срез недоступен; это не означает отсутствие конкурентов. Одобренный источник рекламных наблюдений отсутствует; рекламная активность неизвестна."
+    : "Публичный конкурентный срез недоступен; это не означает отсутствие конкурентов.";
   const denominator = list(record(matrix.candidate_set).candidates).length;
   const observed = list(matrix.rows).length;
-  return `Публичные предложения наблюдались у ${observed.toLocaleString("ru-RU")} из ${denominator.toLocaleString("ru-RU")} участников ограниченного набора; вывод относится только к этому набору.`;
+  const adStatus = adObservation.status === "UNAVAILABLE_NO_APPROVED_SOURCE"
+    ? " Одобренный источник рекламных наблюдений отсутствует; это не означает нулевую рекламную активность."
+    : ` Одобренных рекламных samples: ${Number(adObservation.approved_sample_count).toLocaleString("ru-RU")}; каждый ограничен своей точной областью.`;
+  return `Публичные предложения наблюдались у ${observed.toLocaleString("ru-RU")} из ${denominator.toLocaleString("ru-RU")} участников ограниченного набора; вывод относится только к этому набору.${adStatus}`;
 }
 
 function findingForDomain(snapshot: AnalyticsEvidenceBundle, domain: AnalyticsEvidenceDomain, claims: EvidenceClaim[]) {

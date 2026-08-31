@@ -309,7 +309,7 @@ test("turns a 90 percent bounded competitor ad pattern into a market control and
         exact_landing: candidate.exact_destinations[0],
         observation_date: `2026-08-${String(index + 1).padStart(2, "0")}T10:00:00.000Z`,
         ad_visibility_sample: {
-          status: index < 9 ? "OBSERVED" : "NOT_OBSERVED",
+          status: index < 9 ? "OBSERVED" : "NOT_OBSERVED_IN_SAMPLE",
           query: "заказать брендинг",
           source: "Ограниченный публичный поисковый срез",
         },
@@ -374,7 +374,7 @@ test("turns public competitor positioning into a clearly qualified control when 
         competitor: candidate.competitor,
         observed_offer_message: "Комплексный брендинг под ключ",
         exact_landing: candidate.exact_destinations[0],
-        ad_visibility_sample: { status: "UNAVAILABLE", query: null, source: "Срез не выполнялся" },
+        ad_visibility_sample: { status: "UNAVAILABLE_NO_APPROVED_SOURCE", query: null },
         campaign_analysis: {
           evidence_status: "HYPOTHESIS_FROM_PUBLIC_POSITIONING",
           pattern_id: "dedicated-branding-offer",

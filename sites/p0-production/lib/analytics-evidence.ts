@@ -12,19 +12,21 @@ import {
 } from "./market-evidence.ts";
 import {
   BOUNDED_COMPETITOR_RESEARCH_SCHEMA,
+  NO_APPROVED_COMPETITOR_AD_SOURCE,
   buildCompetitorMatrix,
   containsCompetitorPromptInjection,
   containsHiddenCompetitorPerformance,
   createBoundedCompetitorCandidateSet,
+  type CompetitorAdObservationInput,
   type CompetitorCandidateSet,
   type CompetitorMatrix,
   type CompetitorMatrixRowInput,
 } from "./competitor-research.ts";
 
-export const ANALYTICS_EVIDENCE_SCHEMA = "p0-analytics-evidence-v6";
-export const ANALYTICS_EVIDENCE_CONTRACT_VERSION = "6.0.0";
+export const ANALYTICS_EVIDENCE_SCHEMA = "p0-analytics-evidence-v7";
+export const ANALYTICS_EVIDENCE_CONTRACT_VERSION = "7.0.0";
 export const ANALYTICS_EVIDENCE_DOMAIN_MANIFEST_SCHEMA = "p0-analytics-domain-manifest-v1";
-const LEGACY_ANALYTICS_EVIDENCE_SCHEMAS = new Set(["p0-analytics-evidence-v1", "p0-analytics-evidence-v2", "p0-analytics-evidence-v3", "p0-analytics-evidence-v4", "p0-analytics-evidence-v5"]);
+const LEGACY_ANALYTICS_EVIDENCE_SCHEMAS = new Set(["p0-analytics-evidence-v1", "p0-analytics-evidence-v2", "p0-analytics-evidence-v3", "p0-analytics-evidence-v4", "p0-analytics-evidence-v5", "p0-analytics-evidence-v6"]);
 const CANONICALIZATION_VERSION = "mox-canonical-json-v1";
 const NORMALIZER_VERSION = "mox-evidence-normalizer-v2";
 const REDACTION_VERSION = "mox-artifact-redaction-v1";
@@ -210,6 +212,7 @@ export type AnalyticsEvidenceBundle = {
   gaps: EvidenceGap[];
   material_uncertainties: string[];
   domain_manifest: AnalyticsEvidenceDomainManifest;
+  competitor_ad_observation: CompetitorMatrix["ad_observation"];
   competitor_matrix: CompetitorMatrix | null;
   product_catalog: OfferCatalog;
   focus_opportunities: FocusOpportunitySet;
@@ -722,6 +725,10 @@ export async function buildAnalyticsEvidence({
         rows: competitorInputs.map((observation) => record(observation.matrix_row)).filter((row) => Object.keys(row).length).map((row) => {
           const price = record(row.published_price);
           const sample = record(row.ad_visibility_sample);
+          const sampleRaw = record(sample.raw);
+          const sampleExtraction = record(sample.extraction);
+          const sampleProvenance = record(sample.provenance);
+          const sampleApproval = record(sample.approval);
           const analysis = record(row.campaign_analysis);
           const source = record(row.source);
           return {
@@ -737,12 +744,36 @@ export async function buildAnalyticsEvidence({
             device: text(row.device),
             observedAt: text(row.observation_date),
             adVisibilitySample: {
-              status: text(sample.status) as CompetitorMatrixRowInput["adVisibilitySample"]["status"],
+              status: text(sample.status) as CompetitorAdObservationInput["status"],
+              sourceClass: sample.source_class === null ? null : text(sample.source_class) as CompetitorAdObservationInput["sourceClass"],
+              sourceName: sample.source_name === null ? null : text(sample.source_name),
               query: sample.query === null ? null : text(sample.query),
-              source: text(sample.source),
               geography: text(sample.geography),
               device: text(sample.device),
-              observedAt: text(sample.observation_date),
+              observedAt: sample.observation_date === null ? null : text(sample.observation_date),
+              limitation: text(sample.limitation),
+              raw: sample.raw === null ? null : {
+                immutablePointer: text(sampleRaw.immutable_pointer),
+                sha256: text(sampleRaw.sha256),
+                mediaType: text(sampleRaw.media_type),
+                byteLength: Number(sampleRaw.byte_length),
+              },
+              extraction: sample.extraction === null ? null : {
+                method: text(sampleExtraction.method) as "manual_span" | "ocr" | "provider_schema",
+                adMarker: sampleExtraction.ad_marker === null ? null : text(sampleExtraction.ad_marker),
+                locator: text(sampleExtraction.locator),
+              },
+              provenance: sample.provenance === null ? null : {
+                obtainedBy: text(sampleProvenance.obtained_by) as "owner" | "provider",
+                obtainedAt: text(sampleProvenance.obtained_at),
+              },
+              approval: sample.approval === null ? null : {
+                termsUrl: text(sampleApproval.terms_url),
+                termsCheckedAt: text(sampleApproval.terms_checked_at),
+                termsSha256: text(sampleApproval.terms_sha256),
+                acquisitionMethod: text(sampleApproval.acquisition_method),
+                downstreamUseApproved: sampleApproval.downstream_use_approved === true,
+              } as CompetitorAdObservationInput["approval"],
             },
             campaignAnalysis: Object.keys(analysis).length ? {
               evidenceStatus: text(analysis.evidence_status) as NonNullable<CompetitorMatrixRowInput["campaignAnalysis"]>["evidenceStatus"],
@@ -761,6 +792,15 @@ export async function buildAnalyticsEvidence({
         }),
       })
     : null;
+  const competitorAdObservation = competitorMatrix?.ad_observation ?? {
+    status: NO_APPROVED_COMPETITOR_AD_SOURCE,
+    approved_sample_count: 0,
+    unavailable_sample_count: 0,
+    source_classes: [],
+    observation_dates: [],
+    scopes: [],
+    limitation: "Одобренный источник фактических рекламных показов не предоставлен; рекламная активность и отсутствие рекламы не установлены.",
+  };
   const competitorObservedAts = competitorInputs.map((item) => isoTimestamp(item.observed_at));
   const ownerObservedAts = Object.values(fieldEvidence).map((item) => isoTimestamp(record(item).owner_confirmed_at));
   const rawMarketInput = record(context.market_evidence_input);
@@ -1631,6 +1671,15 @@ export async function buildAnalyticsEvidence({
       limitations: ["Unavailable competitor evidence remains unavailable and cannot become a competitive control."],
     }));
   }
+  if (competitorAdObservation.status === NO_APPROVED_COMPETITOR_AD_SOURCE) {
+    gaps.push(await makeGap({
+      code: NO_APPROVED_COMPETITOR_AD_SOURCE,
+      source_id: "competitors",
+      description: "No owner-provided artifact or verified licensed provider supports competitor ad observation.",
+      material: false,
+      limitations: [competitorAdObservation.limitation],
+    }));
+  }
   gaps.push(await makeGap({
     code: "COMPETITOR_INTERNAL_PERFORMANCE_UNAVAILABLE",
     source_id: "competitors",
@@ -1944,7 +1993,7 @@ export async function buildAnalyticsEvidence({
       }),
       makeDomainEntry({
         domain: "COMPETITORS",
-        artifactPaths: ["competitor_matrix"],
+        artifactPaths: ["competitor_ad_observation", "competitor_matrix"],
         status: competitorStatus,
         sourceIds: ["competitors"],
         claimFilter: (claim) => claim.subject.startsWith("competitor:"),
@@ -2007,6 +2056,7 @@ export async function buildAnalyticsEvidence({
       conflicts,
       gaps,
       domain_manifest: domainManifest,
+      competitor_ad_observation: competitorAdObservation,
       competitor_matrix: competitorMatrix,
       product_catalog: productFocus.catalog,
       focus_opportunities: productFocus.focus_opportunities,
@@ -2051,6 +2101,7 @@ export async function buildAnalyticsEvidence({
     gaps,
     material_uncertainties: materialUncertainties,
     domain_manifest: domainManifest,
+    competitor_ad_observation: competitorAdObservation,
     competitor_matrix: competitorMatrix,
     product_catalog: productFocus.catalog,
     focus_opportunities: productFocus.focus_opportunities,
@@ -2135,7 +2186,7 @@ export async function verifyAnalyticsEvidenceSnapshot(snapshot: AnalyticsEvidenc
         METRIKA: ["claims", "evidence"],
         WORDSTAT: ["market_evidence.frequency"],
         COST: ["prelaunch_cost"],
-        COMPETITORS: ["competitor_matrix"],
+        COMPETITORS: ["competitor_ad_observation", "competitor_matrix"],
       };
       const expectedSourceIds: Record<AnalyticsEvidenceDomain, string[]> = {
         BUSINESS_MODEL: ["first-party-web", "owner-confirmed"],
@@ -2184,6 +2235,8 @@ export async function verifyAnalyticsEvidenceSnapshot(snapshot: AnalyticsEvidenc
       }
       if (current.hashes.domain_manifest_sha256 !== await contentHash(current.domain_manifest)) return false;
     }
+    const hasCompetitorAdObservation = Object.hasOwn(current as unknown as Record<string, unknown>, "competitor_ad_observation");
+    if (candidate.schema_version === ANALYTICS_EVIDENCE_SCHEMA && !hasCompetitorAdObservation) return false;
     const hasCompetitorMatrix = Object.hasOwn(current as unknown as Record<string, unknown>, "competitor_matrix");
     if (candidate.schema_version === ANALYTICS_EVIDENCE_SCHEMA && !hasCompetitorMatrix) return false;
     if (hasCompetitorMatrix && current.hashes.competitor_matrix_sha256 !== await contentHash(current.competitor_matrix)) return false;
@@ -2214,6 +2267,7 @@ export async function verifyAnalyticsEvidenceSnapshot(snapshot: AnalyticsEvidenc
       conflicts: current.conflicts,
       gaps: current.gaps,
       ...(hasDomainManifest ? { domain_manifest: current.domain_manifest } : {}),
+      ...(hasCompetitorAdObservation ? { competitor_ad_observation: current.competitor_ad_observation } : {}),
       ...(hasCompetitorMatrix ? { competitor_matrix: current.competitor_matrix } : {}),
       ...(hasProductFocus ? {
         product_catalog: current.product_catalog,

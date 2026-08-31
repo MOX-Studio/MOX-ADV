@@ -63,6 +63,10 @@ function fullSnapshot() {
     focus_opportunities: { recommended_offer_id: "offer-main" },
     market_evidence: { frequency: { status: "AVAILABLE", observed_unique_count: { value: 67 } } },
     prelaunch_cost: { status: "AVAILABLE", range: { low: 110, high: 170 }, currency: "RUB", sample_size: { value: 42 } },
+    competitor_ad_observation: {
+      status: "PARTIAL",
+      approved_sample_count: 1,
+    },
     competitor_matrix: {
       candidate_set: { candidates: [{ competitor: "Альфа" }, { competitor: "Бета" }] },
       rows: [{ competitor: "Альфа" }],
@@ -94,6 +98,19 @@ test("complete evidence produces business findings and readiness without provide
   assert.match(summary.findings.find((item) => item.area === "Сопоставимая стоимость").finding, /110–170 RUB/u);
   assert.deepEqual(summary.remediation, []);
   assert.doesNotMatch(JSON.stringify(summary), /snapshot|schema|provider|sha256|claim-|evidence-|_id|Campaigns\.get|Reports/iu);
+});
+
+test("competitor finding explicitly shows no approved ad source without claiming zero activity", () => {
+  const snapshot = fullSnapshot();
+  snapshot.competitor_matrix = null;
+  snapshot.competitor_ad_observation = {
+    status: "UNAVAILABLE_NO_APPROVED_SOURCE",
+    approved_sample_count: 0,
+  };
+  const finding = projectAnalyticsEvidenceForOwner(snapshot).findings.find((item) => item.area === "Публичные конкуренты").finding;
+  assert.match(finding, /Одобренный источник рекламных наблюдений отсутствует/u);
+  assert.match(finding, /рекламная активность неизвестна/u);
+  assert.doesNotMatch(finding, /рекламная активность равна нулю/u);
 });
 
 test("mixed evidence keeps partial and unavailable areas visible and orders repairs by strategic impact", () => {

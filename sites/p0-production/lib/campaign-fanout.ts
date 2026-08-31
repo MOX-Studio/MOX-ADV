@@ -163,7 +163,7 @@ function matrixCompetitiveControlBasis(evidence: Record<string, unknown> | null 
   const competitorIdentity = (row: Record<string, unknown>) => keyText(row.competitor);
   const availableAdSamples = rows.filter((row) => {
     const sample = record(row.ad_visibility_sample);
-    return sample.status === "OBSERVED" || sample.status === "NOT_OBSERVED";
+    return sample.status === "OBSERVED" || sample.status === "NOT_OBSERVED_IN_SAMPLE";
   });
   const sampledCompetitors = new Set(availableAdSamples.map(competitorIdentity).filter(Boolean));
   const adObservedCompetitors = new Set(availableAdSamples

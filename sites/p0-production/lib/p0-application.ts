@@ -1284,6 +1284,10 @@ function sanitizeContext(input: P0Context): P0Context {
           const price = record(matrixRow.published_price);
           const source = record(matrixRow.source);
           const sample = record(matrixRow.ad_visibility_sample);
+          const sampleRaw = record(sample.raw);
+          const sampleExtraction = record(sample.extraction);
+          const sampleProvenance = record(sample.provenance);
+          const sampleApproval = record(sample.approval);
           const analysis = record(matrixRow.campaign_analysis);
           return {
             competitor: artifactText(matrixRow.competitor, 200),
@@ -1300,11 +1304,35 @@ function sanitizeContext(input: P0Context): P0Context {
             observation_date: cleanText(String(matrixRow.observation_date ?? ""), 100),
             ad_visibility_sample: {
               status: cleanText(String(sample.status ?? ""), 100),
+              source_class: sample.source_class === null ? null : cleanText(String(sample.source_class ?? ""), 100),
+              source_name: sample.source_name === null ? null : artifactText(sample.source_name, 300),
               query: sample.query === null ? null : artifactText(sample.query, 500),
-              source: artifactText(sample.source, 1_000),
               geography: artifactText(sample.geography, 200),
               device: artifactText(sample.device, 100),
-              observation_date: cleanText(String(sample.observation_date ?? ""), 100),
+              observation_date: sample.observation_date === null ? null : cleanText(String(sample.observation_date ?? ""), 100),
+              limitation: artifactText(sample.limitation, 1_000),
+              raw: sample.raw === null ? null : {
+                immutable_pointer: artifactText(sampleRaw.immutable_pointer, 2_000),
+                sha256: cleanText(String(sampleRaw.sha256 ?? ""), 100),
+                media_type: cleanText(String(sampleRaw.media_type ?? ""), 200),
+                byte_length: Number(sampleRaw.byte_length ?? 0),
+              },
+              extraction: sample.extraction === null ? null : {
+                method: cleanText(String(sampleExtraction.method ?? ""), 100),
+                ad_marker: sampleExtraction.ad_marker === null ? null : artifactText(sampleExtraction.ad_marker, 500),
+                locator: artifactText(sampleExtraction.locator, 1_000),
+              },
+              provenance: sample.provenance === null ? null : {
+                obtained_by: cleanText(String(sampleProvenance.obtained_by ?? ""), 100),
+                obtained_at: cleanText(String(sampleProvenance.obtained_at ?? ""), 100),
+              },
+              approval: sample.approval === null ? null : {
+                terms_url: artifactText(sampleApproval.terms_url, 2_000),
+                terms_checked_at: cleanText(String(sampleApproval.terms_checked_at ?? ""), 100),
+                terms_sha256: cleanText(String(sampleApproval.terms_sha256 ?? ""), 100),
+                acquisition_method: artifactText(sampleApproval.acquisition_method, 500),
+                downstream_use_approved: sampleApproval.downstream_use_approved === true,
+              },
             },
             campaign_analysis: Object.keys(analysis).length ? {
               evidence_status: cleanText(String(analysis.evidence_status ?? ""), 100),
@@ -3626,10 +3654,10 @@ export class P0Application {
       const wordstatPresentation = projectWordstatForPresentation(frequency, plan, market.batch_finished_at);
       const correctionPreparation = agentCorrectionPreparation(state);
       const competitorMatrix = state.analytics_evidence_snapshot?.competitor_matrix ?? null;
-      const visibilityAggregate = competitorMatrix?.aggregate_claims.find((claim) => claim.claim === "Рекламная видимость наблюдалась");
+      const visibilityAggregate = competitorMatrix?.aggregate_claims.find((claim) => claim.claim === "Объявление наблюдалось в одобренных артефактах");
       const unavailableVisibilityEncodedAsZero = Boolean(
         competitorMatrix?.rows.length
-        && competitorMatrix.rows.every((row) => row.ad_visibility_sample.status === "UNAVAILABLE")
+        && competitorMatrix.rows.every((row) => row.ad_visibility_sample.status === "UNAVAILABLE_NO_APPROVED_SOURCE")
         && visibilityAggregate?.observed_count === 0,
       );
       const campaignAnalysisMissing = Boolean(

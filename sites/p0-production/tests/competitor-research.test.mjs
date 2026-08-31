@@ -47,11 +47,22 @@ function row(overrides = {}) {
     observedAt: "2026-08-24T10:00:00.000Z",
     adVisibilitySample: {
       status: "OBSERVED",
+      sourceClass: "OWNER_PROVIDED_ARTIFACT",
+      sourceName: "Артефакт владельца · поисковая выдача",
       query: "промышленная выставка участие",
-      source: "Публичная поисковая выдача",
       geography: "Москва",
       device: "desktop",
       observedAt: "2026-08-24T09:55:00.000Z",
+      limitation: "Один артефакт доказывает только один показ в точном sample.",
+      raw: {
+        immutablePointer: "urn:mox:owner-artifact:alpha-search-1",
+        sha256: `sha256:${"a".repeat(64)}`,
+        mediaType: "image/png",
+        byteLength: 2048,
+      },
+      extraction: { method: "manual_span", adMarker: "Реклама", locator: "image region 120,40,900,280" },
+      provenance: { obtainedBy: "owner", obtainedAt: "2026-08-24T10:00:00.000Z" },
+      approval: null,
     },
     ...overrides,
   };
@@ -103,12 +114,18 @@ test("matrix keeps detailed public observations and denominator-aware aggregate 
         geography: "UNAVAILABLE",
         device: "UNAVAILABLE",
         adVisibilitySample: {
-          status: "UNAVAILABLE",
+          status: "UNAVAILABLE_NO_APPROVED_SOURCE",
+          sourceClass: null,
+          sourceName: null,
           query: null,
-          source: "Публичный рекламный срез недоступен",
           geography: "UNAVAILABLE",
           device: "UNAVAILABLE",
-          observedAt: "2026-08-24T10:00:00.000Z",
+          observedAt: null,
+          limitation: "Одобренный источник не предоставлен; активность неизвестна.",
+          raw: null,
+          extraction: null,
+          provenance: null,
+          approval: null,
         },
       }),
     ],
@@ -135,7 +152,9 @@ test("matrix keeps detailed public observations and denominator-aware aggregate 
     ],
     limitation: "Наблюдение относится только к ограниченному набору и не доказывает эффективность.",
   });
-  assert.equal(matrix.aggregate_claims.find((claim) => claim.claim === "Рекламная видимость наблюдалась").observed_count, 1);
+  assert.equal(matrix.aggregate_claims.find((claim) => claim.claim === "Объявление наблюдалось в одобренных артефактах").observed_count, 1);
+  assert.equal(matrix.ad_observation.status, "PARTIAL");
+  assert.deepEqual(matrix.ad_observation.source_classes, ["OWNER_PROVIDED_ARTIFACT"]);
   assert.match(matrix.limitations.join(" "), /не показывают расходы, CPC, конверсии, CPA, ROI, прибыльность/u);
 });
 
@@ -200,12 +219,18 @@ test("campaign analyses aggregate recurring competitor patterns and preserve imp
       candidateSet: candidateSet(),
       rows: [row({
         adVisibilitySample: {
-          status: "UNAVAILABLE",
+          status: "UNAVAILABLE_NO_APPROVED_SOURCE",
+          sourceClass: null,
+          sourceName: null,
           query: null,
-          source: "Срез недоступен",
           geography: "Москва",
           device: "desktop",
-          observedAt: "2026-08-24T10:00:00.000Z",
+          observedAt: null,
+          limitation: "Одобренный источник не предоставлен.",
+          raw: null,
+          extraction: null,
+          provenance: null,
+          approval: null,
         },
         campaignAnalysis: { ...campaignAnalysis, evidenceStatus: "OBSERVED_AD" },
       })],
@@ -242,18 +267,157 @@ test("unavailable ad-visibility samples do not become a zero-visibility claim", 
     candidateSet: candidateSet(),
     rows: [row({
       adVisibilitySample: {
-        status: "UNAVAILABLE",
+        status: "UNAVAILABLE_NO_APPROVED_SOURCE",
+        sourceClass: null,
+        sourceName: null,
         query: null,
-        source: "Поисковый срез недоступен",
         geography: "Москва",
         device: "desktop",
-        observedAt: "2026-08-24T10:00:00.000Z",
+        observedAt: null,
+        limitation: "Одобренный источник не предоставлен.",
+        raw: null,
+        extraction: null,
+        provenance: null,
+        approval: null,
       },
     })],
   });
-  const visibility = matrix.aggregate_claims.find((claim) => claim.claim === "Рекламная видимость наблюдалась");
+  const visibility = matrix.aggregate_claims.find((claim) => claim.claim === "Объявление наблюдалось в одобренных артефактах");
   assert.equal(visibility.observed_count, null);
   assert.equal(visibility.evidence_status, "UNAVAILABLE");
+  assert.equal(matrix.ad_observation.status, "UNAVAILABLE_NO_APPROVED_SOURCE");
+  assert.equal(matrix.ad_observation.approved_sample_count, 0);
+});
+
+test("an approved sample without an ad stays sample-scoped and never becomes zero advertising activity", () => {
+  const matrix = buildCompetitorMatrix({
+    candidateSet: candidateSet(),
+    rows: [row({
+      adVisibilitySample: {
+        ...row().adVisibilitySample,
+        status: "NOT_OBSERVED_IN_SAMPLE",
+        limitation: "Объявление не наблюдалось только в этом артефакте; активность вне sample неизвестна.",
+      },
+    })],
+  });
+  const visibility = matrix.aggregate_claims.find((claim) => claim.claim === "Объявление наблюдалось в одобренных артефактах");
+  assert.equal(visibility.observed_count, 0);
+  assert.match(visibility.limitation, /ноль наблюдений не означает нулевую рекламную активность или отсутствие конкурента/u);
+  assert.equal(matrix.rows[0].ad_visibility_sample.status, "NOT_OBSERVED_IN_SAMPLE");
+});
+
+test("matrix accepts only approved ad artifacts and preserves exact source, date, scope, and limitation", () => {
+  const matrix = buildCompetitorMatrix({ candidateSet: candidateSet(), rows: [row()] });
+  const sample = matrix.rows[0].ad_visibility_sample;
+  assert.equal(sample.source_class, "OWNER_PROVIDED_ARTIFACT");
+  assert.equal(sample.source_name, "Артефакт владельца · поисковая выдача");
+  assert.equal(sample.observation_date, "2026-08-24T09:55:00.000Z");
+  assert.deepEqual(
+    { query: sample.query, geography: sample.geography, device: sample.device },
+    { query: "промышленная выставка участие", geography: "Москва", device: "desktop" },
+  );
+  assert.match(sample.limitation, /точном sample/u);
+  assert.equal(sample.raw.sha256, `sha256:${"a".repeat(64)}`);
+  assert.equal(sample.extraction.ad_marker, "Реклама");
+
+  const licensed = buildCompetitorMatrix({ candidateSet: candidateSet(), rows: [row({
+    adVisibilitySample: {
+      status: "OBSERVED",
+      sourceClass: "LICENSED_PROVIDER",
+      sourceName: "Проверенный provider",
+      query: "промышленная выставка участие",
+      geography: "Москва",
+      device: "desktop",
+      observedAt: "2026-08-24T09:55:00.000Z",
+      limitation: "Один provider sample.",
+      raw: { immutablePointer: "provider:item:1", sha256: `sha256:${"b".repeat(64)}`, mediaType: "application/json", byteLength: 512 },
+      extraction: { method: "provider_schema", adMarker: "sponsored", locator: "$.ads[0]" },
+      provenance: { obtainedBy: "provider", obtainedAt: "2026-08-24T10:00:00.000Z" },
+      approval: {
+        termsUrl: "https://provider.example/terms/2026-08-01",
+        termsCheckedAt: "2026-08-20T10:00:00.000Z",
+        termsSha256: `sha256:${"c".repeat(64)}`,
+        acquisitionMethod: "Licensed query-level ad observation API",
+        downstreamUseApproved: true,
+      },
+    },
+  })] });
+  assert.equal(licensed.rows[0].ad_visibility_sample.source_class, "LICENSED_PROVIDER");
+  assert.equal(licensed.rows[0].ad_visibility_sample.approval.downstream_use_approved, true);
+
+  assert.throws(
+    () => buildCompetitorMatrix({ candidateSet: candidateSet(), rows: [row({
+      adVisibilitySample: {
+        ...row().adVisibilitySample,
+        extraction: { ...row().adVisibilitySample.extraction, adMarker: null },
+      },
+    })] }),
+    (error) => error instanceof BoundedCompetitorResearchError && error.code === "COMPETITOR_AD_MARKER_REQUIRED",
+  );
+  assert.throws(
+    () => buildCompetitorMatrix({ candidateSet: candidateSet(), rows: [row({
+      adVisibilitySample: {
+        status: "OBSERVED",
+        sourceClass: "LICENSED_PROVIDER",
+        sourceName: "Не проверенный провайдер",
+        query: "промышленная выставка участие",
+        geography: "Москва",
+        device: "desktop",
+        observedAt: "2026-08-24T09:55:00.000Z",
+        limitation: "Один sample.",
+        raw: { immutablePointer: "provider:item:1", sha256: `sha256:${"b".repeat(64)}`, mediaType: "application/json", byteLength: 512 },
+        extraction: { method: "provider_schema", adMarker: "sponsored", locator: "$.ads[0]" },
+        provenance: { obtainedBy: "provider", obtainedAt: "2026-08-24T10:00:00.000Z" },
+        approval: null,
+      },
+    })] }),
+    (error) => error instanceof BoundedCompetitorResearchError && error.code === "COMPETITOR_AD_PROVIDER_NOT_APPROVED",
+  );
+  assert.throws(
+    () => buildCompetitorMatrix({ candidateSet: candidateSet(), rows: [row({
+      adVisibilitySample: {
+        status: "OBSERVED",
+        query: "промышленная выставка участие",
+        source: "Произвольная публичная выдача",
+        geography: "Москва",
+        device: "desktop",
+        observedAt: "2026-08-24T09:55:00.000Z",
+      },
+    })] }),
+    (error) => error instanceof BoundedCompetitorResearchError && error.code === "COMPETITOR_AD_SOURCE_NOT_APPROVED",
+  );
+});
+
+test("owner projection discloses approved evidence details or explicit no-approved-source status", () => {
+  const approved = projectCompetitorMatrixForOwner({
+    analytics_evidence_snapshot: { competitor_matrix: buildCompetitorMatrix({ candidateSet: candidateSet(), rows: [row()] }) },
+  });
+  assert.match(approved.rows[0].adObservationSource, /Артефакт владельца/u);
+  assert.match(approved.rows[0].adObservationDate, /2026-08-24/u);
+  assert.match(approved.rows[0].adObservationScope, /промышленная выставка участие/u);
+  assert.match(approved.rows[0].adObservationLimitation, /точном sample/u);
+
+  const unavailable = projectCompetitorMatrixForOwner({
+    analytics_evidence_snapshot: { competitor_matrix: buildCompetitorMatrix({ candidateSet: candidateSet(), rows: [row({
+      adVisibilitySample: {
+        status: "UNAVAILABLE_NO_APPROVED_SOURCE",
+        sourceClass: null,
+        sourceName: null,
+        query: null,
+        geography: "Москва",
+        device: "desktop",
+        observedAt: null,
+        limitation: "Одобренный источник не предоставлен; активность неизвестна.",
+        raw: null,
+        extraction: null,
+        provenance: null,
+        approval: null,
+      },
+    })] }) },
+  });
+  assert.match(unavailable.rows[0].adObservationStatus, /UNAVAILABLE_NO_APPROVED_SOURCE/u);
+  assert.equal(unavailable.rows[0].adObservationSource, "Одобренный источник отсутствует");
+  assert.match(unavailable.rows[0].adObservationLimitation, /активность неизвестна/u);
 });
 
 test("matrix rejects non-allowlisted landing, prompt injection, and hidden performance claims", () => {

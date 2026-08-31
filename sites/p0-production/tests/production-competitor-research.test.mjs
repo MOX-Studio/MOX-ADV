@@ -55,7 +55,8 @@ test("collects exact public competitor landings and preserves unavailable candid
   assert.equal(result.competitor_candidate_set.candidates.length, 2);
   assert.equal(result.competitor_observations.length, 1);
   assert.equal(result.competitor_observations[0].matrix_row.competitor, "Альфа");
-  assert.equal(result.competitor_observations[0].matrix_row.ad_visibility_sample.status, "UNAVAILABLE");
+  assert.equal(result.competitor_observations[0].matrix_row.ad_visibility_sample.status, "UNAVAILABLE_NO_APPROVED_SOURCE");
+  assert.equal(result.competitor_observations[0].matrix_row.ad_visibility_sample.observation_date, null);
   assert.equal(result.competitor_observations[0].matrix_row.published_price.value, "от 1 000 000 ₽");
   assert.deepEqual(fetched.map((item) => item.url), [
     "https://alpha.example/branding",
@@ -68,9 +69,20 @@ test("preserves a scoped public ad observation for competitor campaign prevalenc
   const parsed = JSON.parse(config());
   parsed.candidates[0].adVisibilitySample = {
     status: "OBSERVED",
+    sourceClass: "OWNER_PROVIDED_ARTIFACT",
+    sourceName: "Артефакт владельца · поисковая выдача",
     query: "заказать брендинг",
-    source: "Публичный поисковый срез · https://search.example/snapshot/branding",
     observedAt: "2026-08-24T09:30:00.000Z",
+    limitation: "Один артефакт доказывает только точный sample.",
+    raw: {
+      immutablePointer: "urn:mox:owner-artifact:branding-search-1",
+      sha256: `sha256:${"a".repeat(64)}`,
+      mediaType: "image/png",
+      byteLength: 4096,
+    },
+    extraction: { method: "manual_span", adMarker: "Реклама", locator: "image region 40,30,1200,320" },
+    provenance: { obtainedBy: "owner", obtainedAt: "2026-08-24T10:00:00.000Z" },
+    approval: null,
   };
   parsed.candidates[0].campaignAnalysis = {
     evidenceStatus: "OBSERVED_AD",
@@ -97,7 +109,9 @@ test("preserves a scoped public ad observation for competitor campaign prevalenc
   const sample = result.competitor_observations[0].matrix_row.ad_visibility_sample;
   assert.equal(sample.status, "OBSERVED");
   assert.equal(sample.query, "заказать брендинг");
-  assert.match(sample.source, /search\.example/u);
+  assert.equal(sample.source_class, "OWNER_PROVIDED_ARTIFACT");
+  assert.match(sample.source_name, /Артефакт владельца/u);
+  assert.equal(sample.raw.sha256, `sha256:${"a".repeat(64)}`);
   assert.equal(sample.observation_date, "2026-08-24T09:30:00.000Z");
   const analysis = result.competitor_observations[0].matrix_row.campaign_analysis;
   assert.equal(analysis.evidence_status, "OBSERVED_AD");

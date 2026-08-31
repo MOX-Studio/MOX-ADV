@@ -177,11 +177,22 @@ function competitorObservation(overrides = {}) {
       observation_date: "2026-08-21T09:30:00.000Z",
       ad_visibility_sample: {
         status: "OBSERVED",
+        source_class: "OWNER_PROVIDED_ARTIFACT",
+        source_name: "Артефакт владельца · поисковая выдача",
         query: "основная услуга консультация",
-        source: "Публичная поисковая выдача",
         geography: "Москва",
         device: "desktop",
         observation_date: "2026-08-21T09:25:00.000Z",
+        limitation: "Один артефакт доказывает только точный sample.",
+        raw: {
+          immutable_pointer: "urn:mox:owner-artifact:competitor-search-1",
+          sha256: `sha256:${"a".repeat(64)}`,
+          media_type: "image/png",
+          byte_length: 3072,
+        },
+        extraction: { method: "manual_span", ad_marker: "Реклама", locator: "image region 20,20,1000,300" },
+        provenance: { obtained_by: "owner", obtained_at: "2026-08-21T09:30:00.000Z" },
+        approval: null,
       },
     },
     limitations: ["Одно публичное наблюдение не доказывает распространённость или эффективность."],
@@ -250,7 +261,7 @@ test("indexes every P0 analytics domain and gives every material claim direct so
     ["claims", "evidence"],
     ["market_evidence.frequency"],
     ["prelaunch_cost"],
-    ["competitor_matrix"],
+    ["competitor_ad_observation", "competitor_matrix"],
   ]);
   assert.ok(result.claims.length > 0);
   assert.ok(result.claims.every((claim) => ["current", "aging", "stale", "unknown"].includes(claim.confidence.freshness)));
@@ -720,6 +731,22 @@ test("preserves Metrika sampling, privacy, lag, attribution and exact counter/go
   assert.ok(claim?.confidence.uncertainty.some((item) => item.includes("lag")));
 });
 
+test("snapshot explicitly preserves no approved competitor ad source without inventing zero activity", async () => {
+  const result = await buildAnalyticsEvidence(fixture());
+  assert.deepEqual(result.competitor_ad_observation, {
+    status: "UNAVAILABLE_NO_APPROVED_SOURCE",
+    approved_sample_count: 0,
+    unavailable_sample_count: 0,
+    source_classes: [],
+    observation_dates: [],
+    scopes: [],
+    limitation: "Одобренный источник фактических рекламных показов не предоставлен; рекламная активность и отсутствие рекламы не установлены.",
+  });
+  assert.ok(result.gaps.some((gap) => gap.code === "UNAVAILABLE_NO_APPROVED_SOURCE"));
+  assert.doesNotMatch(JSON.stringify(result.competitor_ad_observation), /(?:zero|нулев)/iu);
+  assert.equal(await verifyAnalyticsEvidenceSnapshot(result), true);
+});
+
 test("accepts only policy-bound allowlisted public competitor observations and persists scope without hidden performance claims", async () => {
   const result = await buildAnalyticsEvidence(fixture({ competitors: [competitorObservation()] }));
   const source = result.sources.find((item) => item.source_id === "competitors");
@@ -744,6 +771,10 @@ test("accepts only policy-bound allowlisted public competitor observations and p
   assert.equal(result.competitor_matrix.rows[0].device, "desktop");
   assert.equal(result.competitor_matrix.rows[0].observation_date, "2026-08-21T09:30:00.000Z");
   assert.equal(result.competitor_matrix.rows[0].ad_visibility_sample.observation_date, "2026-08-21T09:25:00.000Z");
+  assert.equal(result.competitor_ad_observation.status, "AVAILABLE");
+  assert.deepEqual(result.competitor_ad_observation.source_classes, ["OWNER_PROVIDED_ARTIFACT"]);
+  assert.deepEqual(result.competitor_ad_observation.scopes, [{ query: "основная услуга консультация", geography: "Москва", device: "desktop" }]);
+  assert.equal(result.gaps.some((item) => item.code === "UNAVAILABLE_NO_APPROVED_SOURCE"), false);
   assert.equal(result.competitor_matrix.aggregate_claims[0].denominator, 1);
   assert.equal(result.competitor_matrix.aggregate_claims[0].observed_count, 1);
   assert.equal(result.competitor_matrix.aggregate_claims[0].claim_status, "OBSERVED_PUBLIC_FACT_NOT_PERFORMANCE_FACT");

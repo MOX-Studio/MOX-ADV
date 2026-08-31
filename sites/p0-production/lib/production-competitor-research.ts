@@ -1,6 +1,8 @@
 import {
+  NO_APPROVED_COMPETITOR_AD_SOURCE,
   assertSafeCompetitorObservationText,
   createBoundedCompetitorCandidateSet,
+  type CompetitorAdObservationInput,
   type CompetitorCandidateSet,
 } from "./competitor-research.ts";
 import { researchAllowlistedPublicCompetitorPage, type SiteResearchDependencies } from "./site-research.ts";
@@ -19,12 +21,7 @@ type ConfiguredCandidate = {
   observedOfferMessage: string;
   evidenceQuote: string;
   publishedPrice: { status: "PUBLISHED"; value: string } | { status: "NOT_PUBLISHED"; value: null };
-  adVisibilitySample: {
-    status: "OBSERVED" | "NOT_OBSERVED" | "UNAVAILABLE";
-    query: string | null;
-    source: string;
-    observedAt: string | null;
-  } | null;
+  adVisibilitySample: Omit<CompetitorAdObservationInput, "geography" | "device"> | null;
   campaignAnalysis: {
     evidenceStatus: "OBSERVED_AD" | "HYPOTHESIS_FROM_PUBLIC_POSITIONING";
     patternId: string;
@@ -86,25 +83,61 @@ export function parseProductionCompetitorResearchConfig(raw: string): Configured
     const sample = record(candidate.adVisibilitySample);
     const sampleStatus = String(sample.status ?? "");
     const adVisibilitySample = Object.keys(sample).length === 0 ? null : (() => {
-      if (!["OBSERVED", "NOT_OBSERVED", "UNAVAILABLE"].includes(sampleStatus)) {
-        throw new Error("Configured competitor ad visibility status is unsupported.");
+      if (sampleStatus === NO_APPROVED_COMPETITOR_AD_SOURCE) {
+        return {
+          status: NO_APPROVED_COMPETITOR_AD_SOURCE,
+          sourceClass: null,
+          sourceName: null,
+          query: null,
+          observedAt: null,
+          limitation: requiredText(sample.limitation, "Competitor ad observation limitation", 1_000),
+          raw: null,
+          extraction: null,
+          provenance: null,
+          approval: null,
+        } satisfies Omit<CompetitorAdObservationInput, "geography" | "device">;
       }
-      const query = sampleStatus === "UNAVAILABLE"
-        ? sample.query === null ? null : (() => { throw new Error("Unavailable competitor ad visibility query must be null."); })()
-        : requiredText(sample.query, "Competitor ad visibility query", 500);
-      const observedAt = sample.observedAt === null || sample.observedAt === undefined
-        ? null
-        : (() => {
-            const parsed = Date.parse(requiredText(sample.observedAt, "Competitor ad visibility observation date", 100));
-            if (!Number.isFinite(parsed)) throw new Error("Configured competitor ad visibility date must be an ISO timestamp.");
-            return new Date(parsed).toISOString();
-          })();
+      if (!["OBSERVED", "NOT_OBSERVED_IN_SAMPLE"].includes(sampleStatus)) {
+        throw new Error("Configured competitor ad observation status is unsupported.");
+      }
+      const sourceClass = String(sample.sourceClass ?? "");
+      if (!["OWNER_PROVIDED_ARTIFACT", "LICENSED_PROVIDER"].includes(sourceClass)) {
+        throw new Error("Configured competitor ad observation source is not approved.");
+      }
+      const raw = record(sample.raw);
+      const extraction = record(sample.extraction);
+      const provenance = record(sample.provenance);
+      const approval = record(sample.approval);
       return {
-        status: sampleStatus as "OBSERVED" | "NOT_OBSERVED" | "UNAVAILABLE",
-        query,
-        source: requiredText(sample.source, "Competitor ad visibility source", 1_000),
-        observedAt,
-      };
+        status: sampleStatus as "OBSERVED" | "NOT_OBSERVED_IN_SAMPLE",
+        sourceClass: sourceClass as "OWNER_PROVIDED_ARTIFACT" | "LICENSED_PROVIDER",
+        sourceName: requiredText(sample.sourceName, "Competitor ad observation source", 300),
+        query: requiredText(sample.query, "Competitor ad observation query", 500),
+        observedAt: requiredText(sample.observedAt, "Competitor ad observation date", 100),
+        limitation: requiredText(sample.limitation, "Competitor ad observation limitation", 1_000),
+        raw: {
+          immutablePointer: requiredText(raw.immutablePointer, "Competitor ad artifact pointer", 2_000),
+          sha256: requiredText(raw.sha256, "Competitor ad artifact digest", 100),
+          mediaType: requiredText(raw.mediaType, "Competitor ad artifact media type", 200),
+          byteLength: Number(raw.byteLength),
+        },
+        extraction: {
+          method: String(extraction.method ?? "") as "manual_span" | "ocr" | "provider_schema",
+          adMarker: extraction.adMarker === null ? null : requiredText(extraction.adMarker, "Competitor ad marker", 500),
+          locator: requiredText(extraction.locator, "Competitor ad artifact locator", 1_000),
+        },
+        provenance: {
+          obtainedBy: String(provenance.obtainedBy ?? "") as "owner" | "provider",
+          obtainedAt: requiredText(provenance.obtainedAt, "Competitor ad artifact provenance date", 100),
+        },
+        approval: sourceClass === "LICENSED_PROVIDER" ? {
+          termsUrl: requiredText(approval.termsUrl, "Competitor ad provider terms", 2_000),
+          termsCheckedAt: requiredText(approval.termsCheckedAt, "Competitor ad provider terms date", 100),
+          termsSha256: requiredText(approval.termsSha256, "Competitor ad provider terms digest", 100),
+          acquisitionMethod: requiredText(approval.acquisitionMethod, "Competitor ad provider acquisition method", 500),
+          downstreamUseApproved: approval.downstreamUseApproved === true,
+        } as CompetitorAdObservationInput["approval"] : null,
+      } satisfies Omit<CompetitorAdObservationInput, "geography" | "device">;
     })();
     const rawAnalysis = record(candidate.campaignAnalysis);
     const campaignAnalysis = Object.keys(rawAnalysis).length === 0 ? null : (() => {
@@ -151,7 +184,8 @@ export function parseProductionCompetitorResearchConfig(raw: string): Configured
       configuredCandidate.observedOfferMessage,
       configuredCandidate.evidenceQuote,
       configuredCandidate.adVisibilitySample?.query,
-      configuredCandidate.adVisibilitySample?.source,
+      configuredCandidate.adVisibilitySample?.sourceName,
+      configuredCandidate.adVisibilitySample?.limitation,
       ...Object.values(configuredCandidate.campaignAnalysis ?? {}),
     ].forEach(assertSafeCompetitorObservationText);
     return configuredCandidate;
@@ -235,25 +269,55 @@ export async function collectProductionCompetitorResearch(
             } : null,
             ad_visibility_sample: configuredCandidate.adVisibilitySample ? {
               status: configuredCandidate.adVisibilitySample.status,
+              source_class: configuredCandidate.adVisibilitySample.sourceClass,
+              source_name: configuredCandidate.adVisibilitySample.sourceName,
               query: configuredCandidate.adVisibilitySample.query,
-              source: configuredCandidate.adVisibilitySample.source,
               geography: configured.geography,
               device: configured.device,
-              observation_date: configuredCandidate.adVisibilitySample.observedAt ?? page.observed_at,
+              observation_date: configuredCandidate.adVisibilitySample.observedAt,
+              limitation: configuredCandidate.adVisibilitySample.limitation,
+              raw: configuredCandidate.adVisibilitySample.raw ? {
+                immutable_pointer: configuredCandidate.adVisibilitySample.raw.immutablePointer,
+                sha256: configuredCandidate.adVisibilitySample.raw.sha256,
+                media_type: configuredCandidate.adVisibilitySample.raw.mediaType,
+                byte_length: configuredCandidate.adVisibilitySample.raw.byteLength,
+              } : null,
+              extraction: configuredCandidate.adVisibilitySample.extraction ? {
+                method: configuredCandidate.adVisibilitySample.extraction.method,
+                ad_marker: configuredCandidate.adVisibilitySample.extraction.adMarker,
+                locator: configuredCandidate.adVisibilitySample.extraction.locator,
+              } : null,
+              provenance: configuredCandidate.adVisibilitySample.provenance ? {
+                obtained_by: configuredCandidate.adVisibilitySample.provenance.obtainedBy,
+                obtained_at: configuredCandidate.adVisibilitySample.provenance.obtainedAt,
+              } : null,
+              approval: configuredCandidate.adVisibilitySample.approval ? {
+                terms_url: configuredCandidate.adVisibilitySample.approval.termsUrl,
+                terms_checked_at: configuredCandidate.adVisibilitySample.approval.termsCheckedAt,
+                terms_sha256: configuredCandidate.adVisibilitySample.approval.termsSha256,
+                acquisition_method: configuredCandidate.adVisibilitySample.approval.acquisitionMethod,
+                downstream_use_approved: configuredCandidate.adVisibilitySample.approval.downstreamUseApproved,
+              } : null,
             } : {
-              status: "UNAVAILABLE",
+              status: NO_APPROVED_COMPETITOR_AD_SOURCE,
+              source_class: null,
+              source_name: null,
               query: null,
-              source: "Поисковый рекламный срез не выполнялся; запрос не задан",
               geography: configured.geography,
               device: configured.device,
-              observation_date: page.observed_at,
+              observation_date: null,
+              limitation: "Одобренный source фактических показов не предоставлен; отсутствие наблюдения не означает отсутствие рекламы.",
+              raw: null,
+              extraction: null,
+              provenance: null,
+              approval: null,
             },
           },
           limitations: [
             "Наблюдение относится только к указанной публичной странице и дате.",
-            configuredCandidate.adVisibilitySample
-              ? "Рекламная видимость относится только к зафиксированным запросу, географии, устройству, дате и публичному источнику."
-              : "Поисковый рекламный срез не выполнялся; отсутствие наблюдения не означает отсутствие рекламы.",
+            configuredCandidate.adVisibilitySample?.status !== NO_APPROVED_COMPETITOR_AD_SOURCE
+              ? "Рекламное наблюдение относится только к точному sample одобренного артефакта и не раскрывает активность вне sample."
+              : "Одобренный источник не предоставлен; отсутствие наблюдения не означает отсутствие рекламы.",
           ],
         });
       } catch {

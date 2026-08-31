@@ -103,7 +103,11 @@ export type OwnerJourneyProjection = {
       geography: string;
       device: string;
       observationDate: string;
-      adVisibilitySample: string;
+      adObservationStatus: string;
+      adObservationSource: string;
+      adObservationDate: string;
+      adObservationScope: string;
+      adObservationLimitation: string;
     }>;
     aggregateClaims: Array<{ claim: string; scope: string; result: string; limitation: string }>;
     hypotheses: Array<{
@@ -1079,8 +1083,10 @@ export function projectCompetitorMatrixForOwner(state: InternalState): OwnerJour
     const sample = record(row.ad_visibility_sample);
     const analysis = record(row.campaign_analysis);
     const sampleStatus = sample.status === "OBSERVED"
-      ? "Объявление наблюдалось"
-      : sample.status === "NOT_OBSERVED" ? "В этом срезе объявление не наблюдалось" : "Срез недоступен";
+      ? "Объявление наблюдалось в одобренном артефакте"
+      : sample.status === "NOT_OBSERVED_IN_SAMPLE"
+        ? "В точном sample одобренного артефакта объявление не наблюдалось"
+        : "UNAVAILABLE_NO_APPROVED_SOURCE · одобренный источник отсутствует";
     const analysisStatus = analysis.evidence_status === "OBSERVED_AD"
       ? "Анализ наблюдаемой рекламы"
       : analysis.evidence_status === "HYPOTHESIS_FROM_PUBLIC_POSITIONING"
@@ -1107,7 +1113,13 @@ export function projectCompetitorMatrixForOwner(state: InternalState): OwnerJour
       geography: row.geography === "UNAVAILABLE" ? "Недоступна" : ownerText(row.geography),
       device: row.device === "UNAVAILABLE" ? "Недоступно" : ownerText(row.device),
       observationDate: ownerText(row.observation_date, "Дата недоступна", 100),
-      adVisibilitySample: `${analysisSummary} ${sampleStatus}. Запрос: ${sample.query === null ? "недоступен" : ownerText(sample.query)}. География: ${sample.geography === "UNAVAILABLE" ? "недоступна" : ownerText(sample.geography)}. Устройство: ${sample.device === "UNAVAILABLE" ? "недоступно" : ownerText(sample.device)}. Дата: ${ownerText(sample.observation_date, "недоступна", 100)}. Источник: ${ownerText(sample.source)}.`,
+      adObservationStatus: `${sampleStatus}. ${analysisSummary}`,
+      adObservationSource: sample.source_name === null
+        ? "Одобренный источник отсутствует"
+        : `${sample.source_class === "OWNER_PROVIDED_ARTIFACT" ? "Артефакт владельца" : "Проверенный лицензированный провайдер"} · ${ownerText(sample.source_name)}`,
+      adObservationDate: sample.observation_date === null ? "Наблюдение отсутствует" : ownerText(sample.observation_date, "Дата недоступна", 100),
+      adObservationScope: `Запрос: ${sample.query === null ? "не задан" : ownerText(sample.query)}. География: ${ownerText(sample.geography, "недоступна")}. Устройство: ${ownerText(sample.device, "недоступно")}.`,
+      adObservationLimitation: ownerText(sample.limitation, "Наблюдение не доказывает расходы, эффективность или активность вне точного sample."),
     };
   });
   const hypotheses = list(matrix.aggregate_claims).map(record)

@@ -388,7 +388,11 @@ export default function P0Client() {
                 <div><dt>Точная посадочная</dt><dd>{row.exactLanding}</dd></div>
                 <div><dt>Источник</dt><dd>{row.source}</dd></div>
                 <div><dt>География и устройство</dt><dd>{row.geography} · {row.device}</dd></div>
-                <div><dt>Срез рекламной видимости</dt><dd>{row.adVisibilitySample}</dd></div>
+                <div><dt>Статус рекламного наблюдения</dt><dd>{row.adObservationStatus}</dd></div>
+                <div><dt>Источник рекламного наблюдения</dt><dd>{row.adObservationSource}</dd></div>
+                <div><dt>Дата рекламного наблюдения</dt><dd>{row.adObservationDate}</dd></div>
+                <div><dt>Точная область рекламного наблюдения</dt><dd>{row.adObservationScope}</dd></div>
+                <div><dt>Ограничение рекламного наблюдения</dt><dd>{row.adObservationLimitation}</dd></div>
               </dl>
             </article>)}</div> : <p className="owner-competitor-unavailable">Публичные наблюдения не получены и остаются недоступными, а не нулевыми.</p>}
             <div className="owner-competitor-aggregates"><h3>Выводы только по этому набору</h3>{projection.competitorMatrix.aggregateClaims.map((claim) => <article key={claim.claim}><strong>{claim.claim}</strong><span>{claim.result}</span><p>{claim.scope} {claim.limitation}</p></article>)}</div>

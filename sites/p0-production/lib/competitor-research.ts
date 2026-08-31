@@ -7,8 +7,34 @@ import {
 } from "./site-research.ts";
 
 export const BOUNDED_COMPETITOR_RESEARCH_SCHEMA = "p0-bounded-competitor-research-v1";
+export const NO_APPROVED_COMPETITOR_AD_SOURCE = "UNAVAILABLE_NO_APPROVED_SOURCE";
 const MAXIMUM_CANDIDATES = 10;
 const MAXIMUM_DESTINATIONS_PER_CANDIDATE = 3;
+const SHA256_DIGEST = /^sha256:[a-f0-9]{64}$/u;
+
+export type CompetitorAdObservationStatus = "OBSERVED" | "NOT_OBSERVED_IN_SAMPLE" | typeof NO_APPROVED_COMPETITOR_AD_SOURCE;
+export type CompetitorAdObservationSourceClass = "OWNER_PROVIDED_ARTIFACT" | "LICENSED_PROVIDER";
+
+export type CompetitorAdObservationInput = {
+  status: CompetitorAdObservationStatus;
+  sourceClass: CompetitorAdObservationSourceClass | null;
+  sourceName: string | null;
+  query: string | null;
+  geography: string;
+  device: string;
+  observedAt: string | null;
+  limitation: string;
+  raw: { immutablePointer: string; sha256: string; mediaType: string; byteLength: number } | null;
+  extraction: { method: "manual_span" | "ocr" | "provider_schema"; adMarker: string | null; locator: string } | null;
+  provenance: { obtainedBy: "owner" | "provider"; obtainedAt: string } | null;
+  approval: {
+    termsUrl: string;
+    termsCheckedAt: string;
+    termsSha256: string;
+    acquisitionMethod: string;
+    downstreamUseApproved: true;
+  } | null;
+};
 
 export type CompetitorCandidateSet = {
   schema_version: typeof BOUNDED_COMPETITOR_RESEARCH_SCHEMA;
@@ -30,14 +56,7 @@ export type CompetitorMatrixRowInput = {
   geography: string;
   device: string;
   observedAt: string;
-  adVisibilitySample: {
-    status: "OBSERVED" | "NOT_OBSERVED" | "UNAVAILABLE";
-    query: string | null;
-    source: string;
-    geography: string;
-    device: string;
-    observedAt: string;
-  };
+  adVisibilitySample: CompetitorAdObservationInput;
   campaignAnalysis?: {
     evidenceStatus: "OBSERVED_AD" | "HYPOTHESIS_FROM_PUBLIC_POSITIONING";
     patternId: string;
@@ -68,12 +87,24 @@ export type CompetitorMatrix = {
     device: string;
     observation_date: string;
     ad_visibility_sample: {
-      status: "OBSERVED" | "NOT_OBSERVED" | "UNAVAILABLE";
+      status: CompetitorAdObservationStatus;
+      source_class: CompetitorAdObservationSourceClass | null;
+      source_name: string | null;
       query: string | null;
-      source: string;
       geography: string;
       device: string;
-      observation_date: string;
+      observation_date: string | null;
+      limitation: string;
+      raw: { immutable_pointer: string; sha256: string; media_type: string; byte_length: number } | null;
+      extraction: { method: "manual_span" | "ocr" | "provider_schema"; ad_marker: string | null; locator: string } | null;
+      provenance: { obtained_by: "owner" | "provider"; obtained_at: string } | null;
+      approval: {
+        terms_url: string;
+        terms_checked_at: string;
+        terms_sha256: string;
+        acquisition_method: string;
+        downstream_use_approved: true;
+      } | null;
     };
     campaign_analysis: {
       evidence_status: "OBSERVED_AD" | "HYPOTHESIS_FROM_PUBLIC_POSITIONING";
@@ -104,6 +135,15 @@ export type CompetitorMatrix = {
     }>;
     limitation: string;
   }>;
+  ad_observation: {
+    status: "AVAILABLE" | "PARTIAL" | typeof NO_APPROVED_COMPETITOR_AD_SOURCE;
+    approved_sample_count: number;
+    unavailable_sample_count: number;
+    source_classes: CompetitorAdObservationSourceClass[];
+    observation_dates: string[];
+    scopes: Array<{ query: string; geography: string; device: string }>;
+    limitation: string;
+  };
   limitations: string[];
 };
 
@@ -143,6 +183,114 @@ function validObservationDate(value: unknown) {
     fail("COMPETITOR_OBSERVATION_DATE_INVALID", "Дата competitor observation должна быть ISO timestamp.");
   }
   return new Date(Date.parse(normalized)).toISOString();
+}
+
+function validDigest(value: unknown, code = "COMPETITOR_AD_ARTIFACT_DIGEST_INVALID") {
+  const digest = requiredText(value, code, 100).toLowerCase();
+  if (!SHA256_DIGEST.test(digest)) {
+    fail(code, "Approved competitor ad artifact требует полный sha256 digest.");
+  }
+  return digest;
+}
+
+function normalizeAdObservation(input: CompetitorAdObservationInput) {
+  if (!input || !["OBSERVED", "NOT_OBSERVED_IN_SAMPLE", NO_APPROVED_COMPETITOR_AD_SOURCE].includes(input.status)) {
+    fail("COMPETITOR_VISIBILITY_SAMPLE_INVALID", "Competitor ad observation status не поддерживается.");
+  }
+  if (input.status !== NO_APPROVED_COMPETITOR_AD_SOURCE
+    && (!input.sourceClass || !["OWNER_PROVIDED_ARTIFACT", "LICENSED_PROVIDER"].includes(input.sourceClass))) {
+    fail("COMPETITOR_AD_SOURCE_NOT_APPROVED", "Competitor ad observation принимает только owner artifact или проверенного licensed provider.");
+  }
+  const geography = requiredText(input.geography, "COMPETITOR_SCOPE_REQUIRED", 200);
+  const device = requiredText(input.device, "COMPETITOR_SCOPE_REQUIRED", 100);
+  const limitation = requiredText(input.limitation, "COMPETITOR_AD_LIMITATION_REQUIRED", 1_000);
+  if (input.status === NO_APPROVED_COMPETITOR_AD_SOURCE) {
+    if (input.sourceClass !== null || input.sourceName !== null || input.query !== null || input.observedAt !== null
+      || input.raw !== null || input.extraction !== null || input.provenance !== null || input.approval !== null) {
+      fail("COMPETITOR_UNAPPROVED_SOURCE_MUST_BE_EMPTY", "Отсутствующий approved source не может содержать наблюдение или артефакт.");
+    }
+    return {
+      status: NO_APPROVED_COMPETITOR_AD_SOURCE,
+      source_class: null,
+      source_name: null,
+      query: null,
+      geography,
+      device,
+      observation_date: null,
+      limitation,
+      raw: null,
+      extraction: null,
+      provenance: null,
+      approval: null,
+    } as const;
+  }
+  const sourceName = requiredText(input.sourceName, "COMPETITOR_AD_SOURCE_REQUIRED", 300);
+  const query = requiredText(input.query, "COMPETITOR_VISIBILITY_SAMPLE_INVALID", 500);
+  const observationDate = validObservationDate(input.observedAt);
+  const raw = input.raw;
+  const extraction = input.extraction;
+  const provenance = input.provenance;
+  if (!raw || !extraction || !provenance) {
+    fail("COMPETITOR_AD_PROVENANCE_MISSING", "Approved competitor ad observation требует raw artifact, extraction и provenance.");
+  }
+  const byteLength = Number(raw.byteLength);
+  if (!Number.isSafeInteger(byteLength) || byteLength < 1) {
+    fail("COMPETITOR_AD_ARTIFACT_INVALID", "Approved competitor ad artifact требует положительный byte length.");
+  }
+  const normalizedRaw = {
+    immutable_pointer: requiredText(raw.immutablePointer, "COMPETITOR_AD_ARTIFACT_REQUIRED", 2_000),
+    sha256: validDigest(raw.sha256),
+    media_type: requiredText(raw.mediaType, "COMPETITOR_AD_ARTIFACT_REQUIRED", 200),
+    byte_length: byteLength,
+  };
+  if (!["manual_span", "ocr", "provider_schema"].includes(extraction.method)) {
+    fail("COMPETITOR_AD_EXTRACTION_INVALID", "Approved competitor ad artifact extraction method не поддерживается.");
+  }
+  const normalizedExtraction = {
+    method: extraction.method,
+    ad_marker: extraction.adMarker === null ? null : requiredText(extraction.adMarker, "COMPETITOR_AD_MARKER_REQUIRED", 500),
+    locator: requiredText(extraction.locator, "COMPETITOR_AD_LOCATOR_REQUIRED", 1_000),
+  };
+  if (input.status === "OBSERVED" && normalizedExtraction.ad_marker === null) {
+    fail("COMPETITOR_AD_MARKER_REQUIRED", "Observed competitor ad требует видимый ad marker в approved artifact.");
+  }
+  const expectedObtainedBy = input.sourceClass === "OWNER_PROVIDED_ARTIFACT" ? "owner" : "provider";
+  if (provenance.obtainedBy !== expectedObtainedBy) {
+    fail("COMPETITOR_AD_PROVENANCE_INVALID", "Artifact provenance не соответствует классу approved source.");
+  }
+  const normalizedProvenance = {
+    obtained_by: provenance.obtainedBy,
+    obtained_at: validObservationDate(provenance.obtainedAt),
+  };
+  const approval = input.sourceClass === "LICENSED_PROVIDER" ? (() => {
+    if (!input.approval || input.approval.downstreamUseApproved !== true) {
+      fail("COMPETITOR_AD_PROVIDER_NOT_APPROVED", "Licensed provider требует проверенные terms и право downstream use.");
+    }
+    return {
+      terms_url: exactPublicUrl(input.approval.termsUrl),
+      terms_checked_at: validObservationDate(input.approval.termsCheckedAt),
+      terms_sha256: validDigest(input.approval.termsSha256, "COMPETITOR_AD_TERMS_DIGEST_INVALID"),
+      acquisition_method: requiredText(input.approval.acquisitionMethod, "COMPETITOR_AD_ACQUISITION_METHOD_REQUIRED", 500),
+      downstream_use_approved: true as const,
+    };
+  })() : input.approval === null ? null : fail("COMPETITOR_AD_OWNER_APPROVAL_INVALID", "Owner-provided artifact не должен выдаваться за licensed-provider approval.");
+  [sourceName, query, geography, device, limitation, normalizedRaw.immutable_pointer, normalizedRaw.media_type,
+    normalizedExtraction.ad_marker, normalizedExtraction.locator, approval?.acquisition_method]
+    .forEach(assertSafeCompetitorObservationText);
+  return {
+    status: input.status,
+    source_class: input.sourceClass,
+    source_name: sourceName,
+    query,
+    geography,
+    device,
+    observation_date: observationDate,
+    limitation,
+    raw: normalizedRaw,
+    extraction: normalizedExtraction,
+    provenance: normalizedProvenance,
+    approval,
+  };
 }
 
 const PROMPT_INJECTION = /(?:ignore|disregard|override|forget)\s+(?:all\s+)?(?:previous|prior|system|developer)\s+(?:instructions?|prompts?)|(?:system|developer)\s+prompt|reveal\s+(?:the\s+)?(?:prompt|secrets?|credentials?)|игнорир\p{L}*\s+(?:предыдущ\p{L}*|системн\p{L}*)\s+(?:инструкц\p{L}*|промпт\p{L}*)|раскрой\p{L}*\s+(?:системн\p{L}*\s+)?(?:промпт|секрет|уч[её]тн\p{L}*\s+данн\p{L}*)/iu;
@@ -252,16 +400,7 @@ export function buildCompetitorMatrix(input: {
       : priceStatus === "NOT_PUBLISHED" && row.publishedPrice.value === null
         ? null
         : fail("COMPETITOR_PRICE_STATUS_INVALID", "Цена должна быть опубликована с value или явно не опубликована.");
-    const ad = row.adVisibilitySample;
-    if (!ad || !["OBSERVED", "NOT_OBSERVED", "UNAVAILABLE"].includes(ad.status)) {
-      fail("COMPETITOR_VISIBILITY_SAMPLE_INVALID", "Matrix row требует bounded ad-visibility sample status.");
-    }
-    const query = ad.status === "UNAVAILABLE"
-      ? ad.query === null ? null : fail("COMPETITOR_VISIBILITY_SAMPLE_INVALID", "Unavailable visibility query должна оставаться null.")
-      : requiredText(ad.query, "COMPETITOR_VISIBILITY_SAMPLE_INVALID", 500);
-    const adSource = requiredText(ad.source, "COMPETITOR_VISIBILITY_SAMPLE_INVALID", 1_000);
-    const adGeography = requiredText(ad.geography, "COMPETITOR_SCOPE_REQUIRED", 200);
-    const adDevice = requiredText(ad.device, "COMPETITOR_SCOPE_REQUIRED", 100);
+    const ad = normalizeAdObservation(row.adVisibilitySample);
     const rawAnalysis = row.campaignAnalysis;
     const campaignAnalysis = rawAnalysis ? (() => {
       if (!["OBSERVED_AD", "HYPOTHESIS_FROM_PUBLIC_POSITIONING"].includes(rawAnalysis.evidenceStatus)) {
@@ -289,7 +428,7 @@ export function buildCompetitorMatrix(input: {
       Object.values(analysis).forEach(assertSafeCompetitorObservationText);
       return analysis;
     })() : null;
-    [productsServices, observedOfferMessage, priceValue, sourceLabel, geography, device, query, adSource, adGeography, adDevice]
+    [productsServices, observedOfferMessage, priceValue, sourceLabel, geography, device]
       .forEach(assertSafeCompetitorObservationText);
     return {
       competitor: candidate.competitor,
@@ -301,14 +440,7 @@ export function buildCompetitorMatrix(input: {
       geography,
       device,
       observation_date: validObservationDate(row.observedAt),
-      ad_visibility_sample: {
-        status: ad.status,
-        query,
-        source: adSource,
-        geography: adGeography,
-        device: adDevice,
-        observation_date: validObservationDate(ad.observedAt),
-      },
+      ad_visibility_sample: ad,
       campaign_analysis: campaignAnalysis,
     };
   }).sort((left, right) => left.competitor.localeCompare(right.competitor, "ru-RU") || left.exact_landing.localeCompare(right.exact_landing));
@@ -330,7 +462,10 @@ export function buildCompetitorMatrix(input: {
   const pricesObserved = rows.length
     ? new Set(rows.filter((row) => row.published_price.status === "PUBLISHED").map((row) => row.competitor)).size
     : null;
-  const availableVisibilitySamples = rows.filter((row) => row.ad_visibility_sample.status !== "UNAVAILABLE");
+  const availableVisibilitySamples = rows.filter((row) => row.ad_visibility_sample.status !== NO_APPROVED_COMPETITOR_AD_SOURCE);
+  const approvedCompetitors = new Set(availableVisibilitySamples.map((row) => row.competitor));
+  const uniqueAvailableSamples = [...new Map(availableVisibilitySamples.map((row) => [row.ad_visibility_sample.raw!.sha256, row])).values()];
+  const unavailableCompetitorCount = Math.max(0, denominator - approvedCompetitors.size);
   const visibilityObserved = availableVisibilitySamples.length
     ? new Set(availableVisibilitySamples.filter((row) => row.ad_visibility_sample.status === "OBSERVED").map((row) => row.competitor)).size
     : null;
@@ -348,6 +483,7 @@ export function buildCompetitorMatrix(input: {
     observedCount: number | null,
     supportingRows: typeof rows,
     claimStatus: CompetitorMatrix["aggregate_claims"][number]["claim_status"] = "OBSERVED_PUBLIC_FACT_NOT_PERFORMANCE_FACT",
+    limitation = "Наблюдение относится только к ограниченному набору и не доказывает эффективность.",
   ) => ({
     claim,
     claim_status: claimStatus,
@@ -356,7 +492,7 @@ export function buildCompetitorMatrix(input: {
     observed_count: observedCount,
     evidence_status: evidenceStatus(observedCount, denominator),
     evidence_set: exactEvidenceSet(supportingRows),
-    limitation: "Наблюдение относится только к ограниченному набору и не доказывает эффективность.",
+    limitation,
   });
   const campaignPatternClaims = [...campaignPatterns.entries()]
     .map(([, patternRows]) => {
@@ -378,9 +514,32 @@ export function buildCompetitorMatrix(input: {
     aggregate_claims: [
       aggregate("Публичное предложение наблюдалось", offersObserved, rows),
       aggregate("Публичная цена опубликована", pricesObserved, rows.filter((row) => row.published_price.status === "PUBLISHED")),
-      aggregate("Рекламная видимость наблюдалась", visibilityObserved, availableVisibilitySamples.filter((row) => row.ad_visibility_sample.status === "OBSERVED")),
+      aggregate(
+        "Объявление наблюдалось в одобренных артефактах",
+        visibilityObserved,
+        availableVisibilitySamples.filter((row) => row.ad_visibility_sample.status === "OBSERVED"),
+        "OBSERVED_PUBLIC_FACT_NOT_PERFORMANCE_FACT",
+        "Результат относится только к точным approved samples; ноль наблюдений не означает нулевую рекламную активность или отсутствие конкурента.",
+      ),
       ...campaignPatternClaims,
     ],
+    ad_observation: {
+      status: uniqueAvailableSamples.length === 0
+        ? NO_APPROVED_COMPETITOR_AD_SOURCE
+        : unavailableCompetitorCount === 0 ? "AVAILABLE" : "PARTIAL",
+      approved_sample_count: uniqueAvailableSamples.length,
+      unavailable_sample_count: unavailableCompetitorCount,
+      source_classes: [...new Set(uniqueAvailableSamples.map((row) => row.ad_visibility_sample.source_class).filter((value): value is CompetitorAdObservationSourceClass => value !== null))].sort(),
+      observation_dates: [...new Set(uniqueAvailableSamples.map((row) => row.ad_visibility_sample.observation_date).filter((value): value is string => value !== null))].sort(),
+      scopes: uniqueAvailableSamples.map((row) => ({
+        query: row.ad_visibility_sample.query!,
+        geography: row.ad_visibility_sample.geography,
+        device: row.ad_visibility_sample.device,
+      })),
+      limitation: uniqueAvailableSamples.length
+        ? "Каждый approved artifact доказывает только объявление либо отсутствие объявления в своём точном sample; он не раскрывает активность вне sample."
+        : "Одобренный источник фактических рекламных показов не предоставлен; рекламная активность и отсутствие рекламы не установлены.",
+    },
     limitations: [
       "Матрица описывает только публично наблюдаемое позиционирование в указанную дату и в указанном срезе.",
       "Публичные наблюдения не показывают расходы, CPC, конверсии, CPA, ROI, прибыльность, состояние аккаунта, внутреннюю стратегию или эффективность.",

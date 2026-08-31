@@ -209,11 +209,17 @@ function context() {
         observation_date: "2026-08-21T09:30:00.000Z",
         ad_visibility_sample: {
           status: "OBSERVED",
+          source_class: "OWNER_PROVIDED_ARTIFACT",
+          source_name: "Артефакт владельца · поисковая выдача",
           query: "промышленная выставка участие",
-          source: "Публичная поисковая выдача",
           geography: "Москва",
           device: "desktop",
           observation_date: "2026-08-21T09:25:00.000Z",
+          limitation: "Один артефакт доказывает только точный sample.",
+          raw: { immutable_pointer: "urn:mox:owner-artifact:application-contract-search", sha256: `sha256:${"a".repeat(64)}`, media_type: "image/png", byte_length: 2048 },
+          extraction: { method: "manual_span", ad_marker: "Реклама", locator: "image region 30,20,1100,300" },
+          provenance: { obtained_by: "owner", obtained_at: "2026-08-21T09:30:00.000Z" },
+          approval: null,
         },
       },
       limitations: ["Публичная видимость является наблюдением, а не показателем эффективности."],
@@ -5028,7 +5034,10 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
   assert.equal(projection.competitorMatrix.candidates.length, 2);
   assert.equal(projection.competitorMatrix.rows[0].competitor, "Экспо Альфа");
   assert.equal(projection.competitorMatrix.rows[0].publishedPrice, "от 120 000 ₽");
-  assert.match(projection.competitorMatrix.rows[0].adVisibilitySample, /Объявление наблюдалось/u);
+  assert.match(projection.competitorMatrix.rows[0].adObservationStatus, /Объявление наблюдалось/u);
+  assert.match(projection.competitorMatrix.rows[0].adObservationSource, /Артефакт владельца/u);
+  assert.match(projection.competitorMatrix.rows[0].adObservationScope, /промышленная выставка участие/u);
+  assert.match(projection.competitorMatrix.rows[0].adObservationLimitation, /точный sample/u);
   assert.match(projection.competitorMatrix.aggregateClaims[0].scope, /Знаменатель: 2/u);
   assert.equal(projection.competitorMatrix.aggregateClaims[0].result, "Наблюдалось: 1 из 2 (50%).");
   assert.match(projection.competitorMatrix.limitations.join(" "), /не показывают расходы, CPC, конверсии, CPA, ROI, прибыльность/u);
