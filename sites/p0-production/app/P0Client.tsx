@@ -388,6 +388,8 @@ export default function P0Client() {
             <p>Просмотр и правки доступны без решения о публикации. Этот этап не создаёт и не изменяет кампании в Директе, не запускает показы и не расходует бюджет.</p>
           </section>}
 
+          {(activeStage === "campaigns" || activeStage === "review") && activeStageStatus !== "upcoming" && projection.pipeline?.campaignDossier && <CampaignPairDossier dossier={projection.pipeline.campaignDossier} />}
+
           {(activeStage === "campaigns" || (activeStage === "review" && publicationReviewHandoff)) && activeStageStatus !== "upcoming" && projection.campaignOptions.length > 0 && <section className="owner-campaigns" aria-labelledby="owner-campaigns-title">
             <header><p className="owner-eyebrow">ТЕКУЩИЕ CAMPAIGN DRAFT</p><h2 id="owner-campaigns-title">Кампании для бизнес-проверки</h2></header>
             <div>{projection.campaignOptions.map((campaign, index) => <CampaignOption
@@ -411,6 +413,47 @@ export default function P0Client() {
       </fieldset>
     </main>
   </div>;
+}
+
+type PipelineCampaignDossier = NonNullable<NonNullable<OwnerJourneyProjection["pipeline"]>["campaignDossier"]>;
+
+function CampaignPairDossier({ dossier }: { dossier: PipelineCampaignDossier }) {
+  return <section className="owner-campaign-dossier" aria-labelledby="owner-campaign-dossier-title">
+    <header>
+      <div><p className="owner-eyebrow">CAMPAIGN HYPOTHESIS + ПОЛНЫЙ CAMPAIGN DRAFT</p><h2 id="owner-campaign-dossier-title">{dossier.title}</h2><p>{dossier.profile}</p></div>
+      <strong>{dossier.state}</strong>
+    </header>
+    <p className="owner-dossier-safety">{dossier.safety}</p>
+    <ol className="owner-dossier-lineage" aria-label="Campaign Strategy → Campaign Hypothesis → Campaign Draft">
+      {dossier.lineage.map((item) => <li key={item.kind}><span>{item.kind}</span><strong>{item.summary}</strong><small>{item.versionLabel}</small></li>)}
+    </ol>
+    <section className="owner-dossier-hypothesis" aria-labelledby="owner-dossier-hypothesis-title">
+      <div><p className="owner-eyebrow">БИЗНЕС-СМЫСЛ</p><h3 id="owner-dossier-hypothesis-title">{dossier.hypothesis.mechanism}</h3></div>
+      <dl><div><dt>Основная метрика</dt><dd>{dossier.hypothesis.primaryMetric}</dd></div><div><dt>С чем сравниваем</dt><dd>{dossier.hypothesis.baseline}</dd></div></dl>
+      <p><b>Доказательства:</b> {dossier.hypothesis.evidence.join(" · ")}</p>
+    </section>
+    <section className="owner-dossier-preview" aria-labelledby="owner-dossier-preview-title">
+      <header><p className="owner-eyebrow">ЧТО УВИДИТ КЛИЕНТ</p><h3 id="owner-dossier-preview-title">Заголовки, тексты, ссылка и все сочетания</h3></header>
+      <div className="owner-dossier-copy"><article><h4>Заголовки</h4><ul>{dossier.clientPreview.titles.map((title) => <li key={title}>{title}</li>)}</ul></article><article><h4>Тексты</h4><ul>{dossier.clientPreview.texts.map((value) => <li key={value}>{value}</li>)}</ul></article></div>
+      <p className="owner-dossier-link"><b>Ссылка:</b> {dossier.clientPreview.link}</p>
+      <ol className="owner-dossier-combinations">{dossier.clientPreview.combinations.map((combination, index) => <li key={`${combination.title}-${combination.text}-${index}`}><strong>{combination.title}</strong><span>{combination.text}</span><small>{combination.link}</small></li>)}</ol>
+      <footer><p><b>Происхождение:</b> {dossier.clientPreview.creativeSource} · {dossier.clientPreview.creativeRights}</p><p><b>Обязательные оговорки:</b> {dossier.clientPreview.requiredDisclaimers.length ? dossier.clientPreview.requiredDisclaimers.join(" · ") : "Не требуются для текущего подтверждённого содержания"}</p></footer>
+    </section>
+    <section className="owner-dossier-mapping" aria-labelledby="owner-dossier-mapping-title">
+      <header><p className="owner-eyebrow">STRATEGY → CAMPAIGN DRAFT</p><h3 id="owner-dossier-mapping-title">Решение → evidence → точное поле</h3></header>
+      {dossier.strategyMapping.map((item) => <article key={item.dimension}>
+        <h4>{item.dimension}</h4>
+        <div><span>Решение</span><strong>{item.decision}</strong><small>{item.rationale}</small></div>
+        <div><span>Evidence</span><ul>{item.evidence.map((reference) => <li key={reference}>{reference}</li>)}</ul></div>
+        <div><span>Точное поле Draft</span><dl>{item.exactDraftFields.map((field) => <div key={field.pointer}><dt><code>{field.pointer}</code></dt><dd>{field.value}</dd></div>)}</dl></div>
+      </article>)}
+    </section>
+    <details className="owner-dossier-direct">
+      <summary>Точная Direct Projection · {dossier.directProjection.fields.length} полей</summary>
+      <p>{dossier.directProjection.graph.join(" · ")}</p>
+      <div>{dossier.directProjection.fields.map((field) => <article key={field.pointer}><code>{field.pointer}</code><strong>{field.disposition}</strong><output>{field.value}</output><small>Происхождение: {field.provenance}</small></article>)}</div>
+    </details>
+  </section>;
 }
 
 type CampaignOptionProjection = OwnerJourneyProjection["campaignOptions"][number];

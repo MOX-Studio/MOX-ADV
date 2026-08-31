@@ -281,6 +281,58 @@
 .owner-card dl div { padding-top: 6px; border-top: 1px solid var(--owner-line); }
 .owner-card dt { color: var(--owner-muted); font-size: 7px; }
 .owner-card dd { margin: 3px 0 0; font-size: 8px; font-weight: 750; overflow-wrap: anywhere; }
+.owner-campaign-dossier { min-width: 0; margin-top: 18px; padding: 18px; border: 2px solid var(--owner-green); border-radius: 11px; background: #f8fcf9; }
+.owner-campaign-dossier > header { display: flex; gap: 16px; justify-content: space-between; align-items: flex-start; }
+.owner-campaign-dossier > header h2 { margin: 5px 0; font-size: 22px; }
+.owner-campaign-dossier > header p:last-child { margin: 0; color: var(--owner-muted); font-size: 8px; }
+.owner-campaign-dossier > header > strong { flex: 0 0 auto; padding: 7px 9px; border-radius: 999px; color: var(--owner-green-dark); background: var(--owner-soft); font-size: 8px; }
+.owner-dossier-safety { margin: 12px 0 0; padding: 10px 12px; border-left: 4px solid var(--owner-green); border-radius: 7px; color: var(--owner-green-dark); background: white; font-size: 8px; line-height: 1.5; }
+.owner-dossier-lineage { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px; margin: 11px 0 0; padding: 0; list-style: none; counter-reset: dossier-lineage; }
+.owner-dossier-lineage li { position: relative; display: grid; gap: 5px; min-width: 0; padding: 11px; border: 1px solid var(--owner-line); border-radius: 8px; background: white; }
+.owner-dossier-lineage li:not(:last-child)::after { content: "→"; position: absolute; right: -17px; top: 50%; color: var(--owner-green); font-weight: 900; transform: translateY(-50%); }
+.owner-dossier-lineage span { color: var(--owner-green-dark); font-size: 7px; font-weight: 850; }
+.owner-dossier-lineage strong { font-size: 9px; line-height: 1.4; overflow-wrap: anywhere; }
+.owner-dossier-lineage small { color: var(--owner-muted); font-size: 6px; overflow-wrap: anywhere; }
+.owner-dossier-hypothesis, .owner-dossier-preview, .owner-dossier-mapping, .owner-dossier-direct { margin-top: 11px; padding: 13px; border: 1px solid var(--owner-line); border-radius: 8px; background: white; }
+.owner-dossier-hypothesis h3, .owner-dossier-preview h3, .owner-dossier-mapping h3 { margin: 5px 0 0; font-size: 14px; }
+.owner-dossier-hypothesis dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin: 10px 0 0; }
+.owner-dossier-hypothesis dl div { padding: 9px; border-radius: 6px; background: var(--owner-soft); }
+.owner-dossier-hypothesis dt, .owner-dossier-hypothesis p { color: var(--owner-muted); font-size: 7px; }
+.owner-dossier-hypothesis dd { margin: 4px 0 0; font-size: 8px; font-weight: 750; }
+.owner-dossier-hypothesis p { margin: 9px 0 0; overflow-wrap: anywhere; }
+.owner-dossier-copy { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+.owner-dossier-copy article { padding: 10px; border-radius: 7px; background: var(--owner-soft); }
+.owner-dossier-copy h4 { margin: 0; font-size: 9px; }
+.owner-dossier-copy ul { margin: 7px 0 0; padding-left: 16px; }
+.owner-dossier-copy li, .owner-dossier-link, .owner-dossier-preview footer p { color: var(--owner-muted); font-size: 7px; line-height: 1.45; overflow-wrap: anywhere; }
+.owner-dossier-link { padding: 9px 10px; border: 1px solid var(--owner-line); border-radius: 6px; }
+.owner-dossier-combinations { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin: 9px 0 0; padding: 0; list-style: none; }
+.owner-dossier-combinations li { display: grid; gap: 4px; padding: 9px; border: 1px solid var(--owner-line); border-radius: 6px; }
+.owner-dossier-combinations strong { font-size: 8px; }
+.owner-dossier-combinations span, .owner-dossier-combinations small { color: var(--owner-muted); font-size: 7px; line-height: 1.4; overflow-wrap: anywhere; }
+.owner-dossier-preview footer { margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--owner-line); }
+.owner-dossier-preview footer p { margin: 4px 0; }
+.owner-dossier-mapping > article { display: grid; grid-template-columns: 115px repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 8px; padding: 10px; border: 1px solid var(--owner-line); border-radius: 7px; }
+.owner-dossier-mapping h4 { margin: 0; font-size: 10px; }
+.owner-dossier-mapping article > div { min-width: 0; }
+.owner-dossier-mapping article > div > span { display: block; color: var(--owner-green-dark); font-size: 6px; font-weight: 850; text-transform: uppercase; }
+.owner-dossier-mapping strong, .owner-dossier-mapping small { display: block; margin-top: 5px; font-size: 7px; line-height: 1.4; overflow-wrap: anywhere; }
+.owner-dossier-mapping small { color: var(--owner-muted); }
+.owner-dossier-mapping ul { margin: 5px 0 0; padding-left: 14px; }
+.owner-dossier-mapping li { color: var(--owner-muted); font-size: 6px; line-height: 1.4; overflow-wrap: anywhere; }
+.owner-dossier-mapping dl { display: grid; gap: 5px; margin: 5px 0 0; }
+.owner-dossier-mapping dl div { min-width: 0; }
+.owner-dossier-mapping dt code { color: var(--owner-green-dark); font-size: 6px; overflow-wrap: anywhere; }
+.owner-dossier-mapping dd { margin: 2px 0 0; color: var(--owner-muted); font-size: 6px; overflow-wrap: anywhere; }
+.owner-dossier-direct > summary { color: var(--owner-green-dark); font-size: 9px; font-weight: 850; cursor: pointer; }
+.owner-dossier-direct > p { color: var(--owner-muted); font-size: 7px; }
+.owner-dossier-direct > div { display: grid; gap: 5px; margin-top: 8px; }
+.owner-dossier-direct article { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; padding: 8px; border-radius: 6px; background: #f7faf8; }
+.owner-dossier-direct code, .owner-dossier-direct output, .owner-dossier-direct small { overflow-wrap: anywhere; }
+.owner-dossier-direct code { font-size: 6px; }
+.owner-dossier-direct strong { color: var(--owner-green-dark); font-size: 6px; }
+.owner-dossier-direct output, .owner-dossier-direct small { grid-column: 1 / -1; font-size: 7px; }
+.owner-dossier-direct small { color: var(--owner-muted); font-size: 6px; }
 .owner-campaigns, .owner-package { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--owner-line); }
 .owner-campaigns h2, .owner-package h2 { margin: 5px 0 0; font-size: 22px; }
 .owner-campaigns > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin-top: 12px; }

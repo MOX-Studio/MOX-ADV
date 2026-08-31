@@ -1,4 +1,5 @@
 import { validateCampaignPairs } from "./campaign-pair-validation.ts";
+import type { OwnerCampaignPairDossier } from "./campaign-pair-dossier.ts";
 import type { GoalCandidate } from "./goal-revision.ts";
 import {
   CURRENT_GOAL_SCHEMA,
@@ -51,6 +52,7 @@ export type OwnerPipelineProjection = {
     reason: string;
     target: string;
   };
+  campaignDossier: OwnerCampaignPairDossier | null;
   goalFormation:
     | { status: "PENDING" }
     | {
@@ -241,6 +243,7 @@ export function projectOwnerPipeline(
   run: PipelineRunState | null,
   currentGoal: CurrentGoal | null = null,
   provenance: OwnerResultProvenance | null = null,
+  campaignDossier: OwnerCampaignPairDossier | null = null,
 ): OwnerPipelineProjection {
   if (!run) {
     return {
@@ -262,6 +265,7 @@ export function projectOwnerPipeline(
         tone: "pending",
       })),
       return: null,
+      campaignDossier,
       goalFormation: currentGoal ? {
         status: "VERIFIED",
         versionLabel: `Версия ${currentGoal.revision.version}`,
@@ -344,6 +348,7 @@ export function projectOwnerPipeline(
           target: stageLabel(run.last_transition.target_stage),
         }
       : null,
+    campaignDossier,
     goalFormation,
     canStart: run.status !== "ACTIVE",
     canStop: run.status === "ACTIVE",
