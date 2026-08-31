@@ -61,6 +61,24 @@ test("researches a bounded public first-party HTTPS target with redirects handle
   assert.equal(adapter.requests.filter((item) => item.kind === "fetch").every((item) => item.redirect === "manual"), true);
 });
 
+test("public Metrika code is not promoted into a confirmed private binding", async () => {
+  const adapter = transport({
+    "https://owner.example/": html(`
+      <script>ym(76543210, "init", { clickmap: true });</script>
+      <p>Публичное предложение внешней компании.</p>
+    `),
+  });
+
+  const result = await researchPublicFirstPartySite("https://owner.example/", {
+    ...adapter,
+    now: () => "2026-08-21T10:00:00.000Z",
+  });
+
+  assert.doesNotMatch(JSON.stringify(result), /76543210/u);
+  assert.equal(Object.hasOwn(result, "counter_id"), false);
+  assert.equal(Object.hasOwn(result, "metrika_binding"), false);
+});
+
 test("rejects private DNS results before contacting the target", async () => {
   const adapter = transport({ "https://owner.example/": html("<p>Never fetched</p>") }, ["10.0.0.8"]);
   await assert.rejects(

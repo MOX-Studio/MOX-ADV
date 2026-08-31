@@ -674,6 +674,11 @@ export async function buildAnalyticsEvidence({
   generatedAt,
 }: AnalyticsEvidenceInput): Promise<AnalyticsEvidenceBundle> {
   const siteResearch = record(site.research);
+  const accessProfile = record(context.access_profile);
+  const evidenceScope = record(accessProfile.evidence_scope);
+  const publicColdStart = accessProfile.path === "NEW_ADVERTISER"
+    && accessProfile.account_history === "UNAVAILABLE"
+    && evidenceScope.direct !== "AVAILABLE";
   const direct = record(context.direct);
   const directBinding = record(direct.binding);
   const directReadLimitations = record(direct.read_limitations);
@@ -1598,9 +1603,14 @@ export async function buildAnalyticsEvidence({
     gaps.push(await makeGap({
       code: "CURRENT_DIRECT_INVENTORY_UNAVAILABLE",
       source_id: "direct",
-      description: "Current Direct inventory is unavailable; duplicate and already-covered demand status is unknown, not zero activity.",
-      material: true,
-      limitations: list(direct.blockers).map(text).filter(Boolean),
+      description: publicColdStart
+        ? "Private Direct history is unavailable for this external-company cold start; duplicate and already-covered demand status is unknown, not zero activity."
+        : "Current Direct inventory is unavailable; duplicate and already-covered demand status is unknown, not zero activity.",
+      material: !publicColdStart,
+      limitations: [
+        ...(publicColdStart ? ["Public first-party evidence may prepare a cold-start Draft, but it cannot establish private Direct activity, settings or performance."] : []),
+        ...list(direct.blockers).map(text).filter(Boolean),
+      ],
     }));
   }
   if (!metrikaReportReady) {
@@ -1753,7 +1763,12 @@ export async function buildAnalyticsEvidence({
               "Direct statistics for the last three days remain provisional.",
             ]
           : ["AdGroups.get, Keywords.get, Ads.get and Search Query reports are not part of this snapshot.", "Direct statistics for the last three days remain provisional."]
-        : ["Current Direct inventory unavailable; activity is unknown, not zero.", ...list(direct.blockers).map(text).filter(Boolean)],
+        : [
+            publicColdStart
+              ? "Private Direct history is unavailable by scope; public cold-start analysis remains allowed without treating activity as zero."
+              : "Current Direct inventory unavailable; activity is unknown, not zero.",
+            ...list(direct.blockers).map(text).filter(Boolean),
+          ],
       evidence_ids: sourceEvidence.direct,
     }),
     makeSource({
@@ -1947,7 +1962,7 @@ export async function buildAnalyticsEvidence({
     ...(firstPartyStatus === "UNAVAILABLE" && ownerStatus === "UNAVAILABLE"
       ? ["First-party business model has no recoverable evidence or owner confirmation."]
       : []),
-    ...(!directInventoryReady ? ["Current Direct inventory недоступен: duplicates and already-covered demand are unknown, not zero."] : []),
+    ...(!directInventoryReady && !publicColdStart ? ["Current Direct inventory недоступен: duplicates and already-covered demand are unknown, not zero."] : []),
     ...materialConflictBlockers,
   ];
   const materialUncertainties = [

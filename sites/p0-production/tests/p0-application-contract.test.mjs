@@ -1833,9 +1833,15 @@ test("cold-start research proceeds with unavailable account history and never pe
     confirmation: "CONFIRM_CONTEXT_GOAL",
     goal: result.state.context_state.provisional_business_goal.value,
   });
-  assert.equal(result.state.analytics_evidence_snapshot.sources.find((item) => item.source_id === "direct").status, "UNAVAILABLE");
-  assert.equal(result.state.analytics_evidence_snapshot.claims.some((item) => item.predicate === "campaigns_total" && item.value === 0), false);
-  assert.equal(result.state.analytics_evidence_snapshot.gaps.some((item) => item.code === "CURRENT_DIRECT_INVENTORY_UNAVAILABLE"), true);
+  const coldStartEvidence = result.state.analytics_evidence_snapshot;
+  const directGap = coldStartEvidence.gaps.find((item) => item.code === "CURRENT_DIRECT_INVENTORY_UNAVAILABLE");
+  assert.equal(coldStartEvidence.summary.hard_blockers.some((item) => /Direct inventory/iu.test(item)), false);
+  assert.equal(coldStartEvidence.sources.find((item) => item.source_id === "direct").status, "UNAVAILABLE");
+  assert.equal(coldStartEvidence.claims.some((item) => item.predicate === "campaigns_total" && item.value === 0), false);
+  assert.equal(directGap?.material, false);
+  assert.match(directGap?.description ?? "", /cold start|cold-start/iu);
+  assert.equal(coldStartEvidence.sources.find((item) => item.source_id === "metrika").access, "unavailable");
+  assert.equal(coldStartEvidence.claims.some((item) => item.predicate === "exact_goal_binding"), false);
   assert.equal(result.write_readiness.ready, false);
   const agentContract = await application.agentContract("owner", "COORDINATE_OWNER_JOURNEY");
   assert.deepEqual(agentContract.tools.map((tool) => tool.name), [

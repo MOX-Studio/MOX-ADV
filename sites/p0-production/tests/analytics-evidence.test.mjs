@@ -534,6 +534,60 @@ test("attaches exact Direct read scope and treats unavailable current inventory 
   assert.ok(unavailable.gaps.some((item) => item.code === "CURRENT_DIRECT_INVENTORY_UNAVAILABLE" && item.material));
 });
 
+test("external-company cold start keeps private Direct and Metrika unavailable without blocking public-evidence preparation", async () => {
+  const input = fixture();
+  input.context.access_profile = {
+    path: "NEW_ADVERTISER",
+    account_history: "UNAVAILABLE",
+    evidence_scope: { direct: "UNAVAILABLE", metrika: "UNAVAILABLE", wordstat: "UNAVAILABLE" },
+    limitation: "Private provider history is outside this external-company scope.",
+  };
+  input.context.direct = {
+    ready: false,
+    inventory_ready: false,
+    authority: "UNAVAILABLE",
+    access: "YANDEX_DIRECT_API_V501",
+    account: "",
+    client_id: "",
+    binding: { expected_account: "", api_account: "", matched: false },
+    campaigns_total: null,
+    blockers: ["No private Direct authority for this external company."],
+  };
+  input.context.campaign_catalog = null;
+  input.context.metrika = {
+    ready: false,
+    authority: "UNAVAILABLE",
+    access: "YANDEX_METRIKA_MANAGEMENT_AND_REPORTS_API",
+    counter_id: "",
+    goal_id: "",
+    binding: { expected_counter_id: "", api_counter_id: "", matched: false },
+    goal_binding: { expected_goal_id: "", api_goal_id: "", matched: false },
+    blockers: ["No private Metrika authority for this external company."],
+  };
+  input.context.performance = null;
+  input.site.pages[0].text_excerpt += " Публичный код страницы содержит счётчик 76543210.";
+
+  const coldStart = await buildAnalyticsEvidence(input);
+  const directGap = coldStart.gaps.find((item) => item.code === "CURRENT_DIRECT_INVENTORY_UNAVAILABLE");
+  const directSource = coldStart.sources.find((item) => item.source_id === "direct");
+  const metrikaSource = coldStart.sources.find((item) => item.source_id === "metrika");
+
+  assert.equal(coldStart.recommendation_status, "EVIDENCE_READY_WITH_GAPS");
+  assert.equal(directGap?.material, false);
+  assert.match(directGap?.description ?? "", /cold start|cold-start/iu);
+  assert.ok(directGap?.limitations.some((item) => /cold-start Draft/iu.test(item)));
+  assert.equal(directSource?.status, "UNAVAILABLE");
+  assert.ok(directSource?.limitations.some((item) => /public cold-start analysis remains allowed/iu.test(item)));
+  assert.equal(coldStart.claims.some((item) => item.predicate === "campaigns_total" && item.value === 0), false);
+  assert.equal(metrikaSource?.status, "UNAVAILABLE");
+  assert.equal(metrikaSource?.access, "unavailable");
+  assert.deepEqual(metrikaSource?.scope, { counter_id: "", goal_id: "" });
+  assert.equal(coldStart.claims.some((item) => item.predicate === "exact_goal_binding"), false);
+  assert.equal(coldStart.scope.metrika_counter_id, "");
+  assert.equal(coldStart.scope.metrika_goal_id, "");
+  assert.equal(await verifyAnalyticsEvidenceSnapshot(coldStart), true);
+});
+
 test("links the complete exact-account Direct graph and reports audit through bounded artifact references", async () => {
   const input = fixture();
   input.context.direct.read_limitations = {
