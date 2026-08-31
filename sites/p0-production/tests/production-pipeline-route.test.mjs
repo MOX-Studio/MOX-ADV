@@ -28,6 +28,13 @@ test("cold-start Strategy planning does not require Direct read credentials", ()
   assert.match(productionSource, /minimum_weekly_budget_rub: null/u);
 });
 
+test("Dashboard exposes the exact Strategy Review decision instead of a terminal placeholder", () => {
+  assert.match(clientSource, /projection\.campaignStrategy\.ownerReview && <StrategyOwnerReview/u);
+  assert.match(clientSource, /function StrategyOwnerReview\(/u);
+  assert.match(clientSource, /onDecision=\{submitStrategyDecision\}/u);
+  assert.match(clientSource, /Подтвердить точную версию/u);
+});
+
 test("NOT_STARTED pipeline keeps owner-journey actions and exposes Start only for current Drafts at review", () => {
   assert.match(clientSource, /projection\.pipeline && projection\.pipeline\.status !== "NOT_STARTED"\s*\? projection\.pipeline\.stages\.find/u);
   assert.match(clientSource, /projection\.journey\.currentStage === "review" && projection\.campaignOptions\.length > 0/u);
