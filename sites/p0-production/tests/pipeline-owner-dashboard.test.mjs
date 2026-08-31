@@ -63,31 +63,27 @@ function goalCandidate(materialAmbiguity = null) {
   };
 }
 
-function verifiedAttempt(run, stage, character) {
-  const reference = (name) => ({
-    schema_version: `${name}-v1`,
-    revision_id: `${name}-1`,
-    digest: `sha256:${character.repeat(64)}`,
-  });
+function auditReference(name, character) {
   return {
-    actor: { actor_id: `strategy-agent-${stage.toLowerCase()}`, actor_type: "AGENT", role: "STAGE_EXECUTOR" },
-    inputs: [run.input_versions.business_input],
-    evidence: [run.input_versions.analytics_evidence_snapshot ?? run.input_versions.business_input],
-    output: reference(`${stage.toLowerCase()}-output`),
+    schema_version: `${name}-v1`,
+    revision_id: `${name}-revision-1`,
+    digest: `sha256:${character.repeat(64)}`,
+  };
+}
+
+function verifiedAttempt(run, stage, character = "8") {
+  return {
+    actor: { actor_id: `agent-${stage.toLowerCase()}`, actor_type: "AGENT", role: "STAGE_EXECUTOR" },
+    inputs: [auditReference(`${stage.toLowerCase()}-input`, character)],
+    evidence: [auditReference(`${stage.toLowerCase()}-evidence`, character)],
+    output: auditReference(`${stage.toLowerCase()}-output`, character),
     checks: [{ check_id: `${stage}_CHECK`, status: "PASSED", policy: run.input_versions.pipeline_policy }],
-    schemas: [reference(`${stage.toLowerCase()}-schema`)],
+    schemas: [auditReference(`${stage.toLowerCase()}-schema`, character)],
     policies: [run.input_versions.pipeline_policy],
     campaign_playbook: run.input_versions.campaign_playbook,
   };
 }
 
-function discardedAttempt(run, stage, character) {
-  const attempt = verifiedAttempt(run, stage, character);
-  return {
-    ...attempt,
-    checks: [{ ...attempt.checks[0], status: "FAILED" }],
-  };
-}
 
 function historicalView(goal = "Получать квалифицированные заявки") {
   return {
@@ -257,13 +253,15 @@ test("Dashboard projection names the return source, exact reason and determinist
       attempt: verifiedAttempt(run, source, character),
     });
   }
+  const discarded = verifiedAttempt(run, "CAMPAIGNS", "9");
+  discarded.checks[0].status = "FAILED";
   run = await orchestrator.returnTo({
     run_id: run.run_id,
     expected_version: run.version,
     source_stage: "CAMPAIGNS",
     cause: "STRATEGY_DEFECT",
     reason: "Для полного черновика не хватает точной географии в Strategy.",
-    attempt: discardedAttempt(run, "CAMPAIGNS", "c"),
+    attempt: discarded,
   });
 
   const projection = projectOwnerPipeline(run);

@@ -9,6 +9,7 @@ import type {
   OwnerJourneyProjection,
   OwnerJourneyStageId,
 } from "../lib/p0-owner-journey";
+import type { OwnerResultExplanation } from "../lib/pipeline-result-explanation";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -513,11 +514,85 @@ function PipelineControl({
       <span>ВОЗВРАТ</span><strong>{pipeline.return.source} → {pipeline.return.target}</strong><p>{pipeline.return.reason}</p>
     </article>}
     {pipeline.editingLocked && <p className="owner-pipeline-lock" role="status">Текущие Цель, Campaign Strategy и пары доступны только для чтения до остановки или завершения запуска.</p>}
+    {pipeline.provenance && <ResultProvenance provenance={pipeline.provenance} />}
     <footer>
       {pipeline.canStart && <button type="button" className={styles.primaryButton} onClick={() => onAction("START")} disabled={busy}>{busy ? "Запускаю…" : "Запустить"}</button>}
       {pipeline.canStop && <button type="button" className="owner-pipeline-stop" onClick={() => onAction("STOP")} disabled={busy}>{busy ? "Останавливаю…" : "Остановить"}</button>}
     </footer>
   </section>;
+}
+
+function ResultProvenance({ provenance }: { provenance: NonNullable<PipelineProjection["provenance"]> }) {
+  const [answer, setAnswer] = useState<OwnerResultExplanation | null>(null);
+  const [asking, setAsking] = useState(false);
+  const [questionError, setQuestionError] = useState("");
+
+  async function ask(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (asking) return;
+    const data = new FormData(event.currentTarget);
+    setAsking(true);
+    setQuestionError("");
+    try {
+      const response = await fetch("/api/p0", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pipeline_action: "EXPLAIN",
+          pair_key: String(data.get("pair_key") ?? ""),
+          question: String(data.get("question") ?? ""),
+        }),
+      });
+      const value = await response.json() as OwnerResultExplanation & { message?: string };
+      if (!response.ok) throw new Error(value.message ?? "Не удалось объяснить текущий результат.");
+      setAnswer(value);
+    } catch (reason) {
+      setQuestionError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setAsking(false);
+    }
+  }
+
+  return <details className="owner-result-provenance">
+    <summary>{provenance.title}</summary>
+    <p className="owner-result-safety">{provenance.safety}</p>
+    {provenance.pairs.length > 0 && <section className="owner-result-pairs" aria-label="Текущие проверенные пары">
+      <h3>Текущие пары результата</h3>
+      {provenance.pairs.map((pair) => <article key={pair.key}>
+        <strong>{pair.label}</strong>
+        <span>{pair.hypothesis.kind}: {pair.hypothesis.revision}</span>
+        <span>{pair.draft.kind}: {pair.draft.revision}</span>
+      </article>)}
+    </section>}
+    <section className="owner-result-events" aria-label="Очищенный след этапов и попыток">
+      <h3>Запуск, этапы и попытки</h3>
+      {provenance.events.map((event, index) => <article key={`${event.stage}-${event.attempt}-${index}`}>
+        <header><strong>{event.stage}</strong><span>{event.status} · попытка {event.attempt}</span></header>
+        <p><b>Исполнитель:</b> {event.executor}. <b>Задача:</b> {event.task}.</p>
+        <p><b>Входы:</b> {event.inputs.length ? event.inputs.map((item) => `${item.kind} · ${item.revision}`).join("; ") : "не требовались"}.</p>
+        <p><b>Доказательства:</b> {event.evidence.length ? event.evidence.map((item) => `${item.kind} · ${item.revision}`).join("; ") : "не требовались"}.</p>
+        <p><b>Проверки:</b> {event.checks.length ? event.checks.join("; ") : "для этого события не требовались"}.</p>
+        {event.safeCorrection && <p><b>Безопасное исправление:</b> {event.safeCorrection}</p>}
+        {event.retry && <p><b>Повтор:</b> {event.retry}</p>}
+        {event.return && <p><b>Возврат:</b> {event.return}</p>}
+        {event.handoff && <p><b>Передача:</b> {event.handoff}</p>}
+      </article>)}
+    </section>
+    <section className="owner-result-versions" aria-label="Версии воспроизводимости">
+      <h3>Версии для воспроизводимости</h3>
+      <p>{provenance.versions.historicalDocument}</p>
+      <p>Политика: {provenance.versions.policy.schemaVersion} · {provenance.versions.policy.revision}</p>
+      <p>Campaign Playbook: {provenance.versions.campaignPlaybook.schemaVersion} · {provenance.versions.campaignPlaybook.revision}</p>
+    </section>
+    <form className="owner-result-chat" onSubmit={ask}>
+      <h3>Спросить о текущем результате</h3>
+      {provenance.pairs.length > 0 && <label>Пара<select name="pair_key" defaultValue={provenance.pairs[0].key}>{provenance.pairs.map((pair) => <option key={pair.key} value={pair.key}>{pair.label}</option>)}</select></label>}
+      <label>Свободный вопрос<textarea name="question" required maxLength={1000} placeholder="Например: какие проверки пройдены и кто передал результат?" /></label>
+      <button type="submit" disabled={asking}>{asking ? "Проверяю след…" : "Получить объяснение"}</button>
+    </form>
+    {answer && <section className="owner-result-answer" role="status"><strong>{answer.scope}</strong><p>{answer.answer}</p><ul>{answer.facts.map((fact, index) => <li key={`${fact}-${index}`}>{fact}</li>)}</ul><small>{answer.safety}</small></section>}
+    {questionError && <p className="owner-error" role="alert">{questionError}</p>}
+  </details>;
 }
 
 function StageNavigation({ projection, selectedStage, onStage }: { projection: OwnerJourneyProjection; selectedStage: OwnerJourneyStageId; onStage: (stage: OwnerJourneyStageId) => void }) {

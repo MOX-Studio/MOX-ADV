@@ -76,10 +76,12 @@ function inputVersions() {
     }],
     campaign_pair_checks: {
       schema_version: "campaign-pair-validation-v1",
-      contract_version: "1.0.0",
+      contract_version: "1.1.0",
       strategy_revision_id: "campaign-strategy-revision-1",
       evidence_snapshot_id: "analytics-evidence-snapshot-revision-1",
       field_registry_schema: "direct-v501-draft-field-registry-v2",
+      set_disposition: "CURRENT_PAIRS_AVAILABLE",
+      required_request_package: null,
       pairs: [{
         pair_id: "campaign-hypothesis-revision-1::campaign-draft-revision-1",
         hypothesis_revision_id: "campaign-hypothesis-revision-1",

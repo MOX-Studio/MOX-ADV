@@ -8,6 +8,12 @@ import {
   type CurrentGoalStore,
 } from "./goal-revision-lifecycle.ts";
 import {
+  explainCurrentResultQuestion,
+  projectCurrentResultProvenance,
+  type OwnerResultExplanation,
+  type OwnerResultProvenance,
+} from "./pipeline-result-explanation.ts";
+import {
   PIPELINE_INPUT_VERSIONS_SCHEMA,
   PIPELINE_STAGES,
   PipelineOrchestrator,
@@ -24,6 +30,7 @@ export type OwnerPipelineStageStatus = "Завершён" | "Выполняет�
 
 export type OwnerPipelineProjection = {
   runId: string | null;
+  provenance: OwnerResultProvenance | null;
   version: number | null;
   status: "NOT_STARTED" | PipelineRunState["status"];
   active: boolean;
@@ -230,10 +237,15 @@ function stageLabel(stageId: PipelineStageId) {
   return PIPELINE_STAGES.find((stage) => stage.id === stageId)?.label ?? stageId;
 }
 
-export function projectOwnerPipeline(run: PipelineRunState | null, currentGoal: CurrentGoal | null = null): OwnerPipelineProjection {
+export function projectOwnerPipeline(
+  run: PipelineRunState | null,
+  currentGoal: CurrentGoal | null = null,
+  provenance: OwnerResultProvenance | null = null,
+): OwnerPipelineProjection {
   if (!run) {
     return {
       runId: null,
+      provenance: null,
       version: null,
       status: "NOT_STARTED",
       active: false,
@@ -307,6 +319,7 @@ export function projectOwnerPipeline(run: PipelineRunState | null, currentGoal: 
       : { status: "PENDING" };
   return {
     runId: run.run_id,
+    provenance,
     version: run.version,
     status: run.status,
     active: run.status === "ACTIVE",
@@ -351,12 +364,15 @@ export class OwnerPipelineController {
     this.now = input.now ?? (() => new Date().toISOString());
   }
 
+  private async project(run: PipelineRunState | null, ownerKey = run?.owner_key) {
+    const currentGoal = ownerKey ? await this.goalStore?.loadCurrent(ownerKey) ?? null : null;
+    if (!run) return projectOwnerPipeline(null, currentGoal);
+    const provenance = await projectCurrentResultProvenance(run, await this.orchestrator.audit(run.run_id));
+    return projectOwnerPipeline(run, currentGoal, provenance);
+  }
+
   async current(ownerKey: string) {
-    const [run, goal] = await Promise.all([
-      this.orchestrator.current(ownerKey),
-      this.goalStore?.loadCurrent(ownerKey) ?? null,
-    ]);
-    return projectOwnerPipeline(run, goal);
+    return this.project(await this.orchestrator.current(ownerKey), ownerKey);
   }
 
   async start(ownerKey: string, view: PipelineHistoricalView) {
@@ -371,7 +387,14 @@ export class OwnerPipelineController {
         digest: currentGoal.revision.digest,
       };
     }
-    return projectOwnerPipeline(await this.orchestrator.start(ownerKey, versions), currentGoal);
+    return this.project(await this.orchestrator.start(ownerKey, versions), ownerKey);
+  }
+
+  async explain(ownerKey: string, input: { question: unknown; pairKey?: unknown }): Promise<OwnerResultExplanation> {
+    const run = await this.orchestrator.current(ownerKey);
+    if (!run) throw new Error("Текущий запуск ещё не создан.");
+    const provenance = await projectCurrentResultProvenance(run, await this.orchestrator.audit(run.run_id));
+    return explainCurrentResultQuestion(provenance, input.question, input.pairKey);
   }
 
   async recordGoalCandidate(ownerKey: string, input: { runId: string; expectedVersion: number; candidate: GoalCandidate }) {
@@ -396,7 +419,7 @@ export class OwnerPipelineController {
       if (!await this.goalStore.append(formed, null)) throw new Error("Текущая Цель изменилась. Обновите Dashboard.");
       savedGoal = formed;
     }
-    return projectOwnerPipeline(run, savedGoal);
+    return this.project(run, ownerKey);
   }
 
   async correctGoal(ownerKey: string, input: { desiredOutcome: string; qualifiedAction: string }) {
@@ -418,7 +441,7 @@ export class OwnerPipelineController {
       && !await this.goalStore.append(result.current, currentGoal.revision.version)) {
       throw new Error("Текущая Цель изменилась. Обновите Dashboard.");
     }
-    return projectOwnerPipeline(run, result.current);
+    return this.project(run, ownerKey);
   }
 
   async stop(ownerKey: string, input: { runId: string; expectedVersion: number }) {
@@ -430,6 +453,6 @@ export class OwnerPipelineController {
       run_id: input.runId,
       expected_version: input.expectedVersion,
     });
-    return projectOwnerPipeline(stopped, await this.goalStore?.loadCurrent(ownerKey) ?? null);
+    return this.project(stopped, ownerKey);
   }
 }

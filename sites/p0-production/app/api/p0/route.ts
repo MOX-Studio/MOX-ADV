@@ -84,6 +84,12 @@ export async function POST(request: Request) {
     const currentBackend = await backend(request);
     const controller = pipelineController();
     const pipelineAction = String(payload.pipeline_action ?? "");
+    if (pipelineAction === "EXPLAIN") {
+      return Response.json(await controller.explain(key, {
+        question: payload.question,
+        pairKey: payload.pair_key,
+      }));
+    }
     if (pipelineAction === "START") {
       const current = await controller.current(key);
       if (current.active) throw new Error("У владельца уже есть активный запуск.");
