@@ -162,6 +162,25 @@ function input() {
       source_ref: "gir-bo:competitor:2023",
       limitation: "Доступ к отчётности ограничен; значение неизвестно.",
     }],
+    observed_segment_revenue_share: {
+      reporting_year: 2024,
+      population_frame_complete: false,
+      company_group_policy: "SINGLE_ENTITY",
+      revenue_attributions: [
+        {
+          financial_record_ref: "fer-company-2024",
+          scope: scope(),
+          attribution_policy: "WHOLE_ENTITY_IF_SINGLE_ACTIVITY",
+          evidence_refs: ["claim:company-single-activity"],
+        },
+        {
+          financial_record_ref: "fer-competitor-2024",
+          scope: scope(),
+          attribution_policy: "DIRECT_SEGMENT_DISCLOSURE",
+          evidence_refs: ["claim:competitor-segment-disclosure"],
+        },
+      ],
+    },
     strategic_interpretations: [
       {
         interpretation_id: "niche-positioning",
@@ -232,6 +251,29 @@ test("freezes the exact analysis frame, excludes unresolved entities and preserv
     entities_with_records: 2,
     entities_without_records: [],
   });
+  assert.equal(dossier.observed_segment_revenue_share.label, "Observed Segment Revenue Share");
+  assert.equal(dossier.observed_segment_revenue_share.status, "AVAILABLE_PARTIAL_OBSERVED_COHORT");
+  assert.equal(dossier.observed_segment_revenue_share.value_percent, "33.33");
+  assert.deepEqual(dossier.observed_segment_revenue_share.numerator, {
+    value_rub: "150000000",
+    entity_ids: ["company"],
+    financial_record_refs: ["fer-company-2024"],
+  });
+  assert.deepEqual(dossier.observed_segment_revenue_share.denominator, {
+    value_rub: "450000000",
+    entity_ids: ["company", "competitor"],
+    financial_record_refs: ["fer-company-2024", "fer-competitor-2024"],
+  });
+  assert.deepEqual(dossier.observed_segment_revenue_share.coverage, {
+    population_entities: 2,
+    accepted_entities: 2,
+    observed_entities: 2,
+    entity_observation_ratio: "100",
+    revenue_coverage_ratio: null,
+    frame_state: "PARTIAL",
+  });
+  assert.deepEqual(dossier.observed_segment_revenue_share.missing_entities, []);
+  assert.match(dossier.observed_segment_revenue_share.limitation, /не является долей рынка/iu);
 });
 
 test("passes a financial Strategy statement only with independent non-financial evidence in the same scope", async () => {
@@ -265,6 +307,21 @@ test("suppresses independent evidence from a different geography and excludes in
   ]);
   assert.deepEqual(dossier.strategy_claims, []);
   assert.deepEqual(dossier.suppressed_strategy_claims, [{ interpretation_id: "wrong-scope", reason: "NONFINANCIAL_SCOPE_MISMATCH" }]);
+});
+
+test("does not calculate Observed Segment Revenue Share across a mismatched geography", async () => {
+  const value = input();
+  value.observed_segment_revenue_share.revenue_attributions[1].scope = scope({ geography_official_ids: ["78"] });
+
+  const dossier = await buildFinancialCompetitorIntelligence(value);
+
+  assert.equal(dossier.observed_segment_revenue_share.status, "SEMANTICS_MISMATCH");
+  assert.equal(dossier.observed_segment_revenue_share.value_percent, null);
+  assert.deepEqual(dossier.observed_segment_revenue_share.excluded_attributions, [{
+    financial_record_ref: "fer-competitor-2024",
+    reason: "SEMANTICS_MISMATCH",
+  }]);
+  assert.deepEqual(dossier.observed_segment_revenue_share.missing_entities.map((item) => item.entity_id), ["competitor"]);
 });
 
 test("rejects a financial record whose form and line do not match the canonical metric", async () => {

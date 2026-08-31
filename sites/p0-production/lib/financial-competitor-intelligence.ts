@@ -149,12 +149,25 @@ export type FinancialStrategicInterpretationInput = {
   falsifiable_consequence: string | null;
 };
 
+export type ObservedSegmentRevenueShareInput = {
+  reporting_year: number;
+  population_frame_complete: boolean;
+  company_group_policy: "SINGLE_ENTITY" | "CONSOLIDATED";
+  revenue_attributions: Array<{
+    financial_record_ref: string;
+    scope: FinancialScopeMatch;
+    attribution_policy: "WHOLE_ENTITY_IF_SINGLE_ACTIVITY" | "DIRECT_SEGMENT_DISCLOSURE";
+    evidence_refs: string[];
+  }>;
+};
+
 export type FinancialCompetitorIntelligenceInput = {
   frame: FrozenFinancialFrameInput;
   legal_entities: FinancialLegalEntityInput[];
   financial_records: GirBoFinancialRecordInput[];
   missing_financial_data: FinancialMissingObservationInput[];
   strategic_interpretations: FinancialStrategicInterpretationInput[];
+  observed_segment_revenue_share?: ObservedSegmentRevenueShareInput;
   generated_at: string;
 };
 
@@ -201,6 +214,33 @@ export type FinancialCompetitorIntelligence = {
     interpretation_id: string;
     reason: "FINANCIAL_RECORD_UNAVAILABLE" | "INDEPENDENT_NONFINANCIAL_EVIDENCE_REQUIRED" | "NONFINANCIAL_SCOPE_MISMATCH" | "PROHIBITED_FINANCIAL_INFERENCE";
   }>;
+  observed_segment_revenue_share: {
+    label: "Observed Segment Revenue Share";
+    status: "AVAILABLE_COMPLETE_FOR_DECLARED_FRAME" | "AVAILABLE_PARTIAL_OBSERVED_COHORT" | "NUMERATOR_UNAVAILABLE" | "DENOMINATOR_UNAVAILABLE" | "SEMANTICS_MISMATCH";
+    value_percent: string | null;
+    metric: {
+      semantic: "SEGMENT_ATTRIBUTABLE_ACCOUNTING_REVENUE";
+      currency: "RUB";
+      accounting_line: "2110";
+      reporting_year: number;
+      period_start: string;
+      period_end: string;
+    };
+    scope: FinancialScopeMatch;
+    numerator: { value_rub: string | null; entity_ids: string[]; financial_record_refs: string[] };
+    denominator: { value_rub: string | null; entity_ids: string[]; financial_record_refs: string[] };
+    coverage: {
+      population_entities: number;
+      accepted_entities: number;
+      observed_entities: number;
+      entity_observation_ratio: string | null;
+      revenue_coverage_ratio: null;
+      frame_state: "COMPLETE_FOR_DECLARED_FRAME" | "PARTIAL" | "UNKNOWN";
+    };
+    missing_entities: Array<{ entity_id: string; legal_name: string; reason: FinancialMissingReason | "ENTITY_UNRESOLVED" | "IDENTITY_EVIDENCE_INCOMPLETE" | "SEGMENT_ATTRIBUTION_MISSING" }>;
+    excluded_attributions: Array<{ financial_record_ref: string; reason: "RECORD_UNAVAILABLE" | "SEMANTICS_MISMATCH" | "DUPLICATE_ENTITY_ATTRIBUTION" }>;
+    limitation: string;
+  };
   prohibited_inferences: string[];
   limitations: string[];
   coverage: {
@@ -407,6 +447,38 @@ function multiplyDecimal(value: string, multiplier: number) {
   return `${negative && base !== BigInt(0) ? "-" : ""}${integerPart}${decimalPart ? `.${decimalPart}` : ""}`;
 }
 
+function decimalParts(value: string) {
+  const normalized = canonicalDecimal(value);
+  const negative = normalized.startsWith("-");
+  const [whole, fraction = ""] = normalized.replace(/^-/, "").split(".");
+  const units = BigInt(`${whole}${fraction}` || "0") * (negative ? BigInt(-1) : BigInt(1));
+  return { units, scale: fraction.length };
+}
+
+function decimalFromUnits(units: bigint, scale: number) {
+  const negative = units < BigInt(0);
+  const absolute = (negative ? -units : units).toString().padStart(scale + 1, "0");
+  const whole = scale ? absolute.slice(0, -scale) : absolute;
+  const fraction = scale ? absolute.slice(-scale).replace(/0+$/u, "") : "";
+  return `${negative && units !== BigInt(0) ? "-" : ""}${whole}${fraction ? `.${fraction}` : ""}`;
+}
+
+function sumDecimals(values: string[]) {
+  const parts = values.map(decimalParts);
+  const scale = Math.max(0, ...parts.map((item) => item.scale));
+  const units = parts.reduce((total, item) => total + item.units * (BigInt(10) ** BigInt(scale - item.scale)), BigInt(0));
+  return { value: decimalFromUnits(units, scale), units, scale };
+}
+
+function percentage(numerator: ReturnType<typeof sumDecimals>, denominator: ReturnType<typeof sumDecimals>) {
+  const commonScale = Math.max(numerator.scale, denominator.scale);
+  const numeratorUnits = numerator.units * (BigInt(10) ** BigInt(commonScale - numerator.scale));
+  const denominatorUnits = denominator.units * (BigInt(10) ** BigInt(commonScale - denominator.scale));
+  if (denominatorUnits <= BigInt(0)) return null;
+  const hundredths = (numeratorUnits * BigInt(10_000) + denominatorUnits / BigInt(2)) / denominatorUnits;
+  return decimalFromUnits(hundredths, 2);
+}
+
 const METRIC_LINE: Record<FinancialMetric, { statement: GirBoFinancialRecordInput["statement_kind"]; line: string }> = {
   REVENUE: { statement: "FINANCIAL_RESULTS", line: "2110" },
   NET_PROFIT: { statement: "FINANCIAL_RESULTS", line: "2400" },
@@ -599,6 +671,114 @@ export async function buildFinancialCompetitorIntelligence(input: FinancialCompe
 
   const acceptedRecordIds = new Set(acceptedRecords.map((record) => record.record_id));
   const expectedScope = frameScope(frame);
+  const shareInput = input.observed_segment_revenue_share;
+  const reportingYear = shareInput?.reporting_year ?? frame.period.reporting_years.at(-1)!;
+  if (!frame.period.reporting_years.includes(reportingYear)
+    || (shareInput && typeof shareInput.population_frame_complete !== "boolean")
+    || (shareInput && !["SINGLE_ENTITY", "CONSOLIDATED"].includes(shareInput.company_group_policy))) {
+    fail("OBSERVED_SEGMENT_SHARE_INPUT_INVALID", "Observed Segment Revenue Share требует год из замороженного frame, явную полноту population frame и group policy.");
+  }
+  const latestRecords = [...latestByKey.values()];
+  const latestRecordById = new Map(latestRecords.map((record) => [record.record_id, record]));
+  const includedShareRecords: typeof latestRecords = [];
+  const excludedAttributions: FinancialCompetitorIntelligence["observed_segment_revenue_share"]["excluded_attributions"] = [];
+  const attributedEntityIds = new Set<string>();
+  let sharePeriodStart: string | null = null;
+  let sharePeriodEnd: string | null = null;
+  for (const attribution of shareInput?.revenue_attributions ?? []) {
+    const recordRef = required(attribution.financial_record_ref, "OBSERVED_SEGMENT_SHARE_INPUT_INVALID", 300);
+    const financialRecord = latestRecordById.get(recordRef);
+    if (!financialRecord) {
+      excludedAttributions.push({ financial_record_ref: recordRef, reason: "RECORD_UNAVAILABLE" });
+      continue;
+    }
+    const normalizedScope = {
+      ...attribution.scope,
+      geography_official_ids: [...attribution.scope.geography_official_ids].sort(),
+      okved_codes: [...attribution.scope.okved_codes].sort(),
+    };
+    const evidenceRefs = [...new Set(attribution.evidence_refs.map((item) => required(item, "OBSERVED_SEGMENT_SHARE_INPUT_INVALID", 500)))];
+    const scopeMatches = canonical(normalizedScope) === canonical(expectedScope);
+    const periodMatches = financialRecord.reporting_year === reportingYear
+      && (!sharePeriodStart || sharePeriodStart === financialRecord.period_start)
+      && (!sharePeriodEnd || sharePeriodEnd === financialRecord.period_end);
+    if (financialRecord.metric !== "REVENUE" || financialRecord.line_code !== "2110" || !scopeMatches || !periodMatches
+      || !["WHOLE_ENTITY_IF_SINGLE_ACTIVITY", "DIRECT_SEGMENT_DISCLOSURE"].includes(attribution.attribution_policy)
+      || !evidenceRefs.length) {
+      excludedAttributions.push({ financial_record_ref: recordRef, reason: "SEMANTICS_MISMATCH" });
+      continue;
+    }
+    if (attributedEntityIds.has(financialRecord.entity_id)) {
+      excludedAttributions.push({ financial_record_ref: recordRef, reason: "DUPLICATE_ENTITY_ATTRIBUTION" });
+      continue;
+    }
+    sharePeriodStart = financialRecord.period_start;
+    sharePeriodEnd = financialRecord.period_end;
+    attributedEntityIds.add(financialRecord.entity_id);
+    includedShareRecords.push(financialRecord);
+  }
+  const acceptedCompanies = acceptedEntities.filter((entity) => entity.role === "COMPANY");
+  if (shareInput?.company_group_policy === "SINGLE_ENTITY" && acceptedCompanies.length > 1) {
+    for (const recordItem of includedShareRecords.splice(0)) {
+      attributedEntityIds.delete(recordItem.entity_id);
+      excludedAttributions.push({ financial_record_ref: recordItem.record_id, reason: "SEMANTICS_MISMATCH" });
+    }
+  }
+  const numeratorRecords = includedShareRecords.filter((recordItem) => acceptedCompanies.some((entity) => entity.entity_id === recordItem.entity_id));
+  const numeratorTotal = numeratorRecords.length ? sumDecimals(numeratorRecords.map((recordItem) => recordItem.normalized_value_rub)) : null;
+  const denominatorTotal = includedShareRecords.length ? sumDecimals(includedShareRecords.map((recordItem) => recordItem.normalized_value_rub)) : null;
+  const valuePercent = numeratorTotal && denominatorTotal ? percentage(numeratorTotal, denominatorTotal) : null;
+  const missingEntities: FinancialCompetitorIntelligence["observed_segment_revenue_share"]["missing_entities"] = acceptedEntities
+    .filter((entity) => !attributedEntityIds.has(entity.entity_id))
+    .map((entity) => ({
+      entity_id: entity.entity_id,
+      legal_name: entity.legal_name,
+      reason: missingByKey.get(`${entity.entity_id}:${reportingYear}:REVENUE`)?.reason ?? "SEGMENT_ATTRIBUTION_MISSING",
+    }));
+  missingEntities.sort((left, right) => left.entity_id.localeCompare(right.entity_id));
+  const shareHasSemanticsMismatch = excludedAttributions.some((item) => item.reason === "SEMANTICS_MISMATCH" || item.reason === "DUPLICATE_ENTITY_ATTRIBUTION");
+  const shareFrameState = !shareInput ? "UNKNOWN" as const
+    : shareInput.population_frame_complete && !missingEntities.length && !excludedAttributions.length ? "COMPLETE_FOR_DECLARED_FRAME" as const
+      : "PARTIAL" as const;
+  const observedSegmentRevenueShare: FinancialCompetitorIntelligence["observed_segment_revenue_share"] = {
+    label: "Observed Segment Revenue Share",
+    status: shareHasSemanticsMismatch ? "SEMANTICS_MISMATCH"
+      : !numeratorRecords.length ? "NUMERATOR_UNAVAILABLE"
+        : !denominatorTotal || denominatorTotal.units <= BigInt(0) ? "DENOMINATOR_UNAVAILABLE"
+          : shareFrameState === "COMPLETE_FOR_DECLARED_FRAME" ? "AVAILABLE_COMPLETE_FOR_DECLARED_FRAME"
+            : "AVAILABLE_PARTIAL_OBSERVED_COHORT",
+    value_percent: shareHasSemanticsMismatch ? null : valuePercent,
+    metric: {
+      semantic: "SEGMENT_ATTRIBUTABLE_ACCOUNTING_REVENUE",
+      currency: "RUB",
+      accounting_line: "2110",
+      reporting_year: reportingYear,
+      period_start: sharePeriodStart ?? `${reportingYear}-01-01`,
+      period_end: sharePeriodEnd ?? `${reportingYear}-12-31`,
+    },
+    scope: expectedScope,
+    numerator: {
+      value_rub: numeratorTotal?.value ?? null,
+      entity_ids: numeratorRecords.map((recordItem) => recordItem.entity_id).sort(),
+      financial_record_refs: numeratorRecords.map((recordItem) => recordItem.record_id).sort(),
+    },
+    denominator: {
+      value_rub: denominatorTotal?.value ?? null,
+      entity_ids: includedShareRecords.map((recordItem) => recordItem.entity_id).sort(),
+      financial_record_refs: includedShareRecords.map((recordItem) => recordItem.record_id).sort(),
+    },
+    coverage: {
+      population_entities: acceptedEntities.length,
+      accepted_entities: acceptedEntities.length,
+      observed_entities: attributedEntityIds.size,
+      entity_observation_ratio: acceptedEntities.length ? percentage(sumDecimals([String(attributedEntityIds.size)]), sumDecimals([String(acceptedEntities.length)])) : null,
+      revenue_coverage_ratio: null,
+      frame_state: shareFrameState,
+    },
+    missing_entities: missingEntities,
+    excluded_attributions: excludedAttributions.sort((left, right) => left.financial_record_ref.localeCompare(right.financial_record_ref)),
+    limitation: "Observed Segment Revenue Share описывает только сопоставимую бухгалтерскую выручку наблюдаемых принятых юрлиц в указанном frame и не является долей рынка без отдельно квалифицированного полного знаменателя.",
+  };
   const strategyClaims: FinancialCompetitorIntelligence["strategy_claims"] = [];
   const suppressedStrategyClaims: FinancialCompetitorIntelligence["suppressed_strategy_claims"] = [];
   const strategyFields = new Set(["campaign_focus", "advertised_offer", "target_audience", "geography", "core_message"]);
@@ -659,6 +839,7 @@ export async function buildFinancialCompetitorIntelligence(input: FinancialCompe
     profiles,
     strategy_claims: strategyClaims.sort((left, right) => left.interpretation_id.localeCompare(right.interpretation_id)),
     suppressed_strategy_claims: suppressedStrategyClaims.sort((left, right) => left.interpretation_id.localeCompare(right.interpretation_id)),
+    observed_segment_revenue_share: observedSegmentRevenueShare,
     prohibited_inferences: [
       "Рекламный бюджет, CPC, CPA, конверсии или эффективность рекламы конкурента.",
       "Сила бренда, качество продукта или причинность между рекламой и финансовой динамикой.",
@@ -700,6 +881,15 @@ export async function verifyFinancialCompetitorIntelligence(value: FinancialComp
     if (dossier.strategy_claims.some((claim) => !claim.financial_record_refs.length
       || !claim.independent_nonfinancial_evidence_refs.length
       || claim.financial_record_refs.some((recordId) => !acceptedRecordIds.has(recordId)))) return false;
+    const share = dossier.observed_segment_revenue_share;
+    if (share?.label !== "Observed Segment Revenue Share"
+      || share.metric?.semantic !== "SEGMENT_ATTRIBUTABLE_ACCOUNTING_REVENUE"
+      || share.metric?.currency !== "RUB"
+      || share.metric?.accounting_line !== "2110"
+      || share.denominator.financial_record_refs.some((recordId) => !acceptedRecordIds.has(recordId))
+      || share.numerator.financial_record_refs.some((recordId) => !share.denominator.financial_record_refs.includes(recordId))
+      || share.coverage.observed_entities !== share.denominator.entity_ids.length
+      || (share.value_percent !== null && !share.status.startsWith("AVAILABLE_"))) return false;
     const body = structuredClone(dossier) as Record<string, unknown>;
     delete body.dossier_id;
     return dossier.dossier_id === await hash(body);

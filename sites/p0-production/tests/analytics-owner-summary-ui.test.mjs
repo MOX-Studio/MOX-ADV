@@ -33,6 +33,17 @@ function summary(status = "Есть существенные пробелы") {
       { area: "Текущее продвижение", status: "Частично", finding: "Часть кампаний видна, часть неизвестна.", source: "Подтверждённый срез выбранного рекламного аккаунта", freshness: "Смешанная свежесть", confidence: "Ограниченная", limitation: "Недоступное не считается нулевым." },
       { area: "Поисковый спрос", status: "Недоступно", finding: "Спрос не подтверждён и не подменён нулём.", source: "Официальный срез поискового спроса в выбранной области", freshness: "Свежесть не подтверждена", confidence: "Недостаточная", limitation: "Нужен повторный сбор." },
     ],
+    observedSegmentRevenueShare: {
+      label: "Observed Segment Revenue Share",
+      status: "Доступно только для наблюдаемого набора",
+      value: "33.33%",
+      numerator: "150 000 000 ₽ · 1 организация компании · строка 2110 за 2024 год",
+      denominator: "450 000 000 ₽ · 2 наблюдаемые организации · строка 2110 за 2024 год",
+      coverage: "2 наблюдаемых из 3 организаций frame; покрытие по числу организаций — 66.67%; покрытие по выручке неизвестно.",
+      missingEntities: ["ООО Конкурент без отчётности — отчётность не найдена"],
+      scope: "Участие со стендом · география 77 · 2024-01-01—2024-12-31 · ОКВЭД 82.30",
+      limitation: "Это доля сопоставимой бухгалтерской выручки только среди наблюдаемых принятых юрлиц в указанном frame, а не доля рынка.",
+    },
     remediation: [
       { priority: 1, impact: "Блокирует допустимость кампаний", area: "Текущее продвижение", problem: "Текущий состав кампаний известен не полностью.", action: "Восстановить подтверждённый срез выбранного рекламного аккаунта." },
       { priority: 2, impact: "Меняет стратегию", area: "Поисковый спрос", problem: "Спрос в выбранной области не подтверждён.", action: "Повторить недоступные формулировки в той же области." },
@@ -53,6 +64,12 @@ test("owner analytics disclosure renders facts, evidence quality and impact-orde
   assert.match(html, /Частично/u);
   assert.match(html, /Поисковый спрос/u);
   assert.match(html, /Недоступно/u);
+  assert.match(html, /Observed Segment Revenue Share/u);
+  assert.match(html, /Числитель.*150 000 000 ₽/su);
+  assert.match(html, /Знаменатель.*450 000 000 ₽/su);
+  assert.match(html, /Покрытие.*2 наблюдаемых из 3/su);
+  assert.match(html, /Отсутствующие организации.*ООО Конкурент без отчётности/su);
+  assert.match(html, /не доля рынка/u);
   assert.match(html, /Что исправить прежде всего/u);
   assert.ok(html.indexOf("Блокирует допустимость кампаний") < html.indexOf("Меняет стратегию"));
   assert.doesNotMatch(html, /snapshot|schema|provider|sha256|Campaigns\.get|_id/iu);

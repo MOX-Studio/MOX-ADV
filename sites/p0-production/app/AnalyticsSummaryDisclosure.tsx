@@ -20,6 +20,19 @@ export default function AnalyticsSummaryDisclosure({ summary }: { summary: Owner
       <div><dt>Согласованность</dt><dd>{summary.quality.consistency}</dd></div>
       <div><dt>Как читать статус</dt><dd>{summary.quality.limitation}</dd></div>
     </dl>
+    {summary.observedSegmentRevenueShare && <article className="owner-observed-revenue-share" aria-labelledby="owner-observed-revenue-share-title">
+      <header><div><span>ФИНАНСОВЫЙ КОНТЕКСТ</span><h3 id="owner-observed-revenue-share-title">{summary.observedSegmentRevenueShare.label}</h3></div><strong>{summary.observedSegmentRevenueShare.status}</strong></header>
+      <div className="owner-observed-revenue-value"><b>{summary.observedSegmentRevenueShare.value}</b><p>{summary.observedSegmentRevenueShare.scope}</p></div>
+      <dl>
+        <div><dt>Числитель</dt><dd>{summary.observedSegmentRevenueShare.numerator}</dd></div>
+        <div><dt>Знаменатель</dt><dd>{summary.observedSegmentRevenueShare.denominator}</dd></div>
+        <div><dt>Покрытие</dt><dd>{summary.observedSegmentRevenueShare.coverage}</dd></div>
+        <div><dt>Отсутствующие организации</dt><dd>{summary.observedSegmentRevenueShare.missingEntities.length
+          ? <ul>{summary.observedSegmentRevenueShare.missingEntities.map((item) => <li key={item}>{item}</li>)}</ul>
+          : "Нет в объявленном frame."}</dd></div>
+      </dl>
+      <p>{summary.observedSegmentRevenueShare.limitation}</p>
+    </article>}
     <div className="owner-analytics-findings" aria-label="Факты по областям аналитики">
       {summary.findings.map((finding) => <article key={finding.area} data-evidence-state={finding.status === "Подтверждено" ? "verified" : finding.status === "Частично" ? "partial" : "unavailable"}>
         <header><h3>{finding.area}</h3><strong>{finding.status}</strong></header>

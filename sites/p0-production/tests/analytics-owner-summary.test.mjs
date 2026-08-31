@@ -74,6 +74,17 @@ function fullSnapshot() {
     },
     financial_competitor_intelligence: {
       coverage: { accepted_entities: 2, entities_with_records: 2 },
+      observed_segment_revenue_share: {
+        label: "Observed Segment Revenue Share",
+        status: "AVAILABLE_PARTIAL_OBSERVED_COHORT",
+        value_percent: "33.33",
+        metric: { reporting_year: 2024, period_start: "2024-01-01", period_end: "2024-12-31" },
+        scope: { product_or_service: "Участие со стендом", geography_official_ids: ["77"], okved_codes: ["82.30"] },
+        numerator: { value_rub: "150000000", entity_ids: ["company"] },
+        denominator: { value_rub: "450000000", entity_ids: ["company", "competitor"] },
+        coverage: { population_entities: 3, observed_entities: 2, entity_observation_ratio: "66.67" },
+        missing_entities: [{ legal_name: "ООО Конкурент без отчётности", reason: "FILING_NOT_FOUND" }],
+      },
     },
   };
 }
@@ -101,6 +112,13 @@ test("complete evidence produces business findings and readiness without provide
   assert.match(summary.findings.find((item) => item.area === "Наблюдаемый результат").finding, /3 достижения/u);
   assert.match(summary.findings.find((item) => item.area === "Поисковый спрос").finding, /67 уникальных строк/u);
   assert.match(summary.findings.find((item) => item.area === "Сопоставимая стоимость").finding, /110–170 RUB/u);
+  assert.equal(summary.observedSegmentRevenueShare.label, "Observed Segment Revenue Share");
+  assert.equal(summary.observedSegmentRevenueShare.value, "33.33%");
+  assert.match(summary.observedSegmentRevenueShare.numerator, /150\s000\s000 ₽.*строка 2110.*2024/u);
+  assert.match(summary.observedSegmentRevenueShare.denominator, /450\s000\s000 ₽.*строка 2110.*2024/u);
+  assert.match(summary.observedSegmentRevenueShare.coverage, /2 наблюдаемых из 3.*66.67%.*выручке неизвестно/u);
+  assert.deepEqual(summary.observedSegmentRevenueShare.missingEntities, ["ООО Конкурент без отчётности — отчётность не найдена"]);
+  assert.match(summary.observedSegmentRevenueShare.limitation, /не доля рынка/u);
   assert.deepEqual(summary.remediation, []);
   assert.doesNotMatch(JSON.stringify(summary), /snapshot|schema|provider|sha256|claim-|evidence-|_id|Campaigns\.get|Reports/iu);
 });

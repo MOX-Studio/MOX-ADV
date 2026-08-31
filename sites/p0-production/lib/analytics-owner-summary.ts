@@ -29,6 +29,17 @@ export type OwnerAnalyticsSummary = {
     confidence: string;
     limitation: string;
   }>;
+  observedSegmentRevenueShare: null | {
+    label: "Observed Segment Revenue Share";
+    status: string;
+    value: string;
+    numerator: string;
+    denominator: string;
+    coverage: string;
+    missingEntities: string[];
+    scope: string;
+    limitation: string;
+  };
   remediation: Array<{
     priority: number;
     impact: OwnerAnalyticsImpact;
@@ -285,6 +296,64 @@ function financialFinding(snapshot: AnalyticsEvidenceBundle) {
   return `Финансовая история доступна для ${observedLabel} из ${acceptedLabel} подтверждённых юридических лиц; выводы ограничены бухгалтерской динамикой.`;
 }
 
+function rub(value: unknown) {
+  const normalized = String(value ?? "").trim();
+  if (!/^-?\d+(?:\.\d+)?$/u.test(normalized)) return "Недоступно";
+  const [whole, fraction] = normalized.split(".");
+  const formatted = BigInt(whole).toLocaleString("ru-RU");
+  return `${formatted}${fraction ? `,${fraction}` : ""} ₽`;
+}
+
+const SHARE_STATUS: Record<string, string> = {
+  AVAILABLE_COMPLETE_FOR_DECLARED_FRAME: "Доступно для полного объявленного набора",
+  AVAILABLE_PARTIAL_OBSERVED_COHORT: "Доступно только для наблюдаемого набора",
+  NUMERATOR_UNAVAILABLE: "Числитель недоступен",
+  DENOMINATOR_UNAVAILABLE: "Знаменатель недоступен",
+  SEMANTICS_MISMATCH: "Семантика значений не совпадает",
+};
+
+const SHARE_MISSING_REASON: Record<string, string> = {
+  NO_FILING_EXPECTED: "отчётность не ожидалась",
+  ACCESS_RESTRICTED: "доступ ограничен",
+  FILING_NOT_FOUND: "отчётность не найдена",
+  NOT_YET_DUE: "срок отчётности не наступил",
+  AUTH_OR_SUBSCRIPTION_REQUIRED: "требуется официальный доступ",
+  FORMAT_UNSUPPORTED: "формат не поддержан",
+  ACTIVITY_REVENUE_UNALLOCATED: "выручка не распределена на выбранный сегмент",
+  FILING_STATUS_UNKNOWN: "статус отчётности неизвестен",
+  ENTITY_UNRESOLVED: "юридическое лицо не подтверждено",
+  IDENTITY_EVIDENCE_INCOMPLETE: "доказательства юридической идентичности неполны",
+  SEGMENT_ATTRIBUTION_MISSING: "нет сопоставимой сегментной выручки",
+};
+
+function observedSegmentRevenueShare(snapshot: AnalyticsEvidenceBundle): OwnerAnalyticsSummary["observedSegmentRevenueShare"] {
+  const share = record(record(snapshot.financial_competitor_intelligence).observed_segment_revenue_share);
+  if (!Object.keys(share).length) return null;
+  const metric = record(share.metric);
+  const scope = record(share.scope);
+  const numerator = record(share.numerator);
+  const denominator = record(share.denominator);
+  const coverage = record(share.coverage);
+  const numeratorEntities = list(numerator.entity_ids).length;
+  const denominatorEntities = list(denominator.entity_ids).length;
+  const regions = list(scope.geography_official_ids).map((item) => safeText(item, "неизвестный регион", 80)).join(", ");
+  const okved = list(scope.okved_codes).map((item) => safeText(item, "неизвестный код", 40)).join(", ");
+  return {
+    label: "Observed Segment Revenue Share",
+    status: SHARE_STATUS[String(share.status)] ?? "Недоступно",
+    value: share.value_percent === null || share.value_percent === undefined ? "Недоступно" : `${safeText(share.value_percent, "Недоступно", 40)}%`,
+    numerator: `${rub(numerator.value_rub)} · ${countLabel(numeratorEntities, "организация", "организации", "организаций")} компании · строка 2110 за ${safeText(metric.reporting_year, "неизвестный год", 20)} год`,
+    denominator: `${rub(denominator.value_rub)} · ${countLabel(denominatorEntities, "наблюдаемая организация", "наблюдаемые организации", "наблюдаемых организаций")} · строка 2110 за ${safeText(metric.reporting_year, "неизвестный год", 20)} год`,
+    coverage: `${Number(coverage.observed_entities).toLocaleString("ru-RU")} наблюдаемых из ${Number(coverage.population_entities).toLocaleString("ru-RU")} организаций frame; покрытие по числу организаций — ${coverage.entity_observation_ratio === null ? "неизвестно" : `${safeText(coverage.entity_observation_ratio, "неизвестно", 40)}%`}; покрытие по выручке неизвестно.`,
+    missingEntities: list(share.missing_entities).map((item) => {
+      const missing = record(item);
+      return `${safeText(missing.legal_name, "Неустановленная организация", 300)} — ${SHARE_MISSING_REASON[String(missing.reason)] ?? "причина отсутствия не подтверждена"}`;
+    }),
+    scope: `${safeText(scope.product_or_service, "Продукт не подтверждён", 240)} · география ${regions || "не подтверждена"} · ${safeText(metric.period_start, "начало не подтверждено", 30)}—${safeText(metric.period_end, "окончание не подтверждено", 30)} · ОКВЭД ${okved || "не подтверждён"}`,
+    limitation: "Это доля сопоставимой бухгалтерской выручки только среди наблюдаемых принятых юрлиц в указанном frame, а не доля рынка. Ненаблюдаемая выручка не оценивалась.",
+  };
+}
+
 function findingForDomain(snapshot: AnalyticsEvidenceBundle, domain: AnalyticsEvidenceDomain, claims: EvidenceClaim[]) {
   if (domain === "BUSINESS_MODEL") return businessFinding(snapshot);
   if (domain === "DIRECT") return directFinding(claims);
@@ -447,6 +516,7 @@ export function projectAnalyticsEvidenceForOwner(snapshot: AnalyticsEvidenceBund
       limitation: "Готовность определяется отдельно по каждой области; сводный статус не скрывает частичные, устаревшие или недоступные доказательства.",
     },
     findings,
+    observedSegmentRevenueShare: observedSegmentRevenueShare(evidence),
     remediation,
   };
 }
