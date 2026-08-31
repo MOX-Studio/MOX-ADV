@@ -162,6 +162,11 @@ def assert_owner_accessibility_and_hierarchy(
           };
         }"""
     )
+    canonical_stage = {
+        "Цель": "Цель кампании",
+        "Что узнал агент": "Сбор сведений",
+        "Проверка и создание": "Проверка публикации",
+    }.get(expected_stage, expected_stage)
     test.assertEqual("ru", audit["lang"])
     if expected_stage == "Цель":
         test.assertEqual(1, audit["h1Count"])
@@ -176,7 +181,7 @@ def assert_owner_accessibility_and_hierarchy(
     test.assertEqual(0, audit["disabledControls"])
     current = page.locator('[aria-current="step"] strong')
     test.assertEqual(1, current.count())
-    test.assertEqual(expected_stage, current.inner_text())
+    test.assertEqual(canonical_stage, current.inner_text())
     primary = page.locator(".owner-action button[type='submit']")
     if primary.count():
         test.assertEqual(1, primary.count())
@@ -215,10 +220,88 @@ def advance_owner_to_findings(page: Page, base_url: str) -> None:
     interview.locator("textarea").press("Control+Enter")
     interview.get_by_role("button", name="Подтвердить ответ", exact=True).click()
     page.get_by_role("heading", name="Агент собрал понимание бизнеса", exact=True).wait_for()
-    page.get_by_role("button", name=re.compile(r"Что узнал агент")).click()
+    page.get_by_role("button", name=re.compile(r"Сбор сведений")).click()
 
 
 class P0ProductionCandidateE2ETests(unittest.TestCase):
+    def test_owner_starts_stops_and_restarts_the_authoritative_five_stage_run(self) -> None:
+        with production_candidate_server() as base_url:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=True)
+                page = browser.new_page(viewport=VIEWPORT)
+                console_errors: list[str] = []
+                page_errors: list[str] = []
+                page.on(
+                    "console",
+                    lambda message: console_errors.append(message.text)
+                    if message.type == "error"
+                    else None,
+                )
+                page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+                page.goto(base_url, wait_until="networkidle")
+                pipeline = page.locator(".owner-pipeline-control")
+                stages = page.get_by_label("Путь подготовки рекламных кампаний").locator("li")
+                self.assertEqual(
+                    [
+                        "Цель кампании",
+                        "Сбор сведений",
+                        "Стратегия",
+                        "Кампании",
+                        "Проверка публикации",
+                    ],
+                    stages.locator("strong").all_inner_texts(),
+                )
+                self.assertEqual(["Ожидает"] * 5, stages.locator("small").all_inner_texts())
+                self.assertTrue(pipeline.get_by_role("button", name="Запустить", exact=True).is_visible())
+                readonly_boundary = page.locator(".pipeline-readonly-boundary")
+                self.assertFalse(readonly_boundary.evaluate("element => element.disabled"))
+                assert_no_horizontal_overflow(self, page)
+
+                with page.expect_response(
+                    lambda response: response.url.endswith("/api/p0")
+                    and response.request.method == "POST"
+                ) as started_response:
+                    pipeline.get_by_role("button", name="Запустить", exact=True).click()
+                started = started_response.value.json()
+                first_run_id = started["pipeline"]["runId"]
+                self.assertTrue(first_run_id)
+                pipeline.get_by_role("button", name="Остановить", exact=True).wait_for()
+                self.assertEqual(
+                    ["Выполняется", "Ожидает", "Ожидает", "Ожидает", "Ожидает"],
+                    stages.locator("small").all_inner_texts(),
+                )
+                self.assertIn("Формирую полный желаемый бизнес-результат", pipeline.inner_text())
+                self.assertIn("только для чтения", pipeline.inner_text())
+                self.assertTrue(readonly_boundary.evaluate("element => element.disabled"))
+                assert_no_horizontal_overflow(self, page)
+
+                with page.expect_response(
+                    lambda response: response.url.endswith("/api/p0")
+                    and response.request.method == "POST"
+                ) as stopped_response:
+                    pipeline.get_by_role("button", name="Остановить", exact=True).click()
+                stopped = stopped_response.value.json()
+                self.assertEqual(first_run_id, stopped["pipeline"]["runId"])
+                pipeline.get_by_role("button", name="Запустить", exact=True).wait_for()
+                self.assertIn("Следующий запуск будет новым", pipeline.inner_text())
+                self.assertEqual("Остановлен", stages.locator("small").first.inner_text())
+                self.assertFalse(readonly_boundary.evaluate("element => element.disabled"))
+
+                with page.expect_response(
+                    lambda response: response.url.endswith("/api/p0")
+                    and response.request.method == "POST"
+                ) as restarted_response:
+                    pipeline.get_by_role("button", name="Запустить", exact=True).click()
+                restarted = restarted_response.value.json()
+                self.assertNotEqual(first_run_id, restarted["pipeline"]["runId"])
+                pipeline.get_by_role("button", name="Остановить", exact=True).wait_for()
+                self.assertTrue(readonly_boundary.evaluate("element => element.disabled"))
+                assert_no_horizontal_overflow(self, page)
+                self.assertEqual([], console_errors)
+                self.assertEqual([], page_errors)
+                browser.close()
+
     def test_wordstat_partial_quota_and_unavailable_are_visible_without_zero_demand(self) -> None:
         scenarios = [
             (
@@ -304,11 +387,11 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 self.assertEqual(5, steps.count())
                 self.assertEqual(
                     [
-                        "Цель",
-                        "Что узнал агент",
+                        "Цель кампании",
+                        "Сбор сведений",
                         "Стратегия",
                         "Кампании",
-                        "Проверка и создание",
+                        "Проверка публикации",
                     ],
                     steps.locator("strong").all_inner_texts(),
                 )

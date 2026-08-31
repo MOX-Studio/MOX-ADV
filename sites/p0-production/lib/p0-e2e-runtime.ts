@@ -997,6 +997,11 @@ export async function fixtureOwnerOverview(scenario: string, key: string) {
   return value;
 }
 
+export async function fixtureOwnerSnapshot(scenario: string, key: string) {
+  const fixture = fixtureApplication(scenario, key);
+  return fixture.ownerJourney.snapshot(`e2e:${scenario}:${key}`);
+}
+
 export async function fixtureSubmitOwnerAction(
   scenario: string,
   key: string,

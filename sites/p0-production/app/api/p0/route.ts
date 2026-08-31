@@ -1,10 +1,17 @@
 import { env } from "cloudflare:workers";
 import { localP0E2EFixtureScenario } from "../../../lib/p0-e2e-boundary";
 import {
+  operatorDiagnostics as productionOperatorDiagnostics,
   ownerOverview as productionOwnerOverview,
+  ownerSnapshot as productionOwnerSnapshot,
   submitOwnerAction as productionSubmitOwnerAction,
   userKey,
 } from "../../../lib/p0";
+import { D1PipelineRunStore } from "../../../lib/pipeline-orchestrator-d1-store";
+import {
+  OwnerPipelineController,
+  type PipelineHistoricalView,
+} from "../../../lib/pipeline-owner-dashboard";
 
 function failure() {
   return {
@@ -27,17 +34,36 @@ async function fixtureBackend(request: Request) {
   const key = userKey(request);
   return {
     overview: () => fixture.fixtureOwnerOverview(scenario, key),
+    snapshot: () => fixture.fixtureOwnerSnapshot(scenario, key),
+    diagnostics: () => fixture.fixtureOperatorDiagnostics(scenario, key),
     applyAction: (payload: Record<string, unknown>) => fixture.fixtureSubmitOwnerAction(scenario, key, payload),
+  };
+}
+
+function pipelineController() {
+  return new OwnerPipelineController(new D1PipelineRunStore(env.DB));
+}
+
+async function backend(request: Request) {
+  const fixture = await fixtureBackend(request);
+  const key = userKey(request);
+  return fixture ?? {
+    overview: () => productionOwnerOverview(key),
+    snapshot: () => productionOwnerSnapshot(key),
+    diagnostics: () => productionOperatorDiagnostics(key),
+    applyAction: (payload: Record<string, unknown>) => productionSubmitOwnerAction(key, payload),
   };
 }
 
 export async function GET(request: Request) {
   try {
-    const fixture = await fixtureBackend(request);
-    const value = fixture
-      ? await fixture.overview()
-      : await productionOwnerOverview(userKey(request));
-    return Response.json(value);
+    const key = userKey(request);
+    const currentBackend = await backend(request);
+    const pipeline = await pipelineController().current(key);
+    const value = pipeline.active
+      ? await currentBackend.snapshot()
+      : await currentBackend.overview();
+    return Response.json({ ...value, pipeline });
   } catch {
     return Response.json(failure(), { status: 503 });
   }
@@ -46,11 +72,33 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const payload = (await request.json()) as Record<string, unknown>;
-    const fixture = await fixtureBackend(request);
-    const value = fixture
-      ? await fixture.applyAction(payload)
-      : await productionSubmitOwnerAction(userKey(request), payload);
-    return Response.json(value, { status: 201 });
+    const key = userKey(request);
+    const currentBackend = await backend(request);
+    const controller = pipelineController();
+    const pipelineAction = String(payload.pipeline_action ?? "");
+    if (pipelineAction === "START") {
+      const current = await controller.current(key);
+      if (current.active) throw new Error("У владельца уже есть активный запуск.");
+      const [value, diagnostics] = await Promise.all([
+        currentBackend.snapshot(),
+        currentBackend.diagnostics(),
+      ]);
+      const pipeline = await controller.start(key, diagnostics as unknown as PipelineHistoricalView);
+      return Response.json({ ...value, pipeline }, { status: 201 });
+    }
+    if (pipelineAction === "STOP") {
+      const pipeline = await controller.stop(key, {
+        runId: String(payload.run_id ?? ""),
+        expectedVersion: Number(payload.expected_version),
+      });
+      return Response.json({ ...(await currentBackend.snapshot()), pipeline }, { status: 201 });
+    }
+    const currentPipeline = await controller.current(key);
+    if (currentPipeline.editingLocked) {
+      throw new Error("Редактирование недоступно во время активного запуска.");
+    }
+    const value = await currentBackend.applyAction(payload);
+    return Response.json({ ...value, pipeline: await controller.current(key) }, { status: 201 });
   } catch {
     return Response.json(failure(), { status: 409 });
   }

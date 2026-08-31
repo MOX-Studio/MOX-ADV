@@ -25,20 +25,18 @@ function actionValues(form: HTMLFormElement, fields: OwnerActionField[]) {
   return Object.fromEntries(fields.map((field) => [field.key, String(data.get(field.key) ?? "").trim()]));
 }
 
+function authoritativeStage(projection: OwnerJourneyProjection) {
+  return projection.pipeline && projection.pipeline.status !== "NOT_STARTED"
+    ? projection.pipeline.currentStage
+    : projection.journey.currentStage;
+}
+
 const cardLabels = {
   "agent-activity": "Работа агента",
   finding: "Вывод",
   problem: "Проблема",
   "human-decision-gate": "Решение владельца",
 } as const;
-
-const stageDetails: Record<OwnerJourneyProjection["journey"]["stages"][number]["id"], string> = {
-  goal: "Доступ и бизнес-результат",
-  findings: "Модель и доказательства",
-  strategy: "Готовое решение",
-  campaigns: "Сравнение гипотез",
-  review: "Точное полномочие",
-};
 
 export default function P0Client() {
   const [projection, setProjection] = useState<OwnerJourneyProjection | null>(null);
@@ -55,7 +53,7 @@ export default function P0Client() {
         const requestedStage = new URL(window.location.href).searchParams.get("stage");
         setSelectedStage(next.journey.stages.some((stage) => stage.id === requestedStage)
           ? requestedStage as OwnerJourneyStageId
-          : next.goalInterview?.primaryAction ? "goal" : next.journey.currentStage);
+          : next.goalInterview?.primaryAction ? "goal" : authoritativeStage(next));
       })
       .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
       .finally(() => setBusy(false));
@@ -65,7 +63,7 @@ export default function P0Client() {
     if (selectedStage === "goal" && projection?.goalInterview?.primaryAction) {
       interviewHeadingRef.current?.focus();
     }
-  }, [projection?.goalInterview?.primaryAction?.handle, selectedStage]);
+  }, [projection?.goalInterview?.primaryAction, selectedStage]);
 
   useEffect(() => {
     if (error) errorRef.current?.focus();
@@ -76,12 +74,14 @@ export default function P0Client() {
     const agentContinues = projection.agentActivity?.status === "working"
       || projection.agentActivity?.status === "waiting";
     const businessContinues = projection.businessOutcome.status === "working" && !projection.primaryAction;
-    if (!agentContinues && !businessContinues) return;
+    if (!agentContinues && !businessContinues && !projection.pipeline?.active) return;
     const timer = window.setTimeout(() => {
       request("/api/p0").then((next) => {
         setProjection(next);
-        setSelectedStage((selected) => !selected || selected === projection.journey.currentStage
-          ? next.journey.currentStage
+        const previousCurrentStage = authoritativeStage(projection);
+        const nextCurrentStage = authoritativeStage(next);
+        setSelectedStage((selected) => !selected || selected === previousCurrentStage
+          ? nextCurrentStage
           : selected);
       }).catch(() => undefined);
     }, 3_000);
@@ -223,6 +223,33 @@ export default function P0Client() {
     }
   }
 
+  async function submitPipelineAction(action: "START" | "STOP") {
+    if (busy) return;
+    const pipeline = projection?.pipeline;
+    if (action === "STOP" && (!pipeline?.runId || pipeline.version === null)) return;
+    setBusy(true);
+    setError("");
+    try {
+      const next = await request("/api/p0", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(action === "START"
+          ? { pipeline_action: "START" }
+          : {
+              pipeline_action: "STOP",
+              run_id: pipeline!.runId,
+              expected_version: pipeline!.version,
+            }),
+      });
+      setProjection(next);
+      setSelectedStage(authoritativeStage(next));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!projection) {
     return <div className={styles.prototype}>
       <Header />
@@ -230,7 +257,7 @@ export default function P0Client() {
     </div>;
   }
 
-  const activeStage = selectedStage ?? projection.journey.currentStage;
+  const activeStage = selectedStage ?? authoritativeStage(projection);
   const activeStageStatus = projection.journey.stages.find((stage) => stage.id === activeStage)?.status ?? "upcoming";
   const viewingCurrentStage = activeStage === projection.journey.currentStage;
 
@@ -246,8 +273,13 @@ export default function P0Client() {
     <Header />
     <main className={styles.pageA} id="module">
       {activeStage === "goal" && <Hero projection={projection} />}
+      {projection.pipeline && <PipelineControl
+        pipeline={projection.pipeline}
+        busy={busy}
+        onAction={submitPipelineAction}
+      />}
       <StageNavigation projection={projection} selectedStage={activeStage} onStage={chooseStage} />
-      <div className={styles.ownerWorkspace}>
+      <fieldset className={`${styles.ownerWorkspace} pipeline-readonly-boundary`} disabled={projection.pipeline?.editingLocked ?? false} aria-label="Текущий результат и редактирование">
         <AgentRail projection={projection} />
         <section className={`${styles.artifact} owner-main`} id="owner-stage-panel" aria-labelledby={`owner-stage-tab-${activeStage}`}>
           <header className={`${styles.sectionHead} owner-outcome`}>
@@ -422,7 +454,7 @@ export default function P0Client() {
           {error && <p className="owner-error" role="alert" ref={errorRef} tabIndex={-1}>{error}</p>}
         </section>
 
-      </div>
+      </fieldset>
     </main>
   </div>;
 }
@@ -588,21 +620,69 @@ function Hero({ projection }: { projection: OwnerJourneyProjection }) {
   </section>;
 }
 
+type PipelineProjection = NonNullable<OwnerJourneyProjection["pipeline"]>;
+
+function PipelineControl({
+  pipeline,
+  busy,
+  onAction,
+}: {
+  pipeline: PipelineProjection;
+  busy: boolean;
+  onAction: (action: "START" | "STOP") => Promise<void>;
+}) {
+  return <section className="owner-pipeline-control" data-run-status={pipeline.status} aria-labelledby="owner-pipeline-title">
+    <header>
+      <div><p className="owner-eyebrow">ЕДИНЫЙ ЗАПУСК</p><h2 id="owner-pipeline-title">{pipeline.currentTask}</h2><p>{pipeline.stateText}</p></div>
+      <strong>{pipeline.active ? "Выполняется" : pipeline.status === "STOPPED" ? "Остановлен" : pipeline.status === "COMPLETED" ? "Завершён" : "Готов к запуску"}</strong>
+    </header>
+    {pipeline.return && <article className="owner-pipeline-return" role="status">
+      <span>ВОЗВРАТ</span><strong>{pipeline.return.source} → {pipeline.return.target}</strong><p>{pipeline.return.reason}</p>
+    </article>}
+    {pipeline.editingLocked && <p className="owner-pipeline-lock" role="status">Текущие Цель, Campaign Strategy и пары доступны только для чтения до остановки или завершения запуска.</p>}
+    <footer>
+      {pipeline.canStart && <button type="button" className={styles.primaryButton} onClick={() => onAction("START")} disabled={busy}>{busy ? "Запускаю…" : "Запустить"}</button>}
+      {pipeline.canStop && <button type="button" className="owner-pipeline-stop" onClick={() => onAction("STOP")} disabled={busy}>{busy ? "Останавливаю…" : "Остановить"}</button>}
+    </footer>
+  </section>;
+}
+
 function StageNavigation({ projection, selectedStage, onStage }: { projection: OwnerJourneyProjection; selectedStage: OwnerJourneyStageId; onStage: (stage: OwnerJourneyStageId) => void }) {
+  const pipeline = projection.pipeline;
+  const legacyStages = projection.journey.stages.map((stage, index) => ({
+    ...stage,
+    label: pipeline?.stages[index]?.label ?? stage.label,
+    status: pipeline ? "Ожидает" : stage.status === "complete" ? "Завершён" : stage.status === "current" ? "Выполняется" : "Ожидает",
+    icon: pipeline ? "○" : stage.status === "complete" ? "✓" : String(index + 1),
+    tone: pipeline ? "pending" : stage.status === "complete" ? "complete" : stage.status === "current" ? "active" : "pending",
+  }));
+  const stages = pipeline && pipeline.status !== "NOT_STARTED" ? pipeline.stages : legacyStages;
+  const currentStage = pipeline && pipeline.status !== "NOT_STARTED" ? pipeline.currentStage : projection.journey.currentStage;
   return <ol className={`${styles.stageNav} ${styles.stageNavhorizontal}`} aria-label="Путь подготовки рекламных кампаний">
-    {projection.journey.stages.map((stage, index) => <li key={stage.id}>
-      <button
-        id={`owner-stage-tab-${stage.id}`}
-        type="button"
-        className={`${selectedStage === stage.id ? styles.currentStage : ""} ${stage.status === "current" ? styles.workflowStage : ""} ${stage.status === "complete" ? styles.passedStage : ""}`}
-        onClick={() => onStage(stage.id)}
-        aria-current={stage.status === "current" ? "step" : undefined}
-        aria-pressed={selectedStage === stage.id}
-        aria-controls="owner-stage-panel"
-      >
-        <span>{stage.status === "complete" ? "✓" : index + 1}</span><div><strong>{stage.label}</strong><small>{stageDetails[stage.id]}</small></div>
-      </button>
-    </li>)}
+    {stages.map((stage) => {
+      const statusText = stage.status;
+      const toneClass = stage.tone === "returned"
+        ? styles.returnedStage
+        : stage.tone === "stopped"
+          ? styles.stoppedStage
+          : stage.tone === "pending"
+            ? styles.pendingStage
+            : "";
+      return <li key={stage.id}>
+        <button
+          id={`owner-stage-tab-${stage.id}`}
+          type="button"
+          data-stage-status={statusText}
+          className={`${selectedStage === stage.id ? styles.currentStage : ""} ${stage.id === currentStage ? styles.workflowStage : ""} ${stage.tone === "complete" ? styles.passedStage : ""} ${toneClass}`}
+          onClick={() => onStage(stage.id)}
+          aria-current={stage.id === currentStage ? "step" : undefined}
+          aria-pressed={selectedStage === stage.id}
+          aria-controls="owner-stage-panel"
+        >
+          <span>{stage.icon}</span><div><strong>{stage.label}</strong><small>{statusText}</small></div>
+        </button>
+      </li>;
+    })}
   </ol>;
 }
 

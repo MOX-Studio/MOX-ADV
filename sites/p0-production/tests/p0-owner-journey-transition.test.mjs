@@ -412,6 +412,36 @@ test("goal interview rejects a corrupted durable question order", () => {
   );
 });
 
+test("owner snapshot does not coordinate an executor while an authoritative run is active or stopped", async () => {
+  let agentCalls = 0;
+  const current = {
+    revision: 1,
+    state: {
+      context_state: null,
+      package_corrections: [],
+    },
+    workflow: { allowed_commands: [] },
+    shortlist_controls: [],
+    revision_history: [],
+  };
+  const journey = new P0OwnerJourney({
+    async query() {
+      return structuredClone(current);
+    },
+  }, {
+    agentProjection: async () => {
+      agentCalls += 1;
+      return null;
+    },
+  });
+
+  const projection = await journey.snapshot("owner-stopped");
+  assert.equal(agentCalls, 0);
+  assert.equal(projection.journey.currentStage, "goal");
+  await journey.query("owner-outside-run");
+  assert.equal(agentCalls, 1);
+});
+
 test("owner action handles bind to the application revision after agent-owned safe progress", async () => {
   let current = {
     revision: 1,

@@ -8,6 +8,7 @@ import {
   PIPELINE_STAGES,
   PipelineOrchestrator,
   PipelineOrchestratorError,
+  verifyPipelineRunState,
 } from "../lib/pipeline-orchestrator.ts";
 
 function d1Shim(database) {
@@ -139,12 +140,14 @@ test("each successful Start allocates a new run and durable CAS rejects a stale 
     (error) => error instanceof PipelineOrchestratorError && error.code === "PIPELINE_RUN_ALREADY_ACTIVE",
   );
 
-  const stopped = structuredClone(first);
-  stopped.version = 1;
-  stopped.status = "STOPPED";
-  stopped.stages[0].status = "STOPPED";
-  stopped.updated_at = "2026-08-31T10:01:00.000Z";
-  assert.equal(await store.compareAndSwap(first.run_id, 0, stopped), true);
+  const stopped = await orchestrator.stop({
+    run_id: first.run_id,
+    expected_version: first.version,
+  });
+  assert.equal(stopped.status, "STOPPED");
+  assert.equal(stopped.work_control.issue_actions, false);
+  assert.equal(stopped.work_control.cancellation, "REQUESTED");
+  assert.equal(stopped.work_control.unverified_output, "NEVER_PERSISTED");
   assert.equal(await store.compareAndSwap(first.run_id, 0, stopped), false);
 
   const second = await orchestrator.start("owner", inputVersions());
@@ -153,6 +156,84 @@ test("each successful Start allocates a new run and durable CAS rejects a stale 
   assert.equal((await orchestrator.current("owner")).run_id, second.run_id);
   assert.equal(database.prepare("SELECT COUNT(*) AS count FROM p0_pipeline_runs").get().count, 2);
   assert.equal(database.prepare("SELECT COUNT(*) AS count FROM p0_pipeline_run_revisions").get().count, 3);
+  database.close();
+});
+
+test("stop rejects stale work, retry keeps the run, and typed returns follow the deterministic table", async () => {
+  const database = new DatabaseSync(":memory:");
+  const { orchestrator } = fixture(database);
+  const started = await orchestrator.start("owner", inputVersions());
+  const goalComplete = await orchestrator.advance({
+    run_id: started.run_id,
+    expected_version: started.version,
+    source_stage: "CAMPAIGN_GOAL",
+    reason_code: "GOAL_VERIFIED",
+    reason: "Полная редакция цели прошла типизированную проверку.",
+  });
+  const evidenceComplete = await orchestrator.advance({
+    run_id: goalComplete.run_id,
+    expected_version: goalComplete.version,
+    source_stage: "EVIDENCE_COLLECTION",
+    reason_code: "EVIDENCE_VERIFIED",
+    reason: "Снимок сведений сохранён и проверен.",
+  });
+  const strategyComplete = await orchestrator.advance({
+    run_id: evidenceComplete.run_id,
+    expected_version: evidenceComplete.version,
+    source_stage: "STRATEGY",
+    reason_code: "STRATEGY_VERIFIED",
+    reason: "Стратегия прошла обязательные проверки.",
+  });
+
+  const retry = await orchestrator.retry({
+    run_id: strategyComplete.run_id,
+    expected_version: strategyComplete.version,
+    source_stage: "CAMPAIGNS",
+    reason_code: "TRANSIENT_READ",
+    reason: "Временное безопасное чтение будет повторено в текущем запуске.",
+  });
+  assert.equal(retry.run_id, started.run_id);
+  assert.equal(retry.current_stage, "CAMPAIGNS");
+  assert.equal(retry.stage_attempt, 2);
+
+  const returned = await orchestrator.returnTo({
+    run_id: retry.run_id,
+    expected_version: retry.version,
+    source_stage: "CAMPAIGNS",
+    cause: "STRATEGY_DEFECT",
+    reason: "Стратегия не задаёт точную географию для полного черновика.",
+  });
+  assert.equal(returned.run_id, started.run_id);
+  assert.equal(returned.current_stage, "STRATEGY");
+  assert.equal(returned.last_transition.source_stage, "CAMPAIGNS");
+  assert.equal(returned.last_transition.target_stage, "STRATEGY");
+  assert.equal(returned.last_transition.reason_code, "STRATEGY_DEFECT");
+  assert.equal(returned.stages.find((stage) => stage.id === "STRATEGY").status, "ACTIVE");
+  assert.equal(returned.stages.find((stage) => stage.id === "CAMPAIGNS").status, "RETURNED");
+
+  const stopped = await orchestrator.stop({
+    run_id: returned.run_id,
+    expected_version: returned.version,
+    reason: "Владелец остановил работу до сохранения непроверенного черновика.",
+  });
+  await assert.rejects(
+    orchestrator.advance({
+      run_id: started.run_id,
+      expected_version: strategyComplete.version,
+      source_stage: "CAMPAIGNS",
+      reason_code: "STALE_OUTPUT",
+      reason: "Устаревший исполнитель пытается сохранить завершение.",
+    }),
+    (error) => error instanceof PipelineOrchestratorError && error.code === "PIPELINE_RUN_NOT_ACTIVE",
+  );
+  assert.equal(stopped.work_control.unverified_output, "NEVER_PERSISTED");
+  assert.equal(Object.hasOwn(await orchestrator.current("owner"), "partial_output"), false);
+  const corrupted = structuredClone(stopped);
+  corrupted.partial_output = { unverified: true };
+  await assert.rejects(
+    verifyPipelineRunState(corrupted),
+    (error) => error instanceof PipelineOrchestratorError && error.code === "PIPELINE_RUN_CORRUPT",
+  );
   database.close();
 });
 

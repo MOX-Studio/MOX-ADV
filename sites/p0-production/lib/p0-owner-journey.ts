@@ -25,6 +25,7 @@ import {
   projectAnalyticsEvidenceForOwner,
   type OwnerAnalyticsSummary,
 } from "./analytics-owner-summary.ts";
+import type { OwnerPipelineProjection } from "./pipeline-owner-dashboard.ts";
 
 export const OWNER_JOURNEY_STAGES = [
   { id: "goal", label: "Цель" },
@@ -52,6 +53,7 @@ export type OwnerActionField = {
 };
 
 export type OwnerJourneyProjection = {
+  pipeline?: OwnerPipelineProjection;
   accessReadiness: AccessReadinessProjection | null;
   goalInterview: OwnerGoalInterviewProjection | null;
   campaignGoal: string | null;
@@ -2442,6 +2444,13 @@ export class P0OwnerJourney {
     this.application = application;
     this.agentProjection = options.agentProjection ?? null;
     this.accessReadiness = options.accessReadiness ?? null;
+  }
+
+  async snapshot(ownerKey: string): Promise<OwnerJourneyProjection> {
+    const accessState = this.accessReadiness ? await this.accessReadiness.get(ownerKey) : null;
+    const access = accessState && this.accessReadiness ? this.accessReadiness.project(accessState) : null;
+    if (accessState && !accessIsActive(accessState)) return projectAccessOnly(ownerKey, accessState, access!);
+    return project(ownerKey, await this.application.query(ownerKey), null, access);
   }
 
   async query(ownerKey: string): Promise<OwnerJourneyProjection> {

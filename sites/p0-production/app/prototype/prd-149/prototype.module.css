@@ -88,6 +88,13 @@
 .stageNavhorizontal .currentStage { border-color: var(--green); background: var(--green-soft); box-shadow: inset 0 0 0 1px rgba(19,122,78,.08); }
 .stageNavhorizontal .workflowStage:not(.currentStage) { border-color: #9bbbaa; }
 .stageNavhorizontal .currentStage > span, .stageNavhorizontal .passedStage > span, .stageNavhorizontal .workflowStage > span { border-color: var(--green); color: white; background: var(--green); }
+.stageNavhorizontal .pendingStage:not(.currentStage) > span { border-color: var(--line); color: var(--muted); background: white; }
+.stageNavhorizontal .returnedStage { border-color: #d39b49; background: #fff8ed; }
+.stageNavhorizontal .returnedStage > span { border-color: #d39b49; color: white; background: #b97521; }
+.stageNavhorizontal .returnedStage small { color: #8a5619; }
+.stageNavhorizontal .stoppedStage { border-color: #c68980; background: var(--red-soft); }
+.stageNavhorizontal .stoppedStage > span { border-color: var(--red); color: white; background: var(--red); }
+.stageNavhorizontal .stoppedStage small { color: var(--red); }
 .ownerWorkspace { display: grid; grid-template-columns: 280px minmax(0, 1fr); align-items: start; border: 1px solid var(--line); border-radius: 13px; background: rgba(255,254,250,.72); box-shadow: 0 24px 54px rgba(23,39,29,.08); }
 .agentRail { position: sticky; top: 86px; min-height: 520px; padding: 18px; border-right: 1px solid var(--line); border-radius: 13px 0 0 13px; background: rgba(255,255,255,.95); }
 .agentRail > header { display: flex; gap: 10px; align-items: center; padding-bottom: 15px; border-bottom: 1px solid var(--line); }

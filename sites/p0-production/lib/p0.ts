@@ -1432,6 +1432,10 @@ export async function ownerOverview(key: string) {
   return ownerJourney.query(key);
 }
 
+export async function ownerSnapshot(key: string) {
+  return ownerJourney.snapshot(key);
+}
+
 export async function submitOwnerAction(key: string, payload: Record<string, unknown>) {
   return ownerJourney.submit(key, payload as OwnerActionSubmission);
 }
