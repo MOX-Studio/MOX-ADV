@@ -174,6 +174,26 @@ class UiRunServiceTests(unittest.TestCase):
             self.assertIsNone(report["execution"]["readback_micros"])
             self.assertEqual(0, report["execution"]["write_calls"])
             self.assertFalse(report["safety"]["external_write_sent"])
+            money = {
+                observation["kind"]: observation
+                for observation in report["monetary_observations"]
+            }
+            self.assertEqual(
+                "Стоимость перехода (исторический CPC)",
+                money["HISTORICAL_CPC"]["label"],
+            )
+            self.assertEqual("19.00", money["HISTORICAL_CPC"]["display_rub"])
+            self.assertEqual("Предел ставки", money["BID_CEILING"]["label"])
+            self.assertEqual("UNAVAILABLE", money["BID_CEILING"]["status"])
+            self.assertEqual("2000.00", money["BUDGET"]["display_rub"])
+            self.assertEqual(
+                "Целевая стоимость бизнес-результата",
+                money["TARGET_RESULT_COST"]["label"],
+            )
+            self.assertEqual(
+                "1000.00",
+                money["TARGET_RESULT_COST"]["display_rub"],
+            )
             self.assertTrue(
                 (Path(temporary) / report["run_id"] / "ui-report.html").is_file()
             )

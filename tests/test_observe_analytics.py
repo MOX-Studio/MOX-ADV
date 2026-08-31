@@ -27,6 +27,7 @@ from mox_adv.contracts import (
     VersionedReadRequest,
 )
 from mox_adv.errors import RunRejectedError
+from mox_adv.money import IncomparableMoneyError, require_comparable_money
 from mox_adv.normalization import IntegratedSnapshotNormalizerV1
 from mox_adv.observe import (
     load_linked_fixture,
@@ -34,6 +35,11 @@ from mox_adv.observe import (
     read_observe_snapshot,
     run_observe_fixture,
     trusted_fixture_scope,
+)
+from mox_adv.recommend_contracts import SchemaValidationError
+from mox_adv.recommend_projection import (
+    projection_from_integrated_snapshot,
+    validate_projection,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -90,6 +96,82 @@ class IntegratedAnalyticsTests(unittest.TestCase):
         self.assertEqual("NOT_APPLICABLE", first.metrics["cpl_rub"])
         self.assertEqual("50.00", first.display_metrics["budget_utilization_percent"])
         self.assertEqual("50.00", first.display_metrics["pacing_percent"])
+
+    def test_snapshot_keeps_all_monetary_semantics_typed_and_separate(self) -> None:
+        policy, fixture = linked_input()
+
+        snapshot = build_snapshot(fixture, policy)
+        observations = {
+            observation.kind: observation
+            for observation in snapshot.monetary_observations
+        }
+
+        self.assertEqual(
+            {
+                "ACTUAL_BID",
+                "BID_CEILING",
+                "AUCTION_PROXY",
+                "HISTORICAL_CPC",
+                "HISTORICAL_CPA",
+                "TARGET_RESULT_COST",
+                "BUDGET",
+            },
+            set(observations),
+        )
+        self.assertEqual("25000000", observations["HISTORICAL_CPC"].amount_micros)
+        self.assertEqual(
+            "1000000000",
+            observations["HISTORICAL_CPA"].amount_micros,
+        )
+        self.assertEqual(
+            "1000000000",
+            observations["TARGET_RESULT_COST"].amount_micros,
+        )
+        self.assertEqual("100000000", observations["ACTUAL_BID"].amount_micros)
+        self.assertEqual("10000000000", observations["BUDGET"].amount_micros)
+        self.assertEqual("UNAVAILABLE", observations["BID_CEILING"].status)
+        self.assertEqual("UNAVAILABLE", observations["AUCTION_PROXY"].status)
+        for observation in observations.values():
+            self.assertEqual("RUB", observation.currency)
+            self.assertEqual("UNKNOWN", observation.vat)
+            self.assertTrue(observation.source)
+            self.assertTrue(observation.constraints)
+            self.assertTrue(observation.scope.campaign)
+            self.assertTrue(observation.period.start)
+            self.assertTrue(observation.period.end)
+
+        with self.assertRaises(IncomparableMoneyError):
+            require_comparable_money(
+                (
+                    observations["HISTORICAL_CPC"],
+                    observations["HISTORICAL_CPA"],
+                )
+            )
+
+    def test_strategy_projection_rejects_monetary_semantic_substitution(self) -> None:
+        policy, fixture = linked_input()
+        snapshot = build_snapshot(fixture, policy)
+        projection = dict(
+            projection_from_integrated_snapshot(
+                snapshot,
+                policy,
+                datetime.fromisoformat(fixture["generated_at"]),
+            )
+        )
+        changed = copy.deepcopy(projection)
+        by_kind = {
+            observation["kind"]: observation
+            for observation in changed["monetary_observations"]
+        }
+        by_kind["HISTORICAL_CPC"]["amount_micros"] = by_kind[
+            "ACTUAL_BID"
+        ]["amount_micros"]
+
+        with self.assertRaisesRegex(
+            SchemaValidationError,
+            "exact semantic field",
+        ):
+            validate_projection(changed)
 
     def test_zero_denominators_are_not_applicable(self) -> None:
         policy, fixture = linked_input()

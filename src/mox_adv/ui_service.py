@@ -40,6 +40,7 @@ from mox_adv.fake_write_adapter import FakeWriteAdapter
 from mox_adv.mandate_store import DurableMandateAuthority
 from mox_adv.model_cost import DurableModelCostLedger
 from mox_adv.model_provider import DeterministicFakeModelProvider
+from mox_adv.money import projection_source_code
 from mox_adv.observe import run_observe_fixture
 from mox_adv.proposal_store import ImmutableProposalStore
 from mox_adv.recommend_contracts import OptimizationProposalV1
@@ -168,6 +169,65 @@ def _minutes_between(later: str, earlier: str) -> int:
     return max(0, int((later_value - earlier_value).total_seconds() // 60))
 
 
+def _strategy_money_observations(snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "kind": observation["kind"],
+            "status": observation["status"],
+            "amount_micros": observation["amount_micros"],
+            "currency": observation["currency"],
+            "vat": observation["vat"],
+            "scope": observation["scope"]["level"],
+            "period": dict(observation["period"]),
+            "source": projection_source_code(str(observation["source"])),
+            "constraints": list(observation["constraints"]),
+        }
+        for observation in snapshot["monetary_observations"]
+    ]
+
+
+def _dashboard_money_observations(
+    snapshot: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    labels = {
+        "ACTUAL_BID": "Фактическая ставка",
+        "BID_CEILING": "Предел ставки",
+        "AUCTION_PROXY": "Косвенный признак аукциона",
+        "HISTORICAL_CPC": "Стоимость перехода (исторический CPC)",
+        "HISTORICAL_CPA": "Историческая стоимость результата (CPA)",
+        "TARGET_RESULT_COST": "Целевая стоимость бизнес-результата",
+        "BUDGET": "Недельный бюджет",
+    }
+    result = []
+    for observation in snapshot["monetary_observations"]:
+        amount = observation["amount_micros"]
+        display_rub = (
+            None
+            if amount is None
+            else format(
+                (Decimal(str(amount)) / Decimal(1_000_000)).quantize(
+                    Decimal("0.01")
+                ),
+                "f",
+            )
+        )
+        result.append(
+            {
+                "kind": observation["kind"],
+                "label": labels[str(observation["kind"])],
+                "status": observation["status"],
+                "display_rub": display_rub,
+                "currency": observation["currency"],
+                "vat": observation["vat"],
+                "scope": observation["scope"]["level"],
+                "period": dict(observation["period"]),
+                "source": observation["source"],
+                "constraints": list(observation["constraints"]),
+            }
+        )
+    return result
+
+
 def _projection_source(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     metrics = snapshot["metrics"]
     campaign = snapshot["campaign"]
@@ -219,6 +279,7 @@ def _projection_source(snapshot: Mapping[str, Any]) -> dict[str, Any]:
         "business_goal": dict(snapshot["business_goal"]),
         "allowed_change_history": [],
         "policy_limits": {},
+        "monetary_observations": _strategy_money_observations(snapshot),
     }
 
 
@@ -1600,6 +1661,7 @@ class UiRunService:
             },
             "scope": dict(snapshot["scope"]),
             "metrics": dict(snapshot["display_metrics"]),
+            "monetary_observations": _dashboard_money_observations(snapshot),
             "campaign_goal": _campaign_goal_report(
                 snapshot,
                 recommendation_rules_value,

@@ -157,9 +157,17 @@ class DashboardCampaignStoreTests(unittest.TestCase):
                 },
                 store.analysis_context(),
             )
-            self.assertEqual(
-                "Заявки на консультацию",
-                store.campaign_draft_payload()["name"],
+            draft = store.campaign_draft_payload()
+            self.assertEqual("Заявки на консультацию", draft["name"])
+            self.assertEqual(500_000_000, draft["budget"]["weekly_micros"])
+            self.assertEqual(100_000_000, draft["limits"]["maximum_bid_micros"])
+            self.assertNotEqual(
+                saved["business_goal"]["target_cpa_rub"] * 1_000_000,
+                draft["budget"]["weekly_micros"],
+            )
+            self.assertNotEqual(
+                saved["business_goal"]["target_cpa_rub"] * 1_000_000,
+                draft["limits"]["maximum_bid_micros"],
             )
             self.assertEqual(
                 "Получать заявки на консультацию",

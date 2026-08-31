@@ -81,6 +81,7 @@ const elements = {
   blockedMessage: document.querySelector("#blocked-message"),
   readinessChecks: document.querySelector("#readiness-checks"),
   metrics: document.querySelector("#metrics"),
+  monetaryObservations: document.querySelector("#monetary-observations"),
   reportRunId: document.querySelector("#report-run-id"),
   reportPeriod: document.querySelector("#report-period"),
   campaignGoalSummary: document.querySelector("#campaign-goal-summary"),
@@ -1033,6 +1034,30 @@ async function readProductionRun(response) {
     throw new Error("Поток завершился без итогового отчёта.");
   }
   return report;
+}
+
+function renderMonetaryObservations(observations) {
+  elements.monetaryObservations.replaceChildren();
+  observations.forEach((observation) => {
+    const item = document.createElement("div");
+    item.className = "money-observation";
+    const name = document.createElement("span");
+    const value = document.createElement("strong");
+    const qualification = document.createElement("small");
+    setText(name, observation.label);
+    setText(
+      value,
+      observation.status === "AVAILABLE"
+        ? `${formatRuleNumber(observation.display_rub)} ₽`
+        : "Недоступно",
+    );
+    setText(
+      qualification,
+      `${observation.scope === "CAMPAIGN_GOAL" ? "Цель кампании" : "Кампания"} · НДС: ${observation.vat === "UNKNOWN" ? "не определён" : observation.vat}`,
+    );
+    item.append(name, value, qualification);
+    elements.monetaryObservations.append(item);
+  });
 }
 
 function renderMetrics(metrics) {
@@ -1993,6 +2018,7 @@ function renderReport(report) {
   if (report.campaign_goal) {
     renderCampaignGoal(report.campaign_goal);
   }
+  renderMonetaryObservations(report.monetary_observations || []);
   renderMetrics(report.metrics);
   setText(
     elements.decisionTitle,

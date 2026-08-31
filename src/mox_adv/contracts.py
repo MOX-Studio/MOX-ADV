@@ -6,11 +6,13 @@ from dataclasses import asdict, dataclass
 from decimal import Decimal
 from typing import Any, Dict, Literal, Mapping, Optional, Protocol, Sequence, Tuple
 
+from mox_adv.money import MonetaryObservation
+
 ARTIFACT_SCHEMA_VERSION = "run-artifacts-v1"
 INTERNAL_API_VERSION = "internal-api-v1"
 FIXTURE_SCHEMA_VERSION = "safe-bootstrap-fixture-v1"
 ANALYTICS_FIXTURE_SCHEMA_VERSION = "integrated-analytics-fixture-v1"
-INTEGRATED_SNAPSHOT_SCHEMA_VERSION = "integrated-performance-snapshot-v1"
+INTEGRATED_SNAPSHOT_SCHEMA_VERSION = "integrated-performance-snapshot-v2"
 
 RunMode = Literal["SIMULATION"]
 EvidenceType = Literal["SIMULATED"]
@@ -295,6 +297,7 @@ class IntegratedPerformanceSnapshot:
     metrics: Mapping[str, Any]
     display_metrics: Mapping[str, str]
     baseline_deviation: Mapping[str, Any]
+    monetary_observations: Tuple[MonetaryObservation, ...]
     campaign: CampaignObservation
     last_change: LastChangeObservation
     business_goal: BusinessGoal

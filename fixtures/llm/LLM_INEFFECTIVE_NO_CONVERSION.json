@@ -45,5 +45,134 @@
     "no_conversion_stop_spend_rub": 2000,
     "maximum_step_percent": 10,
     "observation_window_hours": 72
-  }
+  },
+  "monetary_observations": [
+    {
+      "kind": "ACTUAL_BID",
+      "status": "AVAILABLE",
+      "amount_micros": "100000000",
+      "currency": "RUB",
+      "vat": "UNKNOWN",
+      "period": {
+        "start": "2026-07-21",
+        "end": "2026-07-27",
+        "basis": "REPORTING_PERIOD"
+      },
+      "source": "TEST_FIXTURE",
+      "scope": "CAMPAIGN",
+      "constraints": [
+        "VAT_TREATMENT_UNKNOWN",
+        "OBSERVED_BID_NOT_CPC_OR_BID_CEILING"
+      ]
+    },
+    {
+      "kind": "BID_CEILING",
+      "status": "UNAVAILABLE",
+      "amount_micros": null,
+      "currency": "RUB",
+      "vat": "UNKNOWN",
+      "period": {
+        "start": "2026-07-21",
+        "end": "2026-07-27",
+        "basis": "REPORTING_PERIOD"
+      },
+      "source": "TEST_FIXTURE",
+      "scope": "CAMPAIGN",
+      "constraints": [
+        "VAT_TREATMENT_UNKNOWN",
+        "NOT_AVAILABLE_FROM_CAMPAIGN_STATE_CONTRACT"
+      ]
+    },
+    {
+      "kind": "AUCTION_PROXY",
+      "status": "UNAVAILABLE",
+      "amount_micros": null,
+      "currency": "RUB",
+      "vat": "UNKNOWN",
+      "period": {
+        "start": "2026-07-21",
+        "end": "2026-07-27",
+        "basis": "REPORTING_PERIOD"
+      },
+      "source": "TEST_FIXTURE",
+      "scope": "CAMPAIGN",
+      "constraints": [
+        "VAT_TREATMENT_UNKNOWN",
+        "MUST_NOT_SUBSTITUTE_FOR_BID_OR_CPC"
+      ]
+    },
+    {
+      "kind": "HISTORICAL_CPC",
+      "status": "AVAILABLE",
+      "amount_micros": "21000000",
+      "currency": "RUB",
+      "vat": "UNKNOWN",
+      "period": {
+        "start": "2026-07-21",
+        "end": "2026-07-27",
+        "basis": "REPORTING_PERIOD"
+      },
+      "source": "TEST_FIXTURE",
+      "scope": "CAMPAIGN",
+      "constraints": [
+        "VAT_TREATMENT_UNKNOWN",
+        "TOTAL_COST_DIVIDED_BY_CLICKS",
+        "NOT_A_BID"
+      ]
+    },
+    {
+      "kind": "HISTORICAL_CPA",
+      "status": "UNAVAILABLE",
+      "amount_micros": null,
+      "currency": "RUB",
+      "vat": "UNKNOWN",
+      "period": {
+        "start": "2026-07-21",
+        "end": "2026-07-27",
+        "basis": "REPORTING_PERIOD"
+      },
+      "source": "TEST_FIXTURE",
+      "scope": "CAMPAIGN_GOAL",
+      "constraints": [
+        "VAT_TREATMENT_UNKNOWN",
+        "TOTAL_COST_DIVIDED_BY_ATTRIBUTED_GOAL_VISITS"
+      ]
+    },
+    {
+      "kind": "TARGET_RESULT_COST",
+      "status": "AVAILABLE",
+      "amount_micros": "1000000000",
+      "currency": "RUB",
+      "vat": "UNKNOWN",
+      "period": {
+        "start": "2026-07-21",
+        "end": "2026-07-27",
+        "basis": "REPORTING_PERIOD"
+      },
+      "source": "TEST_FIXTURE",
+      "scope": "CAMPAIGN_GOAL",
+      "constraints": [
+        "VAT_TREATMENT_UNKNOWN",
+        "BUSINESS_TARGET_NOT_OBSERVED_CPA"
+      ]
+    },
+    {
+      "kind": "BUDGET",
+      "status": "AVAILABLE",
+      "amount_micros": "10000000000",
+      "currency": "RUB",
+      "vat": "UNKNOWN",
+      "period": {
+        "start": "2026-07-21",
+        "end": "2026-07-27",
+        "basis": "REPORTING_PERIOD"
+      },
+      "source": "TEST_FIXTURE",
+      "scope": "CAMPAIGN",
+      "constraints": [
+        "VAT_TREATMENT_UNKNOWN",
+        "WEEKLY_SPEND_LIMIT_NOT_BID"
+      ]
+    }
+  ]
 }

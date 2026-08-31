@@ -94,7 +94,10 @@ class SanitizedProjectionTests(unittest.TestCase):
         serialized = json.dumps(dict(projection), ensure_ascii=False)
 
         allowed = set(policy["llm"]["allowed_projection_fields"])
-        self.assertEqual(set(projection), set(snapshot).intersection(allowed))
+        self.assertEqual(
+            set(projection),
+            set(snapshot).intersection(allowed) | {"monetary_observations"},
+        )
         self.assertEqual("lead_submitted", projection["business_goal"]["event"])
         self.assertEqual(10, projection["policy_limits"]["maximum_step_percent"])
         detached_goal = projection["business_goal"]

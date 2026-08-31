@@ -22,6 +22,7 @@ from mox_adv.recommend_contracts import (
     _canonical_hash,
 )
 from mox_adv.contracts import IntegratedPerformanceSnapshot
+from mox_adv.money import projection_source_code
 from mox_adv.normalization import IntegratedSnapshotNormalizerV1
 
 _URL = re.compile(r"(?:https?://|www\.)", re.IGNORECASE)
@@ -46,6 +47,7 @@ _COMPLEX_FIELDS = frozenset(
         "business_goal",
         "allowed_change_history",
         "policy_limits",
+        "monetary_observations",
     }
 )
 _SCALAR_FIELDS = frozenset(
@@ -72,6 +74,7 @@ _SCALAR_FIELDS = frozenset(
     }
 )
 PROJECTION_FIELDS = _COMPLEX_FIELDS | _SCALAR_FIELDS
+_POLICY_ALLOWLIST_FIELDS = PROJECTION_FIELDS - {"monetary_observations"}
 _POLICY_LIMIT_FIELDS = frozenset(
     {
         "budget_pressure_usage_percent",
@@ -231,6 +234,104 @@ def supported_facts(projection: Mapping[str, Any]) -> frozenset[str]:
     return frozenset(facts)
 
 
+def _validate_monetary_projection(projection: Mapping[str, Any]) -> None:
+    observations = projection.get("monetary_observations")
+    if not isinstance(observations, list) or len(observations) != 7:
+        raise SchemaValidationError(
+            "Projection monetary observations must contain seven typed values."
+        )
+    by_kind: dict[str, Mapping[str, Any]] = {}
+    fields = (
+        "kind",
+        "status",
+        "amount_micros",
+        "currency",
+        "vat",
+        "scope",
+        "period",
+        "source",
+        "constraints",
+    )
+    for observation in observations:
+        _closed(observation, fields, "Projection monetary observation")
+        kind = _code(observation["kind"], "Projection money kind")
+        if kind in by_kind:
+            raise SchemaValidationError("Projection monetary kinds must be unique.")
+        by_kind[kind] = observation
+        if observation["status"] not in {"AVAILABLE", "UNAVAILABLE"}:
+            raise SchemaValidationError("Projection monetary status is invalid.")
+        if observation["currency"] != "RUB":
+            raise SchemaValidationError("Projection monetary currency is unsupported.")
+        if observation["vat"] not in {"INCLUDED", "EXCLUDED", "UNKNOWN"}:
+            raise SchemaValidationError("Projection monetary VAT is invalid.")
+        if observation["scope"] not in {"CAMPAIGN", "CAMPAIGN_GOAL"}:
+            raise SchemaValidationError("Projection monetary scope is invalid.")
+        period = observation["period"]
+        _closed(period, ("start", "end", "basis"), "Projection monetary period")
+        _text(period["start"], "Projection monetary period start", maximum=64)
+        _text(period["end"], "Projection monetary period end", maximum=64)
+        if period["basis"] not in {
+            "REPORTING_PERIOD",
+            "BUDGET_PERIOD",
+            "OBSERVATION_INSTANT",
+        }:
+            raise SchemaValidationError("Projection monetary period basis is invalid.")
+        _code(observation["source"], "Projection monetary source")
+        _code_list(
+            observation["constraints"],
+            "Projection monetary constraints",
+            nonempty=True,
+        )
+        amount = observation["amount_micros"]
+        if observation["status"] == "UNAVAILABLE":
+            if amount is not None:
+                raise SchemaValidationError(
+                    "Unavailable projection money cannot carry an amount."
+                )
+        elif _metric_decimal(amount, "Projection monetary amount") is None:
+            raise SchemaValidationError("Available projection money needs an amount.")
+
+    expected_kinds = {
+        "ACTUAL_BID",
+        "BID_CEILING",
+        "AUCTION_PROXY",
+        "HISTORICAL_CPC",
+        "HISTORICAL_CPA",
+        "TARGET_RESULT_COST",
+        "BUDGET",
+    }
+    if set(by_kind) != expected_kinds:
+        raise SchemaValidationError("Projection monetary kinds are incomplete.")
+
+    def assert_binding(kind: str, expected: Decimal | None) -> None:
+        observation = by_kind[kind]
+        amount = observation["amount_micros"]
+        if expected is None:
+            if observation["status"] != "UNAVAILABLE" or amount is not None:
+                raise SchemaValidationError(
+                    "Projection monetary availability does not match its metric."
+                )
+            return
+        actual = _metric_decimal(amount, "Projection monetary amount")
+        if observation["status"] != "AVAILABLE" or actual != expected:
+            raise SchemaValidationError(
+                "Projection monetary value does not match its exact semantic field."
+            )
+
+    cpc = _metric_decimal(projection["cpc"], "Projection cpc")
+    cpa = _metric_decimal(projection["cpa"], "Projection cpa")
+    assert_binding("ACTUAL_BID", Decimal(projection["current_bid"]))
+    assert_binding("BID_CEILING", None)
+    assert_binding("AUCTION_PROXY", None)
+    assert_binding("HISTORICAL_CPC", None if cpc is None else cpc * 1_000_000)
+    assert_binding("HISTORICAL_CPA", None if cpa is None else cpa * 1_000_000)
+    assert_binding(
+        "TARGET_RESULT_COST",
+        Decimal(projection["policy_limits"]["cpa_target_rub"]) * 1_000_000,
+    )
+    assert_binding("BUDGET", Decimal(projection["current_budget"]))
+
+
 def validate_projection(projection: Mapping[str, Any]) -> None:
     _closed(projection, PROJECTION_FIELDS, "Sanitized projection")
     _reject_prohibited_content(projection)
@@ -352,6 +453,7 @@ def validate_projection(projection: Mapping[str, Any]) -> None:
         raise SchemaValidationError(
             "Projection observed facts are not supported by its metrics."
         )
+    _validate_monetary_projection(projection)
 
 
 def build_sanitized_projection(
@@ -366,7 +468,7 @@ def build_sanitized_projection(
         raise SchemaValidationError(
             "Gate 0 does not define the LLM projection allowlist."
         ) from error
-    if allowed != PROJECTION_FIELDS:
+    if allowed != _POLICY_ALLOWLIST_FIELDS:
         raise SchemaValidationError(
             "Gate 0 LLM projection allowlist does not match this schema version."
         )
@@ -375,6 +477,15 @@ def build_sanitized_projection(
         for key in snapshot
         if key in allowed
     }
+    try:
+        projection["monetary_observations"] = _copy_json(
+            snapshot["monetary_observations"],
+            "Projection monetary observations",
+        )
+    except KeyError as error:
+        raise SchemaValidationError(
+            "Trusted snapshot has no typed monetary observations."
+        ) from error
     try:
         primary = policy["conversion"]["primary"]
         projection["business_goal"] = {
@@ -410,6 +521,23 @@ def build_sanitized_projection(
         raise SchemaValidationError(
             "Gate 0 does not define trusted LLM projection values."
         ) from error
+    if "monetary_observations" in projection:
+        target_result_cost = next(
+            (
+                observation
+                for observation in projection["monetary_observations"]
+                if observation["kind"] == "TARGET_RESULT_COST"
+            ),
+            None,
+        )
+        if target_result_cost is None:
+            raise SchemaValidationError(
+                "Projection target result cost observation is missing."
+            )
+        target_result_cost["amount_micros"] = str(
+            int(projection["policy_limits"]["cpa_target_rub"]) * 1_000_000
+        )
+        target_result_cost["source"] = "GATE0_POLICY"
     if projection["campaign_state"] not in {"ON", "SUSPENDED"}:
         projection["comparability"]["financial_recommendations_allowed"] = False
     projection["observed_facts"] = list(supported_facts(projection))
@@ -557,5 +685,23 @@ def projection_from_integrated_snapshot(
         },
         "allowed_change_history": [],
         "policy_limits": {},
+        "monetary_observations": [
+            {
+                "kind": observation.kind,
+                "status": observation.status,
+                "amount_micros": observation.amount_micros,
+                "currency": observation.currency,
+                "vat": observation.vat,
+                "scope": observation.scope.level,
+                "period": {
+                    "start": observation.period.start,
+                    "end": observation.period.end,
+                    "basis": observation.period.basis,
+                },
+                "source": projection_source_code(observation.source),
+                "constraints": list(observation.constraints),
+            }
+            for observation in snapshot.monetary_observations
+        ],
     }
     return build_sanitized_projection(seed, policy)

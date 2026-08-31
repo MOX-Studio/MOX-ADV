@@ -15,6 +15,7 @@ from mox_adv.contracts import (
     NormalizedSnapshot,
     RunContext,
 )
+from mox_adv.money import MonetaryObservation, MonetaryPeriod, MonetaryScope
 from mox_adv.normalization import IntegratedSnapshotNormalizerV1
 
 
@@ -203,6 +204,10 @@ class IntegratedAnalyticsEngineV1:
             metrics=metrics,
             display_metrics=display_metrics,
             baseline_deviation=baseline_deviation,
+            monetary_observations=self._monetary_observations(
+                snapshot,
+                calculated,
+            ),
             campaign=snapshot.campaign,
             last_change=snapshot.last_change,
             business_goal=snapshot.business_goal,
@@ -217,6 +222,141 @@ class IntegratedAnalyticsEngineV1:
         return replace(
             result,
             snapshot_id=IntegratedSnapshotNormalizerV1.fingerprint(result.as_dict()),
+        )
+
+    @staticmethod
+    def _monetary_observations(
+        snapshot: IntegratedSnapshotDraft,
+        calculated: Mapping[str, MetricValue],
+    ) -> tuple[MonetaryObservation, ...]:
+        campaign_scope = MonetaryScope(
+            level="CAMPAIGN",
+            organization=snapshot.scope.organization,
+            account=snapshot.scope.account,
+            campaign=snapshot.scope.campaign,
+        )
+        goal_scope = MonetaryScope(
+            level="CAMPAIGN_GOAL",
+            organization=snapshot.scope.organization,
+            account=snapshot.scope.account,
+            campaign=snapshot.scope.campaign,
+            goal=snapshot.scope.goal,
+        )
+        reporting_period = MonetaryPeriod(
+            start=snapshot.period_start,
+            end=snapshot.period_end,
+            basis="REPORTING_PERIOD",
+        )
+        budget_period = MonetaryPeriod(
+            start=snapshot.campaign.budget_period_start,
+            end=snapshot.campaign.budget_period_end,
+            basis="BUDGET_PERIOD",
+        )
+        observed_at = snapshot.provenance.direct_state.watermark
+        state_period = MonetaryPeriod(
+            start=observed_at,
+            end=observed_at,
+            basis="OBSERVATION_INSTANT",
+        )
+        common_constraints = ("VAT_TREATMENT_UNKNOWN",)
+
+        def derived_amount(name: str) -> str | None:
+            value = calculated[name]
+            if isinstance(value, str):
+                return None
+            return _decimal_text(value * ONE_MILLION)
+
+        cpc_amount = derived_amount("cpc_rub")
+        cpa_amount = derived_amount("cpa_rub")
+        return (
+            MonetaryObservation(
+                kind="ACTUAL_BID",
+                status="AVAILABLE",
+                amount_micros=str(snapshot.campaign.current_search_bid_micros),
+                currency="RUB",
+                vat="UNKNOWN",
+                scope=campaign_scope,
+                period=state_period,
+                source=snapshot.provenance.direct_state.source,
+                constraints=common_constraints
+                + ("OBSERVED_BID_NOT_CPC_OR_BID_CEILING",),
+            ),
+            MonetaryObservation(
+                kind="BID_CEILING",
+                status="UNAVAILABLE",
+                amount_micros=None,
+                currency="RUB",
+                vat="UNKNOWN",
+                scope=campaign_scope,
+                period=state_period,
+                source=snapshot.provenance.direct_state.source,
+                constraints=common_constraints
+                + ("NOT_AVAILABLE_FROM_CAMPAIGN_STATE_CONTRACT",),
+            ),
+            MonetaryObservation(
+                kind="AUCTION_PROXY",
+                status="UNAVAILABLE",
+                amount_micros=None,
+                currency="RUB",
+                vat="UNKNOWN",
+                scope=campaign_scope,
+                period=reporting_period,
+                source="UNAVAILABLE_NO_APPROVED_SOURCE",
+                constraints=common_constraints
+                + ("MUST_NOT_SUBSTITUTE_FOR_BID_OR_CPC",),
+            ),
+            MonetaryObservation(
+                kind="HISTORICAL_CPC",
+                status="AVAILABLE" if cpc_amount is not None else "UNAVAILABLE",
+                amount_micros=cpc_amount,
+                currency="RUB",
+                vat="UNKNOWN",
+                scope=campaign_scope,
+                period=reporting_period,
+                source=snapshot.provenance.direct_report.source,
+                constraints=common_constraints
+                + ("TOTAL_COST_DIVIDED_BY_CLICKS", "NOT_A_BID"),
+            ),
+            MonetaryObservation(
+                kind="HISTORICAL_CPA",
+                status="AVAILABLE" if cpa_amount is not None else "UNAVAILABLE",
+                amount_micros=cpa_amount,
+                currency="RUB",
+                vat="UNKNOWN",
+                scope=goal_scope,
+                period=reporting_period,
+                source=(
+                    snapshot.provenance.direct_report.source
+                    + "+"
+                    + snapshot.provenance.metrika_report.source
+                ),
+                constraints=common_constraints
+                + ("TOTAL_COST_DIVIDED_BY_ATTRIBUTED_GOAL_VISITS",),
+            ),
+            MonetaryObservation(
+                kind="TARGET_RESULT_COST",
+                status="AVAILABLE",
+                amount_micros=str(snapshot.target_kpi.target_maximum * 1_000_000),
+                currency="RUB",
+                vat="UNKNOWN",
+                scope=goal_scope,
+                period=reporting_period,
+                source="GATE0_POLICY:" + snapshot.policy_version,
+                constraints=common_constraints
+                + ("BUSINESS_TARGET_NOT_OBSERVED_CPA",),
+            ),
+            MonetaryObservation(
+                kind="BUDGET",
+                status="AVAILABLE",
+                amount_micros=str(snapshot.campaign.current_weekly_budget_micros),
+                currency="RUB",
+                vat="UNKNOWN",
+                scope=campaign_scope,
+                period=budget_period,
+                source=snapshot.provenance.direct_state.source,
+                constraints=common_constraints
+                + ("WEEKLY_SPEND_LIMIT_NOT_BID",),
+            ),
         )
 
     @staticmethod
