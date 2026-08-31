@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const p0States = sqliteTable("p0_state", {
@@ -13,6 +14,30 @@ export const p0StateRevisions = sqliteTable("p0_state_revisions", {
   updatedAt: text("updated_at").notNull(),
   valueJson: text("value_json").notNull(),
 }, (table) => [primaryKey({ columns: [table.userKey, table.revision] })]);
+
+export const p0PipelineRuns = sqliteTable("p0_pipeline_runs", {
+  runId: text("run_id").primaryKey(),
+  ownerKey: text("owner_key").notNull(),
+  version: integer("version").notNull().default(0),
+  status: text("status").notNull(),
+  currentStage: text("current_stage").notNull(),
+  inputVersionsJson: text("input_versions_json").notNull(),
+  inputVersionsDigest: text("input_versions_digest").notNull(),
+  authorityJson: text("authority_json").notNull(),
+  valueJson: text("value_json").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+}, (table) => [
+  uniqueIndex("p0_pipeline_runs_one_active_owner").on(table.ownerKey).where(sql`${table.status} = 'ACTIVE'`),
+  index("p0_pipeline_runs_owner_created").on(table.ownerKey, table.createdAt),
+]);
+
+export const p0PipelineRunRevisions = sqliteTable("p0_pipeline_run_revisions", {
+  runId: text("run_id").notNull(),
+  version: integer("version").notNull(),
+  valueJson: text("value_json").notNull(),
+  recordedAt: text("recorded_at").notNull(),
+}, (table) => [primaryKey({ columns: [table.runId, table.version] })]);
 
 export const p0Executions = sqliteTable("p0_executions", {
   executionId: text("execution_id").primaryKey(),
