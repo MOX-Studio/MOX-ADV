@@ -491,7 +491,7 @@ export interface P0ApplicationAdapters {
   readContext(input?: { owner_key: string }): Promise<P0Context>;
   readDirectAudit?(input: { owner_key: string }): Promise<DirectAuditSummary>;
   researchSite(url: string): Promise<SiteAnalysis>;
-  readCurrencyLimits(): Promise<{ minimum_weekly_budget_rub: number }>;
+  readCurrencyLimits(): Promise<{ minimum_weekly_budget_rub: number | null }>;
   readMarketEvidence?(input: {
     ownerKey: string;
     model: BusinessModel;

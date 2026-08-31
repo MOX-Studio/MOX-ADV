@@ -35,3 +35,9 @@ test("returns an inline message while the owner enters an invalid budget", () =>
   );
   assert.equal(weeklyBudgetValidationMessage("300", 300), "");
 });
+
+test("cold-start planning accepts a positive owner budget when the exact Direct minimum is unavailable", () => {
+  assert.equal(validateWeeklyBudgetRub("10000", null), 10000);
+  assert.equal(weeklyBudgetValidationMessage("10000", null), "");
+  assert.throws(() => validateWeeklyBudgetRub("0", null), /положительный/u);
+});

@@ -327,6 +327,14 @@ async function readCurrencyLimits() {
   return { minimum_weekly_budget_rub: minimumWeeklyBudgetRub(payload.result.Currencies) };
 }
 
+async function readPlanningCurrencyLimits() {
+  const runtime = runtimeEnv();
+  if (!runtime.YANDEX_DIRECT_OAUTH_TOKEN || !runtime.YANDEX_DIRECT_CLIENT_LOGIN) {
+    return { minimum_weekly_budget_rub: null };
+  }
+  return readCurrencyLimits();
+}
+
 type VerifiedDirectBinding = Awaited<ReturnType<typeof readDirectBinding>>;
 
 async function directAuditBinding(value: VerifiedDirectBinding): Promise<DirectAuditBinding> {
@@ -1381,7 +1389,7 @@ const application = new P0Application({
       return readDirectAudit("p0-context", await directAuditBinding(binding));
     },
     researchSite,
-    readCurrencyLimits,
+    readCurrencyLimits: readPlanningCurrencyLimits,
     readMarketEvidence,
     ...(runtimeEnv().P0_COMPETITOR_RESEARCH_JSON ? { readCompetitorResearch } : {}),
     async readPlaybookReleases() {

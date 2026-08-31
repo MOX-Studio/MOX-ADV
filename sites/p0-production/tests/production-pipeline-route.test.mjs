@@ -4,6 +4,7 @@ import test from "node:test";
 
 const routeSource = await readFile(new URL("../app/api/p0/route.ts", import.meta.url), "utf8");
 const clientSource = await readFile(new URL("../app/P0Client.tsx", import.meta.url), "utf8");
+const productionSource = await readFile(new URL("../lib/p0.ts", import.meta.url), "utf8");
 
 test("production route prepares real owner inputs without fixture or legacy-table dependency", () => {
   assert.doesNotMatch(routeSource, /p0-e2e|pipeline-acceptance-fixture|p0-e2e-runtime/iu);
@@ -19,6 +20,12 @@ test("production route keeps pipeline actions typed and denies editing while a r
   assert.match(routeSource, /assertCurrentPipelineAction\(payload\)/u);
   assert.match(routeSource, /currentPipeline\.editingLocked/u);
   assert.match(routeSource, /Редактирование недоступно во время активного запуска/u);
+});
+
+test("cold-start Strategy planning does not require Direct read credentials", () => {
+  assert.match(productionSource, /async function readPlanningCurrencyLimits\(\)/u);
+  assert.match(productionSource, /readCurrencyLimits: readPlanningCurrencyLimits/u);
+  assert.match(productionSource, /minimum_weekly_budget_rub: null/u);
 });
 
 test("NOT_STARTED pipeline keeps owner-journey actions and exposes Start only for current Drafts at review", () => {
