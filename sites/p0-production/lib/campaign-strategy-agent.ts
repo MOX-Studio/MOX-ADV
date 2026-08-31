@@ -1,3 +1,12 @@
+import {
+  assertCampaignPlaybookStrategySnapshot,
+  campaignPlaybookStrategyRevisionId,
+  type AppliedPlaybookRuleReference,
+  type CampaignPlaybookStrategySnapshot,
+  type PlaybookPolicyReference,
+  type PlaybookReleaseReference,
+} from "./campaign-playbook-governance.ts";
+
 export const CAMPAIGN_STRATEGY_AGENT_CONTRACT = "mox-adv.p0.campaign-strategy-agent";
 export const CAMPAIGN_STRATEGY_AGENT_VERSION = "1.1.0";
 export const CAMPAIGN_STRATEGY_AGENT_INPUT_SCHEMA = "p0-campaign-strategy-agent-input-v1";
@@ -146,6 +155,11 @@ export type AutonomousCampaignStrategy = {
     supported_draft_profile: ArtifactReference;
     campaign_playbook: ArtifactReference;
   };
+  playbook_lineage: {
+    release: PlaybookReleaseReference;
+    promotion_policy: PlaybookPolicyReference;
+    applied_rules: AppliedPlaybookRuleReference[];
+  };
   dimensions: CampaignStrategyAgentProposal["dimensions"];
   rationale: string;
   confidence: "HIGH" | "MEDIUM" | "LOW";
@@ -280,9 +294,16 @@ function assertArtifactState(artifact: CampaignStrategyAgentArtifact) {
     && (content.status !== "SUPPORTED" || !text(content.profile_id, 255) || !text(content.profile_version, 100))) {
     throw new CampaignStrategyAgentError("STRATEGY_PROFILE_UNSUPPORTED", "The Draft profile must identify one supported exact version.");
   }
-  if (artifact.kind === "CAMPAIGN_PLAYBOOK"
-    && (content.status !== "ACTIVE" || !text(content.release_id, 255) || !text(content.release_version, 100))) {
-    throw new CampaignStrategyAgentError("STRATEGY_PLAYBOOK_NOT_ACTIVE", "Campaign Playbook must identify one exact active release.");
+  if (artifact.kind === "CAMPAIGN_PLAYBOOK") {
+    try {
+      assertCampaignPlaybookStrategySnapshot(artifact.content);
+      if (artifact.revision_id !== campaignPlaybookStrategyRevisionId(artifact.content as CampaignPlaybookStrategySnapshot)) {
+        throw new CampaignStrategyAgentError("STRATEGY_PLAYBOOK_NOT_ACTIVE", "Campaign Playbook artifact revision does not identify its exact active release.");
+      }
+    } catch (error) {
+      if (error instanceof CampaignStrategyAgentError) throw error;
+      throw new CampaignStrategyAgentError("STRATEGY_PLAYBOOK_NOT_ACTIVE", "Campaign Playbook must contain one exact active approved release and applicable rules.");
+    }
   }
 }
 
@@ -610,11 +631,22 @@ export async function formAutonomousCampaignStrategy(input: {
     supported_draft_profile: reference(immutableInputs.supported_draft_profile),
     campaign_playbook: reference(immutableInputs.campaign_playbook),
   };
+  const playbookSnapshot = immutableInputs.campaign_playbook.content as CampaignPlaybookStrategySnapshot;
+  const playbookLineage = {
+    release: clone(playbookSnapshot.release),
+    promotion_policy: clone(playbookSnapshot.promotion_policy),
+    applied_rules: playbookSnapshot.applicable_rules.map(({ rule_id, rule_version, content_digest }) => ({
+      rule_id,
+      rule_version,
+      content_digest,
+    })),
+  };
   const identity = {
     contract: { name: CAMPAIGN_STRATEGY_AGENT_CONTRACT, version: CAMPAIGN_STRATEGY_AGENT_VERSION } as const,
     accepted_at: input.acceptedAt,
     accepted_by: { kind: "STRATEGY_AGENT" as const, model_id: input.model.model_id },
     input_lineage: inputLineage,
+    playbook_lineage: playbookLineage,
     dimensions: proposal.dimensions,
     rationale: proposal.rationale,
     confidence: proposal.confidence,
@@ -631,6 +663,7 @@ export async function formAutonomousCampaignStrategy(input: {
     accepted_at: input.acceptedAt,
     accepted_by: identity.accepted_by,
     input_lineage: inputLineage,
+    playbook_lineage: playbookLineage,
     dimensions: proposal.dimensions,
     rationale: proposal.rationale,
     confidence: proposal.confidence,

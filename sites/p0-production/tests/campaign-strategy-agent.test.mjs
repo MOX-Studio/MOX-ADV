@@ -50,11 +50,45 @@ async function inputs() {
       campaign_type: "UNIFIED_CAMPAIGN",
       placement: "SEARCH",
     }),
-    campaign_playbook: await artifact("CAMPAIGN_PLAYBOOK", "playbook-r5", "playbook-qualified-message", {
-      release_id: "campaign-playbook-2026-09",
-      release_version: "5.0.0",
-      status: "ACTIVE",
-      rule_ids: ["qualified-message-v2"],
+    campaign_playbook: await artifact("CAMPAIGN_PLAYBOOK", "playbook-release:campaign-playbook-2026-09:5.0.0:cccccccccccccccc", "playbook-qualified-message", {
+      schema_version: "p0-campaign-playbook-strategy-snapshot-v1",
+      status: "ACTIVE_APPROVED",
+      release: {
+        release_id: "campaign-playbook-2026-09",
+        release_version: "5.0.0",
+        content_digest: `sha256:${"c".repeat(64)}`,
+      },
+      promotion_policy: {
+        policy_id: "campaign-playbook-promotion-policy",
+        policy_version: "3.0.0",
+        content_digest: `sha256:${"d".repeat(64)}`,
+      },
+      activation_decision: {
+        decision_id: "activate-campaign-playbook-2026-09",
+        content_digest: `sha256:${"e".repeat(64)}`,
+      },
+      steward_delegation: {
+        delegation_id: "knowledge-steward-delegation",
+        delegation_version: "1.0.0",
+        content_digest: `sha256:${"f".repeat(64)}`,
+      },
+      applicable_rules: [{
+        rule_id: "qualified-message",
+        rule_version: "2.0.0",
+        content_digest: `sha256:${"1".repeat(64)}`,
+        changed_family: "QUALIFIED_ACTION",
+        mechanism: "Name the qualified action in the message.",
+        changed_fields: ["/direct/ad/ResponsiveAd/Texts"],
+        assessment_id: "assessment-qualified-message-v2",
+        assessment_digest: `sha256:${"2".repeat(64)}`,
+      }],
+      authority: {
+        evidence_override: false,
+        mandate_grant: false,
+        campaign_execution: false,
+        campaign_publication: false,
+        spend: false,
+      },
     }),
   };
 }
@@ -168,7 +202,24 @@ test("forms and autonomously accepts all twelve evidence-linked dimensions from 
   assert.equal(strategy.input_lineage.goal_revision.revision_id, "goal-r7");
   assert.equal(strategy.input_lineage.analytics_evidence_snapshot.revision_id, "snapshot-r9");
   assert.equal(strategy.input_lineage.supported_draft_profile.revision_id, "profile-r2");
-  assert.equal(strategy.input_lineage.campaign_playbook.revision_id, "playbook-r5");
+  assert.equal(strategy.input_lineage.campaign_playbook.revision_id, "playbook-release:campaign-playbook-2026-09:5.0.0:cccccccccccccccc");
+  assert.deepEqual(strategy.playbook_lineage, {
+    release: {
+      release_id: "campaign-playbook-2026-09",
+      release_version: "5.0.0",
+      content_digest: `sha256:${"c".repeat(64)}`,
+    },
+    promotion_policy: {
+      policy_id: "campaign-playbook-promotion-policy",
+      policy_version: "3.0.0",
+      content_digest: `sha256:${"d".repeat(64)}`,
+    },
+    applied_rules: [{
+      rule_id: "qualified-message",
+      rule_version: "2.0.0",
+      content_digest: `sha256:${"1".repeat(64)}`,
+    }],
+  });
   assert.equal(Object.isFrozen(strategy), true);
   assert.equal(Object.isFrozen(strategy.dimensions), true);
 });
@@ -309,6 +360,7 @@ test("rejects mutated artifacts, non-mandatory policy, unsupported profile, and 
     (value) => { value.policies[0].content.status = "OPTIONAL"; },
     (value) => { value.supported_draft_profile.content.status = "UNSUPPORTED"; },
     (value) => { value.campaign_playbook.content.status = "SUPERSEDED"; },
+    (value) => { value.campaign_playbook.content.applicable_rules[0].content_digest = `sha256:${"9".repeat(64)}`; },
   ]) {
     const exactInputs = structuredClone(await inputs());
     mutate(exactInputs);

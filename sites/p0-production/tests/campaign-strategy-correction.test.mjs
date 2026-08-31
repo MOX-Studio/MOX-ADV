@@ -56,11 +56,45 @@ async function strategyInputs() {
       campaign_type: "UNIFIED_CAMPAIGN",
       placement: "SEARCH",
     }),
-    campaign_playbook: await artifact("CAMPAIGN_PLAYBOOK", "playbook-r5", "playbook-qualified-message", {
-      release_id: "campaign-playbook-2026-09",
-      release_version: "5.0.0",
-      status: "ACTIVE",
-      rule_ids: ["qualified-message-v2"],
+    campaign_playbook: await artifact("CAMPAIGN_PLAYBOOK", "playbook-release:campaign-playbook-2026-09:5.0.0:cccccccccccccccc", "playbook-qualified-message", {
+      schema_version: "p0-campaign-playbook-strategy-snapshot-v1",
+      status: "ACTIVE_APPROVED",
+      release: {
+        release_id: "campaign-playbook-2026-09",
+        release_version: "5.0.0",
+        content_digest: `sha256:${"c".repeat(64)}`,
+      },
+      promotion_policy: {
+        policy_id: "campaign-playbook-promotion-policy",
+        policy_version: "3.0.0",
+        content_digest: `sha256:${"d".repeat(64)}`,
+      },
+      activation_decision: {
+        decision_id: "activate-campaign-playbook-2026-09",
+        content_digest: `sha256:${"e".repeat(64)}`,
+      },
+      steward_delegation: {
+        delegation_id: "knowledge-steward-delegation",
+        delegation_version: "1.0.0",
+        content_digest: `sha256:${"f".repeat(64)}`,
+      },
+      applicable_rules: [{
+        rule_id: "qualified-message",
+        rule_version: "2.0.0",
+        content_digest: `sha256:${"1".repeat(64)}`,
+        changed_family: "QUALIFIED_ACTION",
+        mechanism: "Name the qualified action in the message.",
+        changed_fields: ["/direct/ad/ResponsiveAd/Texts"],
+        assessment_id: "assessment-qualified-message-v2",
+        assessment_digest: `sha256:${"2".repeat(64)}`,
+      }],
+      authority: {
+        evidence_override: false,
+        mandate_grant: false,
+        campaign_execution: false,
+        campaign_publication: false,
+        spend: false,
+      },
     }),
   };
 }
