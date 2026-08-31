@@ -1,4 +1,8 @@
 import {
+  assertCampaignPairValidationResult,
+  type CampaignPairValidationResult,
+} from "./campaign-pair-validation.ts";
+import {
   verifyGoalCandidate,
   verifyGoalFormationResult,
   type GoalCandidate,
@@ -13,7 +17,7 @@ const REASON_CODE = /^[A-Z][A-Z0-9_]{1,79}$/u;
 export const PIPELINE_ORCHESTRATOR_CONTRACT = "mox-adv.p0.pipeline-orchestrator";
 export const PIPELINE_ORCHESTRATOR_VERSION = "1.2.0";
 export const PIPELINE_RUN_SCHEMA = "p0-pipeline-run-v1";
-export const PIPELINE_INPUT_VERSIONS_SCHEMA = "p0-pipeline-input-versions-v1";
+export const PIPELINE_INPUT_VERSIONS_SCHEMA = "p0-pipeline-input-versions-v2";
 
 export const PIPELINE_STAGES = [
   { id: "CAMPAIGN_GOAL", label: "Цель кампании" },
@@ -50,6 +54,7 @@ export type PipelineInputVersions = {
     hypothesis: PipelineVersionReference;
     draft: PipelineVersionReference;
   }>;
+  campaign_pair_checks: CampaignPairValidationResult;
   pipeline_policy: PipelineVersionReference;
   campaign_playbook: PipelineVersionReference;
 };
@@ -162,6 +167,7 @@ export function assertPipelineInputVersions(value: unknown): asserts value is Pi
     "analytics_evidence_snapshot",
     "campaign_strategy_revision",
     "campaign_pairs",
+    "campaign_pair_checks",
     "pipeline_policy",
     "campaign_playbook",
   ]) || candidate.schema_version !== PIPELINE_INPUT_VERSIONS_SCHEMA) {
@@ -192,6 +198,17 @@ export function assertPipelineInputVersions(value: unknown): asserts value is Pi
     return !validVersionReference(typed.hypothesis) || !validVersionReference(typed.draft);
   })) {
     throw new PipelineOrchestratorError("PIPELINE_INPUT_VERSIONS_INVALID", "Campaign pairs must contain exact Hypothesis and Draft revisions.");
+  }
+  try {
+    assertCampaignPairValidationResult(candidate.campaign_pair_checks);
+  } catch {
+    throw new PipelineOrchestratorError("PIPELINE_INPUT_VERSIONS_INVALID", "Campaign pair checks must contain the authoritative typed validation result.");
+  }
+  const includedChecks = candidate.campaign_pair_checks.pairs.filter((pair) => pair.included);
+  if (includedChecks.length !== candidate.campaign_pairs.length
+    || candidate.campaign_pairs.some((pair, index) => pair.hypothesis.revision_id !== includedChecks[index].hypothesis_revision_id
+      || pair.draft.revision_id !== includedChecks[index].draft_revision_id)) {
+    throw new PipelineOrchestratorError("PIPELINE_INPUT_VERSIONS_INVALID", "Only automatically verified Campaign pairs may enter the current pipeline contract.");
   }
 }
 

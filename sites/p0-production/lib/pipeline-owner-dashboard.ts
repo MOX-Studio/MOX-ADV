@@ -1,3 +1,4 @@
+import { validateCampaignPairs } from "./campaign-pair-validation.ts";
 import type { GoalCandidate } from "./goal-revision.ts";
 import {
   PIPELINE_INPUT_VERSIONS_SCHEMA,
@@ -107,6 +108,10 @@ function list(value: unknown) {
   return Array.isArray(value) ? value : [];
 }
 
+function text(value: unknown) {
+  return String(value ?? "").normalize("NFKC").replace(/\s+/gu, " ").trim();
+}
+
 function schema(value: unknown, fallback: string) {
   const valueSchema = String(record(value).schema_version ?? "").trim();
   return valueSchema || fallback;
@@ -147,10 +152,16 @@ export async function pipelineInputVersions(view: PipelineHistoricalView): Promi
     business_goal_decision: context.business_goal_decision ?? null,
     strategy_review: state.strategy_review ?? null,
   };
+  const campaignPairChecks = await validateCampaignPairs({
+    recommendationSet,
+    strategy,
+    analyticsEvidence: evidence,
+  });
+  const includedDraftIds = new Set(campaignPairChecks.pairs.filter((pair) => pair.included).map((pair) => pair.draft_id));
   const campaignPairs = [];
   for (const [index, value] of list(recommendationSet.drafts).entries()) {
     const draft = record(value);
-    if (draft.visibility === "HIDDEN") continue;
+    if (!includedDraftIds.has(text(draft.draft_id))) continue;
     const hypothesis = record(record(draft.variant).hypothesis);
     if (!Object.keys(hypothesis).length
       || (hypothesis.draft_revision_id && hypothesis.draft_revision_id !== draft.draft_revision_id)
@@ -192,6 +203,7 @@ export async function pipelineInputVersions(view: PipelineHistoricalView): Promi
       ? await versionReference(strategy, "campaign-strategy-revision-v1", `campaign-strategy:${view.revision}`, strategy.strategy_revision_id)
       : null,
     campaign_pairs: campaignPairs,
+    campaign_pair_checks: campaignPairChecks,
     pipeline_policy: await versionReference(
       { schema_version: "p0-pipeline-policy-v1", canonical_path: PIPELINE_STAGES.map((stage) => stage.id), external_write: "DENIED" },
       "p0-pipeline-policy-v1",

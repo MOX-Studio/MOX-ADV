@@ -147,9 +147,11 @@ test("saved owner edits change the exact frozen input digest", async () => {
   assert.match(before.business_input.digest, /^sha256:[0-9a-f]{64}$/u);
   assert.notEqual(before.historical_document.digest, after.historical_document.digest);
   assert.notEqual(before.business_input.digest, after.business_input.digest);
-  assert.equal(before.campaign_pairs.length, 1);
-  assert.equal(before.campaign_pairs[0].hypothesis.revision_id, "hypothesis-1@3");
-  assert.equal(before.campaign_pairs[0].draft.revision_id, "draft-1@3");
+  assert.equal(before.campaign_pairs.length, 0);
+  assert.equal(before.campaign_pair_checks.pairs.length, 1);
+  assert.equal(before.campaign_pair_checks.pairs[0].included, false);
+  assert.equal(before.campaign_pair_checks.pairs[0].violations.some((item) => item.code === "DRAFT_IDENTITY_INCOMPLETE"), true);
+  assert.equal(before.campaign_pair_checks.pairs[0].violations.every((item) => item.executor && item.return_target), true);
 });
 
 test("Dashboard projects material Goal options with evidence, consequences, and recommendation", async () => {

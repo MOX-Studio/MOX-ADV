@@ -71,6 +71,22 @@ function inputVersions() {
       hypothesis: reference("campaign-hypothesis", "f"),
       draft: reference("campaign-draft", "0"),
     }],
+    campaign_pair_checks: {
+      schema_version: "campaign-pair-validation-v1",
+      contract_version: "1.0.0",
+      strategy_revision_id: "campaign-strategy-revision-1",
+      evidence_snapshot_id: "analytics-evidence-snapshot-revision-1",
+      field_registry_schema: "direct-v501-draft-field-registry-v2",
+      pairs: [{
+        pair_id: "campaign-hypothesis-revision-1::campaign-draft-revision-1",
+        hypothesis_revision_id: "campaign-hypothesis-revision-1",
+        draft_id: "campaign-draft-1",
+        draft_revision_id: "campaign-draft-revision-1",
+        publish_fingerprint: digest("3"),
+        included: true,
+        violations: [],
+      }],
+    },
     pipeline_policy: reference("pipeline-policy", "1"),
     campaign_playbook: reference("campaign-playbook", "2"),
   };
@@ -326,6 +342,28 @@ test("closed input-version contract rejects an unversioned start before persiste
   const { orchestrator } = fixture(database);
   const versions = inputVersions();
   delete versions.pipeline_policy.digest;
+
+  await assert.rejects(
+    orchestrator.start("owner", versions),
+    (error) => error instanceof PipelineOrchestratorError && error.code === "PIPELINE_INPUT_VERSIONS_INVALID",
+  );
+  assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE name = 'p0_pipeline_runs'").get(), undefined);
+  database.close();
+});
+
+test("closed input-version contract rejects a pair that is not included by its automatic checks", async () => {
+  const database = new DatabaseSync(":memory:");
+  const { orchestrator } = fixture(database);
+  const versions = inputVersions();
+  versions.campaign_pair_checks.pairs[0].included = false;
+  versions.campaign_pair_checks.pairs[0].violations = [{
+    category: "PAIR_COMPLETENESS",
+    code: "DRAFT_PROJECTION_PARTIAL",
+    executor: "CAMPAIGN_DESIGN_AGENT",
+    return_target: "CAMPAIGNS",
+    pointer: "/draft/publish_projection",
+    message: "Direct Projection неполна.",
+  }];
 
   await assert.rejects(
     orchestrator.start("owner", versions),
