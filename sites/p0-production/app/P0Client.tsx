@@ -227,13 +227,18 @@ export default function P0Client() {
   const activeStage = selectedStage ?? authoritativeStage(projection);
   const publicationReviewHandoff = projection.pipeline?.status === "COMPLETED"
     && projection.pipeline.currentStage === "review";
-  const pipelineStage = projection.pipeline?.stages.find((stage) => stage.id === activeStage);
+  const pipelineStage = projection.pipeline && projection.pipeline.status !== "NOT_STARTED"
+    ? projection.pipeline.stages.find((stage) => stage.id === activeStage)
+    : undefined;
   const activeStageStatus = publicationReviewHandoff && activeStage === "review"
     ? "complete"
     : pipelineStage
       ? pipelineStage.tone === "complete" ? "complete" : pipelineStage.tone === "active" ? "current" : "upcoming"
       : projection.journey.stages.find((stage) => stage.id === activeStage)?.status ?? "upcoming";
-  const viewingCurrentStage = activeStage === (projection.pipeline?.currentStage ?? projection.journey.currentStage);
+  const viewingCurrentStage = activeStage === authoritativeStage(projection);
+  const pipelineControl = projection.pipeline && projection.pipeline.status !== "NOT_STARTED"
+    ? projection.pipeline
+    : null;
   const ownerHasAction = Boolean(projection.primaryAction || projection.goalInterview?.primaryAction);
   const ownerActionProblem = ownerHasAction
     ? projection.cards.find((card) => card.kind === "human-decision-gate")
@@ -257,8 +262,8 @@ export default function P0Client() {
     <Header />
     <main className={styles.pageA} id="module">
       {activeStage === "goal" && <Hero projection={projection} />}
-      {projection.pipeline && <PipelineControl
-        pipeline={projection.pipeline}
+      {pipelineControl && <PipelineControl
+        pipeline={pipelineControl}
         busy={busy}
         onAction={submitPipelineAction}
       />}
@@ -643,9 +648,9 @@ function StageNavigation({ projection, selectedStage, onStage }: { projection: O
   const legacyStages = projection.journey.stages.map((stage, index) => ({
     ...stage,
     label: pipeline?.stages[index]?.label ?? stage.label,
-    status: pipeline ? "Ожидает" : stage.status === "complete" ? "Завершён" : stage.status === "current" ? "Выполняется" : "Ожидает",
-    icon: pipeline ? "○" : stage.status === "complete" ? "✓" : String(index + 1),
-    tone: pipeline ? "pending" : stage.status === "complete" ? "complete" : stage.status === "current" ? "active" : "pending",
+    status: stage.status === "complete" ? "Завершён" : stage.status === "current" ? "Выполняется" : "Ожидает",
+    icon: stage.status === "complete" ? "✓" : String(index + 1),
+    tone: stage.status === "complete" ? "complete" : stage.status === "current" ? "active" : "pending",
   }));
   const stages = pipeline && pipeline.status !== "NOT_STARTED" ? pipeline.stages : legacyStages;
   const currentStage = pipeline && pipeline.status !== "NOT_STARTED" ? pipeline.currentStage : projection.journey.currentStage;

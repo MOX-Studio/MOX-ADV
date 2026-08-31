@@ -1,0 +1,27 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+const routeSource = await readFile(new URL("../app/api/p0/route.ts", import.meta.url), "utf8");
+const clientSource = await readFile(new URL("../app/P0Client.tsx", import.meta.url), "utf8");
+
+test("production route prepares real owner inputs without fixture or legacy-table dependency", () => {
+  assert.doesNotMatch(routeSource, /p0-e2e|pipeline-acceptance-fixture|p0-e2e-runtime/iu);
+  assert.doesNotMatch(routeSource, /archiveLegacyPipelineDocument/iu);
+  assert.match(routeSource, /operatorDiagnostics as productionOperatorDiagnostics/u);
+  assert.match(routeSource, /ownerOverview as productionOwnerOverview/u);
+  assert.match(routeSource, /submitOwnerAction as productionSubmitOwnerAction/u);
+  assert.match(routeSource, /currentBackend\.diagnostics\(\)/u);
+});
+
+test("production route keeps pipeline actions typed and denies editing while a run is active", () => {
+  assert.match(routeSource, /assertCurrentPipelineAction\(payload\)/u);
+  assert.match(routeSource, /currentPipeline\.editingLocked/u);
+  assert.match(routeSource, /Редактирование недоступно во время активного запуска/u);
+});
+
+test("NOT_STARTED pipeline does not hide production owner-journey actions or expose an inert launch", () => {
+  assert.match(clientSource, /projection\.pipeline && projection\.pipeline\.status !== "NOT_STARTED"\s*\? projection\.pipeline\.stages\.find/u);
+  assert.match(clientSource, /const pipelineControl = projection\.pipeline && projection\.pipeline\.status !== "NOT_STARTED"/u);
+  assert.doesNotMatch(clientSource, /status: pipeline \? "Ожидает"/u);
+});
