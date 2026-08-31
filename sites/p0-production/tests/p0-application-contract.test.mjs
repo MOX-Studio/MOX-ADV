@@ -1465,6 +1465,38 @@ test("separate Strategy review records one exact owner confirmation and invalida
   );
 });
 
+test("migrates the known Strategy questionnaire 2.0 contract by rebuilding verified upstream and invalidating downstream", async (t) => {
+  const { directory, store, application } = await fixture();
+  t.after(() => rm(directory, { recursive: true, force: true }));
+
+  let result = await application.command("owner", { action: "analyze_site", expected_revision: 0, url: "https://owner.example/" });
+  result = await application.command("owner", {
+    action: "confirm_context_goal",
+    expected_revision: result.revision,
+    confirmation: "CONFIRM_CONTEXT_GOAL",
+    goal: result.state.context_state.provisional_business_goal.value,
+  });
+  result = await application.command("owner", { action: "save_business_model", expected_revision: result.revision, value: ownerModel(result.state) });
+  result = await approveStrategy(application, result);
+  const row = await store.load("owner");
+  const legacy = JSON.parse(row.value_json);
+  legacy.strategy_questionnaire.contract_version = "2.0.0";
+  legacy.strategy.questionnaire_contract_version = "2.0.0";
+  await store.seed("owner", { ...row, value_json: JSON.stringify(legacy) });
+
+  const migrated = await application.query("owner");
+  assert.equal(migrated.revision, row.revision + 1);
+  assert.equal(migrated.state.strategy_questionnaire.schema_version, "p0-strategy-questionnaire-v2");
+  assert.equal(migrated.state.strategy_questionnaire.contract_version, "2.1.0");
+  assert.equal(migrated.state.strategy, null);
+  assert.equal(migrated.state.strategy_review, null);
+  assert.equal(migrated.state.recommendation_set, null);
+  assert.equal(migrated.state.draft, null);
+  assert.equal(migrated.state.shortlist, null);
+  assert.equal(migrated.state.human_decision_gate, null);
+  assert.equal(migrated.state.last_cascade.recomputation_status, "REQUIRED");
+});
+
 test("rejects a corrupted persisted Strategy questionnaire before it can change field order or approval metadata", async (t) => {
   const { directory, store, application } = await fixture();
   t.after(() => rm(directory, { recursive: true, force: true }));

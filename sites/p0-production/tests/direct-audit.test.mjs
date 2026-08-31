@@ -354,7 +354,7 @@ test("concurrent safe readers converge on one durable audit instead of losing ch
   assert.equal((await store.loadCurrent("owner", "advertiser-login")).status, "COMPLETE");
 });
 
-test("completed Direct audit reuses its exact snapshot until material capability lineage changes", async () => {
+test("completed Direct audit reuses its exact snapshot while fresh and creates a new immutable audit after expiry or capability change", async () => {
   const store = new MemoryDirectAuditStore();
   let currentTime = "2026-08-22T17:40:00.000Z";
   let nextAudit = 1;
@@ -394,20 +394,29 @@ test("completed Direct audit reuses its exact snapshot until material capability
   assert.equal(campaignReads, 1);
   assert.equal(store.snapshots.size, 1);
 
-  currentTime = "2026-08-22T18:40:00.000Z";
+  currentTime = "2026-08-22T17:44:00.000Z";
   capabilityLineage = capability("direct-capability:observation-2");
   const reused = await makeAuditor().run();
   assert.equal(reused.audit_id, "direct-audit-fresh-1");
   assert.equal(reused.snapshot.capability_snapshot_id, "direct-capability:observation-1");
-  assert.equal(campaignReads, 1, "fresh provider observations cannot silently replace the immutable audit snapshot");
+  assert.equal(campaignReads, 1, "a still-fresh provider observation must reuse the immutable audit snapshot");
   assert.equal(store.snapshots.size, 1);
 
+  currentTime = "2026-08-22T17:46:00.000Z";
+  capabilityLineage = capability("direct-capability:observation-3");
+  const expired = await makeAuditor().run();
+  assert.equal(expired.audit_id, "direct-audit-fresh-2");
+  assert.equal(expired.snapshot.capability_snapshot_id, "direct-capability:observation-3");
+  assert.equal(campaignReads, 2);
+  assert.equal(store.snapshots.size, 2, "expired and replacement snapshots remain immutable and addressable");
+
+  currentTime = "2026-08-22T17:47:00.000Z";
   capabilityLineage = capability("direct-capability:material-change", `sha256:${"b".repeat(64)}`);
   const refreshed = await makeAuditor().run();
-  assert.equal(refreshed.audit_id, "direct-audit-fresh-2");
+  assert.equal(refreshed.audit_id, "direct-audit-fresh-3");
   assert.equal(refreshed.snapshot.capability_snapshot_id, "direct-capability:material-change");
-  assert.equal(campaignReads, 2);
-  assert.equal(store.snapshots.size, 2, "both exact lineage snapshots remain immutable and addressable");
+  assert.equal(campaignReads, 3);
+  assert.equal(store.snapshots.size, 3, "all exact lineage snapshots remain immutable and addressable");
 });
 
 test("Direct audit builds exact bounded campaign and offline search-query report requests", () => {

@@ -10,7 +10,6 @@ const sharedVisualClasses = [
   "topbar",
   "brand",
   "activeNav",
-  "connectionState",
   "pageA",
   "hero",
   "heroOutcome",
@@ -18,10 +17,7 @@ const sharedVisualClasses = [
   "stageNavhorizontal",
   "ownerWorkspace",
   "agentRail",
-  "agentMessage",
-  "railSnapshot",
   "automationMap",
-  "safetyCard",
   "artifact",
 ];
 
@@ -48,6 +44,13 @@ test("production stage cards switch the visible owner section without mutating w
 test("production keeps the accepted Goal-only hero and never renders prototype labeling", () => {
   assert.match(productionSource, /activeStage === "goal"[^\n]*<Hero/u);
   assert.doesNotMatch(productionSource, /prototypeFlag|ПРОТОТИП · ЦЕЛЕВОЕ СОСТОЯНИЕ/u);
+});
+
+test("production omits redundant status and outcome details", () => {
+  for (const className of ["connectionState", "agentMessage", "railSnapshot", "safetyCard"]) {
+    assert.doesNotMatch(productionSource, new RegExp(`styles\\.${className}\\b`, "u"));
+  }
+  assert.doesNotMatch(productionSource, /<h2>\{projection\.businessOutcome\.headline\}<\/h2><p>\{projection\.businessOutcome\.summary\}<\/p>/u);
 });
 
 test("automation map distinguishes forbidden launch from available Direct reads", () => {

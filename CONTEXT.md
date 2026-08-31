@@ -33,16 +33,32 @@ A pause that delegates one Critical Decision or Material Uncertainty to a named 
 _Avoid_: Blank form, generic approval, routine data collection
 
 **Campaign Strategy**:
-An operator-approved statement of the real offer, audience, qualified outcome, exclusions, business goal, geography, period, landing page, budget, target result cost, and core message that guides a Recommendation Set of one or more Campaign Drafts.
-_Avoid_: Single-campaign instruction, Yandex payload, technical bidding configuration
+The current evidence-grounded statement of the real offer, audience, qualified outcome, exclusions, business goal, geography, period, landing page, budget, applicable target result cost, and core message, formed and accepted by the Strategy Agent to guide Campaign Hypotheses. The operator may edit it as a priority business input, but the Strategy itself does not authorize publication or spend.
+_Avoid_: Operator-approved strategy, single-campaign instruction, Yandex payload, technical bidding configuration
+
+**Strategy Agent**:
+The autonomous role that researches permitted evidence and forms, checks, and accepts the current Campaign Strategy according to versioned best practices. It cannot invent verifiable business facts, authorize publication or spend, or grant or expand a Mandate.
+_Avoid_: Strategy questionnaire, human strategy approval, campaign publisher
+
+**Campaign Hypothesis**:
+The current evidence-grounded, testable expression of how one Campaign Strategy becomes one future Yandex Direct campaign. It becomes user-visible only together with one complete current Campaign Draft and does not authorize publication or spend.
+_Avoid_: Internal candidate, Recommendation Set item, universal experiment, Campaign Draft
 
 **Campaign Draft**:
-The editable, pre-approval representation of exactly one real campaign and the supported child objects that MOX-ADV will create in Yandex Direct. Every control changes either the approved Campaign Strategy or a field that will be published.
+The editable, pre-publication representation of exactly one real campaign and all applicable supported child objects under one explicit Yandex Direct campaign profile. Every control changes either the current Campaign Strategy or a field that will be published; an optional provider field may be absent only when the selected profile does not consume it.
 _Avoid_: Test Scenario campaign, unsupported future configuration, silent publish subset
 
 **Analytics Evidence Snapshot**:
 An immutable, versioned set of normalized observations, claims, provenance, confidence dimensions, conflicts, and known gaps for one analysis moment. Every material recommendation can be traced back through it to permitted evidence.
 _Avoid_: Unversioned analytics narrative, LLM memory, hidden chain of thought
+
+**Financial Competitor Intelligence**:
+A versioned, evidence-bounded understanding of the analyzed company’s and confirmed competitors’ historical financial dimensions within a frozen product, customer, geography, and period frame. It informs Campaign Strategy only when paired with independent non-financial evidence; partial or unavailable financial data neither becomes zero nor proves that a competitor is absent.
+_Avoid_: Competitor strength score, advertising budget proxy, advertising effectiveness proof
+
+**Observed Segment Revenue Share**:
+A scoped ratio of segment-attributable accounting revenue for one confirmed legal perimeter to the same metric summed across the observed accepted legal entities of a frozen product, geography, period, and OKVED frame, always disclosed with numerator, denominator, coverage, and missing entities. It is not a market-share claim unless a separately qualified complete market denominator has matching semantics.
+_Avoid_: Market share, share of demand, share of customers, advertising traffic share
 
 **Recommendation Set**:
 The explainable result that ties one Campaign Strategy and one Analytics Evidence Snapshot to eligible, suppressed, and ranked Campaign Drafts. It supports shortlist selection but is not an atomic external operation.

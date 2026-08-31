@@ -1048,7 +1048,17 @@ export class DirectAccountAuditor {
       && current.schema_version === DIRECT_AUDIT_SCHEMA
       && current.client_id === this.binding.client_id
       && current.binding.capability?.fingerprint === this.binding.capability.fingerprint;
-    if (sameLineage) return current;
+    const terminal = sameLineage && ["COMPLETE", "PARTIAL"].includes(current.status);
+    const completedAt = terminal ? Date.parse(current.completed_at ?? "") : Number.NaN;
+    const currentAt = Date.parse(timestamp);
+    const terminalAge = currentAt - completedAt;
+    const terminalFresh = !terminal || (
+      Number.isFinite(completedAt)
+      && Number.isFinite(currentAt)
+      && terminalAge >= -60_000
+      && terminalAge <= this.maxAgeMs
+    );
+    if (sameLineage && terminalFresh) return current;
     const state = freshState({
       auditId: this.auditId(),
       ownerKey: this.ownerKey,

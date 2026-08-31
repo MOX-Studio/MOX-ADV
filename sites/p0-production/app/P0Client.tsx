@@ -248,10 +248,10 @@ export default function P0Client() {
       {activeStage === "goal" && <Hero projection={projection} />}
       <StageNavigation projection={projection} selectedStage={activeStage} onStage={chooseStage} />
       <div className={styles.ownerWorkspace}>
-        <AgentRail projection={projection} selectedStage={activeStage} />
+        <AgentRail projection={projection} />
         <section className={`${styles.artifact} owner-main`} id="owner-stage-panel" aria-labelledby={`owner-stage-tab-${activeStage}`}>
           <header className={`${styles.sectionHead} owner-outcome`}>
-            <div><p className={styles.eyebrow}>ТЕКУЩИЙ БИЗНЕС-РЕЗУЛЬТАТ</p><h2>{projection.businessOutcome.headline}</h2><p>{projection.businessOutcome.summary}</p></div>
+            <div><p className={styles.eyebrow}>ТЕКУЩИЙ БИЗНЕС-РЕЗУЛЬТАТ</p><h2>{projection.businessOutcome.headline}</h2></div>
           </header>
 
           {projection.currentRecommendation && <section className="owner-recommendation">
@@ -668,15 +668,10 @@ function StageUnavailable({ projection, stage }: { projection: OwnerJourneyProje
   </section>;
 }
 
-function AgentRail({ projection, selectedStage }: { projection: OwnerJourneyProjection; selectedStage: OwnerJourneyStageId }) {
+function AgentRail({ projection }: { projection: OwnerJourneyProjection }) {
   const agentWorking = projection.agentActivity?.status === "working" || projection.agentActivity?.status === "waiting";
-  const currentStage = projection.journey.stages.find((stage) => stage.status === "current");
-  const openedStage = projection.journey.stages.find((stage) => stage.id === selectedStage);
-  const viewingCurrentStage = selectedStage === projection.journey.currentStage;
   return <aside className={styles.agentRail} aria-label="Контекст работы агента">
     <header><span>А</span><div><strong>Агент кампании</strong><small>{agentWorking ? "Выполняет безопасную работу" : "Безопасная работа завершена"}</small></div></header>
-    <section className={styles.agentMessage}><p className={styles.eyebrow}>ТЕКУЩИЙ ВЫВОД</p><strong>{projection.agentActivity?.summary ?? projection.businessOutcome.headline}</strong><p>{projection.agentActivity?.nextBusinessStep ?? projection.businessOutcome.summary}</p></section>
-    <section className={styles.railSnapshot}><span>{viewingCurrentStage ? "Текущий этап" : "Открытый раздел"}</span><strong>{openedStage?.label ?? currentStage?.label ?? "Проверка и создание"}</strong><small>{viewingCurrentStage ? (projection.businessOutcome.status === "blocked" ? "Нужно внимание владельца" : "Факты и ограничения раскрыты в основном рабочем поле") : `Текущий этап процесса: ${currentStage?.label ?? "не определён"}`}</small></section>
     <section className={styles.automationMap} aria-label="Карта автоматизации">
       <h2>Карта автоматизации</h2>
       <div><span>Исследование</span><strong>АГЕНТ</strong></div>
@@ -684,7 +679,6 @@ function AgentRail({ projection, selectedStage }: { projection: OwnerJourneyProj
       <div><span>Точный пакет</span><strong>РАЗОВОЕ ПРАВО</strong></div>
       <div><span>Запуск показов и расходов</span><strong className={styles.unavailable}>ЗАПРЕЩЁН В P0</strong></div>
     </section>
-    <section className={styles.safetyCard}><span>ГРАНИЦА P0</span><strong>Создание без запуска</strong><p>Показы, расходы и возобновление кампаний недоступны. Успех подтверждается повторным чтением статуса «Остановлена».</p></section>
   </aside>;
 }
 
@@ -698,7 +692,6 @@ function Header() {
       <span>SEO<i>В РАЗРАБОТКЕ</i></span>
       <span>Каналы<i>VK · В РАЗРАБОТКЕ</i></span>
     </nav>
-    <div className={styles.connectionState}><i />Агент готов</div>
   </header>;
 }
 

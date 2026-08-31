@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="data:," />
+  <title>Прототип #304 · Campaign Draft в UI</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #13221a;
+      --muted: #69756f;
+      --line: #d6ddd8;
+      --line-strong: #b8c4bd;
+      --surface: #fff;
+      --canvas: #f4f4ef;
+      --green: #117a4d;
+      --green-dark: #0b5e3b;
+      --green-soft: #e3f2e9;
+      --amber: #936018;
+      --amber-soft: #fff1de;
+      --danger: #9b362e;
+      --shadow: 0 20px 48px rgba(25, 42, 32, .08);
+    }
+
+    * { box-sizing: border-box; }
+    html { min-width: 1180px; background: var(--canvas); }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--canvas);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    body::before {
+      position: fixed;
+      z-index: -1;
+      inset: 70px 0 0;
+      background-image: linear-gradient(rgba(19,34,26,.028) 1px, transparent 1px), linear-gradient(90deg, rgba(19,34,26,.028) 1px, transparent 1px);
+      background-size: 38px 38px;
+      content: "";
+    }
+    button { font: inherit; cursor: pointer; }
+    a { color: inherit; }
+    [hidden] { display: none !important; }
+
+    .topbar {
+      position: sticky;
+      z-index: 20;
+      top: 0;
+      display: grid;
+      grid-template-columns: 230px minmax(0, 1fr) 260px;
+      align-items: center;
+      height: 70px;
+      padding: 0 42px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255,255,252,.96);
+      backdrop-filter: blur(14px);
+    }
+    .brand { display: flex; gap: 11px; align-items: center; font-size: 15px; font-weight: 780; }
+    .brand b { display: grid; width: 31px; height: 31px; place-items: center; border-radius: 8px; color: #fff; background: var(--ink); font-size: 12px; }
+    .topbar nav { display: flex; justify-content: center; gap: 7px; }
+    .topbar nav span { padding: 10px 15px; border-radius: 8px; color: var(--muted); font-size: 12px; font-weight: 720; }
+    .topbar nav .active { color: var(--green-dark); background: var(--green-soft); }
+    .prototype-mark { justify-self: end; color: var(--green-dark); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+
+    .shell { width: min(1540px, calc(100% - 80px)); margin: 0 auto; padding: 28px 0 118px; }
+    .journey {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 7px;
+      margin: 0 0 18px;
+      padding: 0;
+      list-style: none;
+    }
+    .journey li { display: grid; grid-template-columns: 29px 1fr; gap: 9px; align-items: center; min-height: 57px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; background: rgba(255,255,255,.72); }
+    .journey i { display: grid; width: 27px; height: 27px; place-items: center; border-radius: 50%; color: #fff; background: var(--green); font-size: 10px; font-style: normal; font-weight: 800; }
+    .journey strong, .journey small { display: block; }
+    .journey strong { font-size: 10px; }
+    .journey small { margin-top: 3px; color: var(--muted); font-size: 8px; }
+    .journey .current { border-color: var(--green); background: var(--green-soft); }
+    .journey .current i { background: var(--ink); }
+
+    .eyebrow { margin: 0; color: var(--green-dark); font-size: 9px; font-weight: 850; letter-spacing: .12em; text-transform: uppercase; }
+    .muted { color: var(--muted); }
+    .version { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .btn { min-height: 38px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 7px; color: var(--ink); background: #fff; font-size: 10px; font-weight: 820; }
+    .btn:hover { border-color: var(--green); }
+    .btn.primary { border-color: var(--green); color: #fff; background: var(--green); }
+    .safe-copy { display: flex; align-items: center; gap: 8px; color: var(--green-dark); font-size: 9px; font-weight: 750; }
+    .safe-copy::before { width: 8px; height: 8px; border-radius: 50%; background: var(--green); content: ""; box-shadow: 0 0 0 4px var(--green-soft); }
+
+    .variant { min-width: 0; }
+    .variant-note { margin: 0 0 12px; color: var(--muted); font-size: 10px; }
+    .variant-note b { color: var(--ink); }
+
+    /* A — one-page dossier */
+    .dossier {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: rgba(255,255,252,.78);
+      box-shadow: var(--shadow);
+    }
+    .dossier-hero { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 26px; padding: 27px 30px 23px; border-bottom: 1px solid var(--line-strong); background: linear-gradient(135deg, #fbfffc, #edf7f1); }
+    .dossier-hero h1 { max-width: 900px; margin: 6px 0 8px; font-size: 32px; line-height: 1.06; letter-spacing: -.035em; }
+    .dossier-hero p:not(.eyebrow) { max-width: 900px; margin: 0; color: #4e5c55; font-size: 12px; line-height: 1.55; }
+    .dossier-actions { display: grid; align-content: center; gap: 9px; }
+    .dossier-actions .safe-copy { justify-content: center; }
+    .lineage-strip { display: grid; grid-template-columns: 1fr 40px 1fr 40px 1fr; align-items: stretch; margin: 17px 22px 0; }
+    .lineage-strip article { min-width: 0; padding: 13px 14px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
+    .lineage-strip span, .lineage-strip strong, .lineage-strip small { display: block; overflow-wrap: anywhere; }
+    .lineage-strip span { color: var(--green-dark); font-size: 8px; font-weight: 850; text-transform: uppercase; }
+    .lineage-strip strong { margin-top: 6px; font-size: 11px; }
+    .lineage-strip small { margin-top: 5px; color: var(--muted); font-size: 8px; line-height: 1.4; }
+    .lineage-strip b { display: grid; place-items: center; color: var(--green); font-size: 17px; }
+    .dossier-body { display: grid; grid-template-columns: minmax(0, 1.16fr) minmax(380px, .84fr); gap: 17px; padding: 17px 22px 22px; }
+    .dossier-main, .dossier-aside { display: grid; gap: 12px; align-content: start; }
+    .section-card { min-width: 0; padding: 15px 16px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+    .section-card > header { display: flex; gap: 14px; justify-content: space-between; align-items: flex-start; }
+    .section-card h2, .section-card h3 { margin: 4px 0 0; }
+    .section-card h2 { font-size: 18px; }
+    .section-card h3 { font-size: 13px; }
+    .section-card > header > span { color: var(--muted); font-size: 8px; }
+    .creative-preview { display: grid; grid-template-columns: minmax(0, 1fr) 240px; gap: 14px; margin-top: 12px; }
+    .search-ad { padding: 15px; border: 1px solid #d9e3ee; border-radius: 8px; background: #fff; box-shadow: 0 9px 20px rgba(42,62,84,.06); }
+    .search-ad strong { display: block; color: #1656a6; font-size: 15px; line-height: 1.35; }
+    .search-ad p { margin: 7px 0; color: #303b44; font-size: 10px; line-height: 1.45; }
+    .search-ad a { color: #16734b; font-size: 9px; text-decoration: none; }
+    .key-facts { display: grid; gap: 7px; }
+    .key-facts div { padding: 9px 10px; border-radius: 7px; background: #f3f6f4; }
+    .key-facts span, .key-facts strong { display: block; }
+    .key-facts span { color: var(--muted); font-size: 7px; text-transform: uppercase; }
+    .key-facts strong { margin-top: 4px; font-size: 9px; line-height: 1.35; }
+    .draft-groups { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+    .draft-groups article { padding: 10px; border-radius: 7px; background: #f7f9f7; }
+    .draft-groups span, .draft-groups strong, .draft-groups small { display: block; }
+    .draft-groups span { color: var(--green-dark); font-size: 7px; font-weight: 850; text-transform: uppercase; }
+    .draft-groups strong { margin-top: 6px; font-size: 10px; }
+    .draft-groups small { margin-top: 4px; color: var(--muted); font-size: 7px; line-height: 1.4; }
+    .mapping-compact { margin-top: 11px; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; }
+    .mapping-compact > header { display: flex; gap: 12px; justify-content: space-between; padding: 9px 11px; background: #edf5f0; }
+    .mapping-compact > header strong { color: var(--green-dark); font-size: 8px; }
+    .mapping-compact > header span { color: var(--muted); font-size: 7px; }
+    .mapping-row { display: grid; grid-template-columns: 82px minmax(0, 1fr) minmax(0, 1fr); border-top: 1px solid var(--line); }
+    .mapping-row > * { min-width: 0; padding: 8px 10px; border-left: 1px solid var(--line); }
+    .mapping-row > *:first-child { border-left: 0; }
+    .mapping-row > strong { color: var(--muted); background: #f8faf8; font-size: 7px; text-transform: uppercase; }
+    .mapping-row span, .mapping-row b { display: block; overflow-wrap: anywhere; }
+    .mapping-row span { color: var(--muted); font-size: 6px; text-transform: uppercase; }
+    .mapping-row b { margin-top: 3px; font-size: 7px; line-height: 1.35; }
+    .mapping-row .published { background: #fbfcfa; }
+    .basis-list { display: grid; gap: 7px; margin: 11px 0 0; padding: 0; list-style: none; }
+    .basis-list li { display: grid; grid-template-columns: 10px minmax(0, 1fr); gap: 9px; color: var(--muted); font-size: 8px; line-height: 1.45; }
+    .basis-list li::before { width: 7px; height: 7px; margin-top: 3px; border-radius: 50%; background: var(--green); content: ""; }
+    .basis-list strong { color: var(--ink); }
+    .repair-note { border-color: #c7daca; background: #f8fcf9; }
+    .repair-note p { margin: 9px 0 0; color: var(--muted); font-size: 8px; line-height: 1.5; }
+
+    /* B — split inspection */
+    .inspection {
+      display: grid;
+      grid-template-columns: 390px minmax(0, 1fr);
+      min-height: 760px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: #fff;
+      box-shadow: var(--shadow);
+    }
+    .inspection-rail { padding: 25px 22px; border-right: 1px solid var(--line); background: #17261e; color: #f5fbf7; }
+    .inspection-rail .eyebrow { color: #78d1a5; }
+    .inspection-rail h1 { margin: 7px 0 10px; font-size: 26px; line-height: 1.1; letter-spacing: -.03em; }
+    .inspection-rail > p:not(.eyebrow) { color: #b6c7be; font-size: 10px; line-height: 1.55; }
+    .rail-linkage { margin-top: 19px; border-top: 1px solid rgba(255,255,255,.14); }
+    .rail-linkage article { position: relative; padding: 16px 0 4px 29px; }
+    .rail-linkage article::before { position: absolute; top: 20px; left: 4px; display: grid; width: 16px; height: 16px; place-items: center; border-radius: 50%; color: #15231c; background: #78d1a5; content: attr(data-step); font-size: 7px; font-weight: 900; }
+    .rail-linkage article + article::after { position: absolute; top: 0; left: 11px; width: 1px; height: 16px; background: rgba(120,209,165,.45); content: ""; }
+    .rail-linkage span, .rail-linkage strong, .rail-linkage small { display: block; }
+    .rail-linkage span { color: #78d1a5; font-size: 7px; font-weight: 800; text-transform: uppercase; }
+    .rail-linkage strong { margin-top: 5px; font-size: 10px; line-height: 1.35; }
+    .rail-linkage small { margin-top: 4px; color: #9fb4aa; font-size: 7px; line-height: 1.4; }
+    .rail-boundary { margin-top: 20px; padding: 13px; border: 1px solid rgba(120,209,165,.38); border-radius: 8px; color: #cfe9da; background: rgba(120,209,165,.08); font-size: 8px; line-height: 1.5; }
+    .inspection-rail .btn { width: 100%; margin-top: 11px; border-color: #78d1a5; color: #10251a; background: #78d1a5; }
+    .inspection-main { min-width: 0; padding: 24px 27px 28px; }
+    .inspection-head { display: flex; gap: 24px; justify-content: space-between; align-items: flex-end; padding-bottom: 17px; border-bottom: 1px solid var(--line-strong); }
+    .inspection-head h2 { margin: 5px 0 0; font-size: 25px; letter-spacing: -.035em; }
+    .inspection-head .btn { flex: 0 0 auto; }
+    .matrix { margin-top: 17px; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+    .matrix-row { display: grid; grid-template-columns: 160px minmax(0, .9fr) minmax(0, 1.1fr); min-height: 61px; border-top: 1px solid var(--line); }
+    .matrix-row:first-child { border-top: 0; }
+    .matrix-row > * { min-width: 0; padding: 12px 13px; border-left: 1px solid var(--line); }
+    .matrix-row > *:first-child { border-left: 0; }
+    .matrix-row > strong { color: var(--muted); background: #f6f8f6; font-size: 8px; text-transform: uppercase; }
+    .matrix-row div span, .matrix-row div b, .matrix-row div small { display: block; overflow-wrap: anywhere; }
+    .matrix-row div span { color: var(--muted); font-size: 7px; text-transform: uppercase; }
+    .matrix-row div b { margin-top: 5px; font-size: 9px; line-height: 1.35; }
+    .matrix-row div small { margin-top: 4px; color: var(--muted); font-size: 7px; line-height: 1.4; }
+    .matrix-row .direct { background: #fbfcfa; }
+    .inspection-bottom { display: grid; grid-template-columns: 1fr 1fr; gap: 11px; margin-top: 13px; }
+    .inspection-bottom section { padding: 14px; border: 1px solid var(--line); border-radius: 9px; }
+    .inspection-bottom h3 { margin: 0; font-size: 11px; }
+    .inspection-bottom ul { display: grid; gap: 6px; margin: 9px 0 0; padding-left: 16px; color: var(--muted); font-size: 8px; line-height: 1.45; }
+    .inspection-bottom code { color: var(--green-dark); font-size: 8px; }
+
+    /* C — narrative review */
+    .story { display: grid; gap: 13px; }
+    .story-hero { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 22px; align-items: center; padding: 25px 28px; border: 1px solid var(--line); border-radius: 15px; background: #fff; box-shadow: var(--shadow); }
+    .story-hero h1 { margin: 6px 0 8px; font-size: 30px; letter-spacing: -.035em; }
+    .story-hero p:not(.eyebrow) { max-width: 960px; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+    .story-hero aside { display: grid; gap: 8px; min-width: 290px; }
+    .story-path { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; }
+    .story-step { position: relative; min-width: 0; min-height: 230px; padding: 19px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+    .story-step::after { position: absolute; top: 50%; right: -22px; z-index: 2; color: var(--green); content: "→"; font-size: 24px; font-weight: 300; }
+    .story-step:last-child::after { content: none; }
+    .story-step > span { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 50%; color: #fff; background: var(--green); font-size: 10px; font-weight: 850; }
+    .story-step h2 { margin: 13px 0 7px; font-size: 16px; }
+    .story-step > p { margin: 0; color: var(--muted); font-size: 9px; line-height: 1.48; }
+    .story-step dl { display: grid; gap: 6px; margin: 13px 0 0; }
+    .story-step dl div { padding-top: 6px; border-top: 1px solid var(--line); }
+    .story-step dt { color: var(--muted); font-size: 7px; }
+    .story-step dd { margin: 3px 0 0; font-size: 8px; font-weight: 760; line-height: 1.35; }
+    .story-review { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(420px, .92fr); gap: 13px; }
+    .client-view, .why-view { padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+    .client-view h2, .why-view h2 { margin: 4px 0 0; font-size: 17px; }
+    .client-ad { margin-top: 12px; padding: 16px; border: 1px solid #d8e1eb; border-radius: 9px; }
+    .client-ad h3 { margin: 0; color: #1656a6; font-size: 16px; }
+    .client-ad p { margin: 7px 0; color: #34414a; font-size: 10px; line-height: 1.45; }
+    .client-ad a { color: #16734b; font-size: 9px; text-decoration: none; }
+    .why-lines { display: grid; gap: 8px; margin-top: 12px; }
+    .why-lines article { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 10px; padding: 9px 10px; border-radius: 7px; background: #f5f7f5; }
+    .why-lines span { color: var(--green-dark); font-size: 7px; font-weight: 850; text-transform: uppercase; }
+    .why-lines p { margin: 0; color: var(--muted); font-size: 8px; line-height: 1.4; }
+    .story-footer { display: flex; gap: 18px; justify-content: space-between; align-items: center; padding: 13px 18px; border: 1px solid #b8d4c3; border-radius: 10px; background: #f5fbf7; }
+    .story-footer p { margin: 0; color: var(--green-dark); font-size: 9px; line-height: 1.45; }
+    .story-footer div { display: flex; gap: 8px; flex: 0 0 auto; }
+
+    .prototype-switcher {
+      position: fixed;
+      z-index: 100;
+      right: 50%;
+      bottom: 22px;
+      display: grid;
+      grid-template-columns: 44px minmax(300px, auto) 44px;
+      align-items: center;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,.18);
+      border-radius: 999px;
+      color: #fff;
+      background: #101914;
+      box-shadow: 0 18px 44px rgba(12,22,16,.34);
+      transform: translateX(50%);
+    }
+    .prototype-switcher button { height: 48px; border: 0; color: #fff; background: transparent; font-size: 18px; }
+    .prototype-switcher button:hover { background: rgba(255,255,255,.1); }
+    .prototype-switcher div { padding: 0 18px; text-align: center; }
+    .prototype-switcher strong, .prototype-switcher small { display: block; }
+    .prototype-switcher strong { font-size: 11px; }
+    .prototype-switcher small { margin-top: 3px; color: #a7b7ae; font-size: 8px; }
+
+    .toast { position: fixed; z-index: 110; top: 86px; right: 30px; max-width: 380px; padding: 13px 15px; border: 1px solid #aacbb8; border-radius: 9px; color: var(--green-dark); background: #f5fbf7; box-shadow: var(--shadow); font-size: 10px; line-height: 1.45; }
+
+    @media (max-width: 1500px) {
+      .shell { width: calc(100% - 44px); }
+      .dossier-hero h1, .story-hero h1 { font-size: 27px; }
+      .inspection { grid-template-columns: 340px minmax(0, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><b>MOX</b><span>MOX-ADV</span></div>
+    <nav aria-label="Разделы продукта"><span class="active">Стратегия</span><span>Кампании</span><span>Мониторинг</span><span>SEO</span></nav>
+    <div class="prototype-mark">Throwaway prototype · issue #304</div>
+  </header>
+
+  <main class="shell">
+    <ol class="journey" aria-label="Путь подготовки рекламной кампании">
+      <li><i>✓</i><div><strong>Бизнес-модель</strong><small>Факты и предложение</small></div></li>
+      <li><i>✓</i><div><strong>Цель</strong><small>Квалифицированный результат</small></div></li>
+      <li><i>✓</i><div><strong>Сбор информации</strong><small>Wordstat, сайт, Метрика</small></div></li>
+      <li><i>✓</i><div><strong>Стратегия</strong><small>Утверждённая версия</small></div></li>
+      <li class="current"><i>5</i><div><strong>Campaign Draft</strong><small>Проверка перед публикацией</small></div></li>
+    </ol>
+
+    <section class="variant" data-variant="A">
+      <p class="variant-note"><b>Выбранный вариант · «Досье гипотезы + сопоставление».</b> Бизнес-смысл и клиентский результат из A дополнены связью «решение → публикация» из B.</p>
+      <article class="dossier">
+        <header class="dossier-hero">
+          <div>
+            <p class="eyebrow">Campaign Hypothesis · один Draft для одной будущей кампании</p>
+            <h1>Поймать владельца бизнеса в момент смены бухгалтера</h1>
+            <p>На поиске показываем фиксированную стоимость сопровождения владельцам ООО и ИП, которые ищут замену бухгалтеру. Ведём на заявку на разбор текущего учёта.</p>
+          </div>
+          <div class="dossier-actions">
+            <button class="btn primary" data-demo>Перейти к проверке публикации</button>
+            <button class="btn" data-demo>Редактировать Campaign Draft</button>
+            <span class="safe-copy">Никаких записей в Яндекс Директ</span>
+          </div>
+        </header>
+
+        <section class="lineage-strip" aria-label="Связь стратегии, гипотезы и черновика">
+          <article><span>Campaign Strategy</span><strong>Лиды на разбор бухгалтерии</strong><small><a href="#" data-demo>Версия strategy-17</a> · утверждена владельцем 27.08</small></article>
+          <b>→</b>
+          <article><span>Campaign Hypothesis</span><strong>Поиск при смене бухгалтера</strong><small>Проверяем одно сообщение для одной аудитории</small></article>
+          <b>→</b>
+          <article><span>Campaign Draft</span><strong>draft-04 · Поиск · Москва и МО</strong><small>Точная проекция одной будущей кампании</small></article>
+        </section>
+
+        <div class="dossier-body">
+          <div class="dossier-main">
+            <section class="section-card">
+              <header><div><p class="eyebrow">Что увидят клиенты</p><h2>Объявление и переход</h2></div><span>3 заголовка · 2 текста · 1 посадочная</span></header>
+              <div class="creative-preview">
+                <article class="search-ad"><strong>Бухгалтерия для ООО и ИП — фиксированная цена</strong><p>Разберём текущий учёт и покажем стоимость сопровождения без найма штатного специалиста.</p><a href="#" data-demo>example.ru/accounting · utm_campaign=draft-04</a></article>
+                <div class="key-facts"><div><span>Целевое действие</span><strong>Заявка на разбор учёта</strong></div><div><span>География</span><strong>Москва и Московская область</strong></div><div><span>Период и бюджет</span><strong>28 дней · 120 000 ₽</strong></div></div>
+              </div>
+            </section>
+            <section class="section-card">
+              <header><div><p class="eyebrow">Точная проекция Яндекс Директа</p><h3>Поддерживаемые объекты кампании</h3></div><button class="btn" data-demo>Открыть все поля</button></header>
+              <div class="draft-groups">
+                <article><span>Кампания</span><strong>Единая перфоманс-кампания</strong><small>Поиск · сети отключены · ручная стратегия</small></article>
+                <article><span>Группа</span><strong>42 поисковые фразы</strong><small>18 минус-фраз · автотаргетинг отключён</small></article>
+                <article><span>Измерение</span><strong>Метрика 98765432</strong><small>Цель lead_form_sent · UTM зафиксированы</small></article>
+              </div>
+              <section class="mapping-compact" aria-label="Сопоставление решений стратегии и полей Campaign Draft">
+                <header><strong>Сопоставление Strategy → Campaign Draft</strong><span>Почему принято решение · что будет опубликовано</span></header>
+                <div class="mapping-row"><strong>Предложение</strong><div><span>Решение и основание</span><b>Фиксированная оплата · strategy-17 и посадочная</b></div><div class="published"><span>Будет опубликовано</span><b>3 заголовка и 2 текста без неподтверждённых обещаний</b></div></div>
+                <div class="mapping-row"><strong>Аудитория</strong><div><span>Решение и основание</span><b>Владельцы ООО и ИП · Strategy и Wordstat</b></div><div class="published"><span>Будет опубликовано</span><b>42 поисковые фразы · 18 минус-фраз · Москва и МО</b></div></div>
+                <div class="mapping-row"><strong>Результат</strong><div><span>Решение и основание</span><b>Заявка на разбор учёта · Strategy, сайт и Метрика</b></div><div class="published"><span>Будет опубликовано</span><b>Ссылка, UTM и цель <span class="version">lead_form_sent</span></b></div></div>
+              </section>
+            </section>
+          </div>
+
+          <aside class="dossier-aside">
+            <section class="section-card">
+              <header><div><p class="eyebrow">Почему Draft именно такой</p><h3>Основания для проверки</h3></div><span>Снимок 27.08 · 14:20</span></header>
+              <ul class="basis-list">
+                <li><span><strong>Стратегия.</strong> Аудитория, предложение, география, бюджет и целевое действие взяты из утверждённой версии без изменения смысла.</span></li>
+                <li><span><strong>Wordstat.</strong> 42 фразы собраны для Москвы и области; источник <span class="version">wordstat-2026-08-27</span>.</span></li>
+                <li><span><strong>Посадочная.</strong> Предложение, цена и форма заявки подтверждены на странице.</span></li>
+                <li><span><strong>Метрика.</strong> Цель <span class="version">lead_form_sent</span> найдена и проверена тестовым событием.</span></li>
+                <li><span><strong>Правила.</strong> Проекция собрана по <span class="version">generation-contract/0.3</span>.</span></li>
+              </ul>
+              <button class="btn" data-demo style="width:100%;margin-top:12px">Раскрыть происхождение каждого поля</button>
+            </section>
+            <section class="section-card repair-note">
+              <header><div><p class="eyebrow">Что агент исправил сам</p><h3>2 безопасные коррекции</h3></div></header>
+              <p>Удалены дубли фраз и превышение длины второго заголовка. Бизнес-смысл Campaign Strategy не менялся; зависимые части Draft сформированы заново.</p>
+            </section>
+          </aside>
+        </div>
+      </article>
+    </section>
+
+    <section class="variant" data-variant="B" hidden>
+      <p class="variant-note"><b>Вариант B · «Инспектор соответствия».</b> Стратегия закреплена слева, каждое бизнес-решение сопоставлено с точным полем будущей кампании.</p>
+      <article class="inspection">
+        <aside class="inspection-rail">
+          <p class="eyebrow">Campaign Draft draft-04</p>
+          <h1>Поиск при смене бухгалтера</h1>
+          <p>Одна техническая проекция для одной будущей кампании. Проверяйте не абстрактную оценку, а точное соответствие утверждённой стратегии.</p>
+          <div class="rail-linkage">
+            <article data-step="1"><span>Campaign Strategy · strategy-17</span><strong>Получать заявки на разбор учёта по Москве и МО</strong><small>Утверждённая версия · бюджет 120 000 ₽ · период 28 дней</small></article>
+            <article data-step="2"><span>Campaign Hypothesis</span><strong>Фиксированная цена снимает риск смены бухгалтера</strong><small>Одна аудитория · одно проверяемое сообщение</small></article>
+            <article data-step="3"><span>Campaign Draft · draft-04</span><strong>Кампания, группа, объявления, фразы и измерение</strong><small>Проекция generation-contract/0.3 · снимок 27.08 14:20</small></article>
+          </div>
+          <div class="rail-boundary">Следующий шаг открывает отдельную проверку перед публикацией. На этом экране нельзя создать кампанию или начать расходы.</div>
+          <button class="btn" data-demo>Перейти к проверке публикации</button>
+        </aside>
+
+        <div class="inspection-main">
+          <header class="inspection-head"><div><p class="eyebrow">Сопоставление «решение → публикация»</p><h2>Из чего собрана будущая кампания</h2></div><button class="btn" data-demo>Редактировать Draft</button></header>
+          <section class="matrix" aria-label="Соответствие стратегии и полей Яндекс Директа">
+            <div class="matrix-row"><strong>Предложение</strong><div><span>Стратегия и доказательство</span><b>Бухгалтерское сопровождение с фиксированной оплатой</b><small>strategy-17 · подтверждено на посадочной</small></div><div class="direct"><span>Будет опубликовано</span><b>Заголовок и два текста объявлений</b><small>Без скидок, гарантий и других неподтверждённых обещаний</small></div></div>
+            <div class="matrix-row"><strong>Аудитория</strong><div><span>Стратегия и доказательство</span><b>Владельцы ООО и ИП до 30 сотрудников</b><small>strategy-17 · бизнес-модель owner-confirmed</small></div><div class="direct"><span>Будет опубликовано</span><b>42 поисковые фразы · 18 минус-фраз</b><small>Wordstat Москва и МО · автотаргетинг отключён</small></div></div>
+            <div class="matrix-row"><strong>Целевое действие</strong><div><span>Стратегия и доказательство</span><b>Заявка на разбор текущего учёта</b><small>Форма найдена на посадочной и прошла тест</small></div><div class="direct"><span>Будет опубликовано</span><b>Ссылка + UTM + цель lead_form_sent</b><small>Счётчик 98765432 · тестовое событие получено</small></div></div>
+            <div class="matrix-row"><strong>Экономика</strong><div><span>Стратегия и доказательство</span><b>120 000 ₽ на 28 дней · ориентир 6 000 ₽ за заявку</b><small>Решение владельца в strategy-17</small></div><div class="direct"><span>Будет опубликовано</span><b>Дневное ограничение и ручная стратегия</b><small>Сети отключены · показ только в выбранной географии</small></div></div>
+            <div class="matrix-row"><strong>Границы</strong><div><span>Версионируемые правила</span><b>generation-contract/0.3</b><small>Дубли удалены · длины объявлений исправлены автоматически</small></div><div class="direct"><span>Не входит в Draft</span><b>Запуск, расходование бюджета и будущая оптимизация</b><small>Требуют отдельного решения и отдельного модуля</small></div></div>
+          </section>
+          <div class="inspection-bottom">
+            <section><h3>Происхождение</h3><ul><li><code>strategy-17</code> · утверждённые бизнес-решения</li><li><code>wordstat-2026-08-27</code> · спрос и поисковые фразы</li><li><code>landing-snapshot-219</code> · предложение и целевое действие</li><li><code>metrica-goal-test-88</code> · измеримость заявки</li></ul></section>
+            <section><h3>Как читать эту страницу</h3><ul><li>Средняя колонка отвечает «почему».</li><li>Правая колонка отвечает «что именно будет создано».</li><li>Любая правка создаёт новую редакцию Draft и повторяет внутреннюю проверку.</li><li>Нет обязательного ритуала: владелец раскрывает только нужную глубину.</li></ul></section>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="variant" data-variant="C" hidden>
+      <p class="variant-note"><b>Вариант C · «История решения».</b> Три крупных шага объясняют происхождение результата; ниже сразу показано клиентское объявление и ключевые причины.</p>
+      <article class="story">
+        <header class="story-hero">
+          <div><p class="eyebrow">Campaign Hypothesis · Поиск при смене бухгалтера</p><h1>От утверждённой стратегии к точной кампании</h1><p>Страница показывает, какое бизнес-решение принято, как агент превратил его в гипотезу и что именно попадёт в Яндекс Директ после отдельной проверки публикации.</p></div>
+          <aside><button class="btn primary" data-demo>Перейти к проверке публикации</button><button class="btn" data-demo>Редактировать Campaign Draft</button><span class="safe-copy">Сейчас внешних записей нет</span></aside>
+        </header>
+
+        <div class="story-path">
+          <section class="story-step"><span>1</span><h2>Утверждённая Strategy</h2><p>Владелец зафиксировал бизнес-смысл, который агент не вправе менять незаметно.</p><dl><div><dt>Результат</dt><dd>Заявка на разбор текущего учёта</dd></div><div><dt>Аудитория</dt><dd>Владельцы ООО и ИП до 30 сотрудников</dd></div><div><dt>Ограничения</dt><dd>Москва и МО · 28 дней · 120 000 ₽</dd></div></dl></section>
+          <section class="story-step"><span>2</span><h2>Campaign Hypothesis</h2><p>Проверяемое объяснение того, почему одна будущая кампания должна привести нужную аудиторию.</p><dl><div><dt>Механизм</dt><dd>Фиксированная цена снижает риск смены бухгалтера</dd></div><div><dt>Сообщение</dt><dd>Бухгалтерия без найма штатного специалиста</dd></div><div><dt>Проверка</dt><dd>Измеряем заявки по цели lead_form_sent</dd></div></dl></section>
+          <section class="story-step"><span>3</span><h2>Campaign Draft</h2><p>Полная техническая проекция одной будущей кампании, собранная по подтверждённым сведениям.</p><dl><div><dt>Кампания</dt><dd>Единая перфоманс-кампания · Поиск</dd></div><div><dt>Состав</dt><dd>1 группа · 42 фразы · 3×2 объявления</dd></div><div><dt>Версия</dt><dd>draft-04 · generation-contract/0.3</dd></div></dl></section>
+        </div>
+
+        <div class="story-review">
+          <section class="client-view"><p class="eyebrow">Главный объект проверки</p><h2>Так предложение увидит клиент</h2><article class="client-ad"><h3>Бухгалтерия для ООО и ИП — фиксированная цена</h3><p>Разберём текущий учёт и покажем стоимость сопровождения без найма штатного специалиста.</p><a href="#" data-demo>example.ru/accounting · Москва и Московская область</a></article></section>
+          <section class="why-view"><p class="eyebrow">Почему можно доверять содержанию</p><h2>Основания без отдельного ритуала</h2><div class="why-lines"><article><span>Стратегия</span><p>Все материальные решения совпадают с <a href="#" data-demo>strategy-17</a>.</p></article><article><span>Спрос</span><p>Фразы получены из Wordstat для выбранной географии.</p></article><article><span>Посадочная</span><p>Предложение и форма заявки подтверждены на странице.</p></article><article><span>Измерение</span><p>Цель Метрики проверена тестовым событием.</p></article></div></section>
+        </div>
+
+        <footer class="story-footer"><p><strong>Граница этого шага:</strong> Campaign Draft можно читать и редактировать. Создание кампании, начало показов и расходы остаются недоступны до отдельного решения человека.</p><div><button class="btn" data-demo>Все поля Draft</button><button class="btn" data-demo>Все источники</button></div></footer>
+      </article>
+    </section>
+  </main>
+
+  <aside class="prototype-switcher" aria-label="Переключатель вариантов прототипа">
+    <button type="button" id="previous" aria-label="Предыдущий вариант">←</button>
+    <div><strong id="variant-label">A · Досье + сопоставление</strong><small>Стрелки ← → переключают варианты</small></div>
+    <button type="button" id="next" aria-label="Следующий вариант">→</button>
+  </aside>
+  <div class="toast" id="toast" hidden></div>
+
+  <script>
+    // Three UI variants of the existing Campaign Draft stage, switchable via ?variant=.
+    const variants = [
+      { key: "A", name: "Досье + сопоставление" },
+      { key: "B", name: "Инспектор соответствия" },
+      { key: "C", name: "История решения" },
+    ];
+    let current = "A";
+    let toastTimer;
+
+    function applyVariant(key) {
+      const selected = variants.some((item) => item.key === key) ? key : "A";
+      current = selected;
+      document.querySelectorAll("[data-variant]").forEach((section) => {
+        section.hidden = section.dataset.variant !== selected;
+      });
+      const item = variants.find((variant) => variant.key === selected);
+      document.getElementById("variant-label").textContent = `${item.key} · ${item.name}`;
+      const url = new URL(window.location.href);
+      url.searchParams.set("variant", selected);
+      history.replaceState({}, "", url);
+      document.title = `Прототип #304 · ${item.name}`;
+      window.scrollTo({ top: 0, behavior: "instant" });
+    }
+
+    function cycle(delta) {
+      const index = variants.findIndex((item) => item.key === current);
+      applyVariant(variants[(index + delta + variants.length) % variants.length].key);
+    }
+
+    function showToast(message) {
+      clearTimeout(toastTimer);
+      const toast = document.getElementById("toast");
+      toast.textContent = message;
+      toast.hidden = false;
+      toastTimer = setTimeout(() => { toast.hidden = true; }, 2600);
+    }
+
+    const selectedMode = new URL(window.location.href).searchParams.get("selected") === "1";
+    if (selectedMode) {
+      document.querySelector(".prototype-switcher").hidden = true;
+    } else {
+      document.getElementById("previous").addEventListener("click", () => cycle(-1));
+      document.getElementById("next").addEventListener("click", () => cycle(1));
+      document.addEventListener("keydown", (event) => {
+        const target = event.target;
+        if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable) return;
+        if (event.key === "ArrowLeft") cycle(-1);
+        if (event.key === "ArrowRight") cycle(1);
+      });
+    }
+    document.querySelectorAll("[data-demo]").forEach((element) => {
+      element.addEventListener("click", (event) => {
+        event.preventDefault();
+        showToast("Прототип показывает структуру экрана: действие не изменяет данные и не выполняет внешнюю запись.");
+      });
+    });
+
+    applyVariant(selectedMode ? "A" : new URL(window.location.href).searchParams.get("variant") || "A");
+  </script>
+</body>
+</html>

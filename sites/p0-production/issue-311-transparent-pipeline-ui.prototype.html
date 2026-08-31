@@ -1,0 +1,685 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="data:," />
+  <title>Прототип #311 · Прозрачный пайплайн</title>
+  <!--
+    THROWAWAY PROTOTYPE.
+    Three variants of pipeline transparency inside the existing P0 Dashboard,
+    switchable via ?variant=A|B|C and ?scenario=working|returned|ready.
+    Run: python3 -m http.server 8113 --directory sites/p0-production
+  -->
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #15231b;
+      --muted: #69766e;
+      --line: #d5ddd7;
+      --line-strong: #b9c6be;
+      --paper: #fffefa;
+      --canvas: #f3f3ed;
+      --green: #0d7548;
+      --green-dark: #075a36;
+      --green-soft: #e4f1e8;
+      --mint: #bde4cc;
+      --amber: #986321;
+      --amber-soft: #fff0d9;
+      --red: #9a382f;
+      --red-soft: #fae8e5;
+      --blue: #2f5e7d;
+      --blue-soft: #e8f0f5;
+      --violet: #62578a;
+      --violet-soft: #efedf8;
+      --shadow: 0 24px 54px rgba(23, 39, 29, .09);
+    }
+
+    * { box-sizing: border-box; }
+    html { min-width: 1360px; background: var(--canvas); }
+    body { margin: 0; color: var(--ink); background: var(--canvas); font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body::before { position: fixed; z-index: -1; inset: 68px 0 0; background-image: linear-gradient(rgba(21,35,27,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(21,35,27,.035) 1px, transparent 1px); background-size: 40px 40px; content: ""; }
+    button, select { font: inherit; }
+    button { cursor: pointer; }
+    button:focus-visible, summary:focus-visible, [tabindex]:focus-visible { outline: 3px solid rgba(13,117,72,.28); outline-offset: 3px; }
+    button:disabled { cursor: not-allowed; opacity: .46; }
+    [hidden] { display: none !important; }
+
+    .topbar { position: sticky; z-index: 30; top: 0; display: grid; grid-template-columns: 220px 1fr 370px; gap: 22px; align-items: center; height: 68px; padding: 0 36px; border-bottom: 1px solid var(--line); background: rgba(255,254,250,.96); backdrop-filter: blur(14px); }
+    .brand { display: flex; gap: 10px; align-items: center; font-size: 14px; font-weight: 800; }
+    .brand b { display: grid; width: 31px; height: 31px; place-items: center; border-radius: 8px; color: white; background: var(--ink); font-size: 11px; }
+    .topbar nav { display: flex; justify-content: center; gap: 8px; }
+    .topbar nav span { padding: 9px 12px; border-radius: 7px; color: var(--muted); font-size: 10px; font-weight: 720; }
+    .topbar nav .active { color: var(--green-dark); background: var(--green-soft); }
+    .prototype-mark { justify-self: end; color: var(--amber); font-size: 8px; font-weight: 850; letter-spacing: .08em; text-transform: uppercase; }
+
+    .shell { width: min(1560px, calc(100% - 72px)); margin: 0 auto; padding: 22px 0 104px; }
+    .page-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 24px; align-items: end; padding: 0 0 17px; border-bottom: 1px solid var(--line-strong); }
+    .eyebrow { margin: 0; color: var(--green); font-size: 8px; font-weight: 850; letter-spacing: .14em; text-transform: uppercase; }
+    .page-head h1 { margin: 7px 0 6px; font-size: 31px; line-height: 1.02; letter-spacing: -.04em; }
+    .page-head p:not(.eyebrow) { max-width: 860px; margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+    .run-controls { display: flex; gap: 8px; align-items: center; }
+    .btn { min-height: 37px; padding: 0 13px; border: 1px solid var(--line-strong); border-radius: 7px; color: var(--ink); background: white; font-size: 9px; font-weight: 820; }
+    .btn:hover { border-color: var(--green); }
+    .btn.primary { border-color: var(--green); color: white; background: var(--green); }
+    .btn.danger { border-color: #c7837d; color: var(--red); background: #fff; }
+    .btn.ghost { border-color: transparent; color: var(--green-dark); background: transparent; }
+    .run-state { display: grid; gap: 3px; min-width: 164px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.75); }
+    .run-state span { color: var(--muted); font-size: 6px; font-weight: 850; letter-spacing: .08em; text-transform: uppercase; }
+    .run-state strong { font-size: 9px; }
+
+    .scenario-bar { display: flex; gap: 8px; justify-content: space-between; align-items: center; margin: 13px 0; padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; background: rgba(255,255,255,.72); }
+    .scenario-bar > div:first-child { display: flex; gap: 7px; }
+    .scenario-button { min-height: 30px; padding: 0 10px; border: 1px solid transparent; border-radius: 6px; color: var(--muted); background: transparent; font-size: 7px; font-weight: 820; }
+    .scenario-button[aria-pressed="true"] { border-color: #a8cbb5; color: var(--green-dark); background: var(--green-soft); }
+    .legend { display: flex; gap: 13px; align-items: center; color: var(--muted); font-size: 6px; }
+    .legend span { display: flex; gap: 5px; align-items: center; }
+    .legend i { width: 7px; height: 7px; border-radius: 50%; }
+    .legend .done { background: var(--green); }
+    .legend .active { background: var(--blue); }
+    .legend .waiting { border: 1px solid #9fa9a3; background: white; }
+    .legend .returned { background: var(--amber); }
+
+    .variant-note { margin: 0 0 9px; color: var(--muted); font-size: 8px; }
+    .variant-note b { color: var(--ink); }
+    .surface { overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,254,250,.86); box-shadow: var(--shadow); }
+
+    /* Shared stage states */
+    .status-pill { display: inline-flex; gap: 5px; align-items: center; width: fit-content; padding: 5px 7px; border-radius: 999px; font-size: 6px; font-weight: 850; letter-spacing: .04em; white-space: nowrap; }
+    .status-pill::before { width: 6px; height: 6px; border-radius: 50%; content: ""; }
+    [data-status="done"] .status-pill, .status-pill.done { color: var(--green-dark); background: var(--green-soft); }
+    [data-status="done"] .status-pill::before, .status-pill.done::before { background: var(--green); }
+    [data-status="active"] .status-pill, .status-pill.active { color: var(--blue); background: var(--blue-soft); }
+    [data-status="active"] .status-pill::before, .status-pill.active::before { background: var(--blue); box-shadow: 0 0 0 3px rgba(47,94,125,.12); }
+    [data-status="waiting"] .status-pill, .status-pill.waiting { color: var(--muted); background: #f1f3f1; }
+    [data-status="waiting"] .status-pill::before, .status-pill.waiting::before { border: 1px solid #9da7a1; background: white; }
+    [data-status="returned"] .status-pill, .status-pill.returned { color: var(--amber); background: var(--amber-soft); }
+    [data-status="returned"] .status-pill::before, .status-pill.returned::before { background: var(--amber); }
+    [data-status="boundary"] .status-pill, .status-pill.boundary { color: var(--violet); background: var(--violet-soft); }
+    [data-status="boundary"] .status-pill::before, .status-pill.boundary::before { background: var(--violet); }
+
+    /* Variant A — business result first, trace on demand */
+    .journey-a { display: grid; grid-template-columns: repeat(5, 1fr); gap: 7px; margin: 0; padding: 0 0 12px; list-style: none; }
+    .journey-a li:last-child { margin-left: 9px; padding-left: 9px; border-left: 1px dashed #9e96bd; }
+    .journey-a button { display: grid; grid-template-columns: 29px minmax(0, 1fr); gap: 8px; align-items: center; width: 100%; min-height: 57px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink); background: rgba(255,255,255,.72); text-align: left; }
+    .journey-a button:hover, .journey-a button[aria-pressed="true"] { border-color: var(--green); background: #f6fbf7; }
+    .journey-a .step-icon { display: grid; width: 27px; height: 27px; place-items: center; border: 1px solid var(--line); border-radius: 50%; color: var(--muted); background: white; font-size: 8px; font-weight: 850; }
+    .journey-a [data-status="done"] .step-icon { border-color: var(--green); color: white; background: var(--green); }
+    .journey-a [data-status="active"] .step-icon { border-color: var(--blue); color: white; background: var(--blue); }
+    .journey-a [data-status="returned"] .step-icon { border-color: var(--amber); color: white; background: var(--amber); }
+    .journey-a [data-status="boundary"] .step-icon { border-color: var(--violet); color: white; background: var(--violet); }
+    .journey-a strong, .journey-a small { display: block; }
+    .journey-a strong { font-size: 8px; }
+    .journey-a small { margin-top: 3px; color: var(--muted); font-size: 5px; line-height: 1.3; }
+    .workspace-a { display: grid; grid-template-columns: minmax(0, 1.25fr) 380px; min-height: 650px; }
+    .result-a { min-width: 0; padding: 23px 25px; }
+    .current-stage-card { display: flex; gap: 22px; justify-content: space-between; align-items: flex-start; padding-bottom: 16px; border-bottom: 1px solid var(--line-strong); }
+    .current-stage-card h2 { margin: 6px 0 6px; font-size: 24px; line-height: 1.07; letter-spacing: -.03em; }
+    .current-stage-card p:not(.eyebrow) { max-width: 720px; margin: 0; color: var(--muted); font-size: 8px; line-height: 1.5; }
+    .stage-actions { display: grid; gap: 7px; min-width: 210px; }
+    .stage-actions .btn { width: 100%; }
+    .business-object { margin-top: 14px; padding: 16px; border: 1px solid #a6cbb4; border-radius: 10px; background: linear-gradient(135deg, #f9fdf9, var(--green-soft)); }
+    .business-object header { display: flex; gap: 16px; justify-content: space-between; align-items: flex-start; }
+    .business-object header span, .business-object header strong { display: block; }
+    .business-object header span { color: var(--green-dark); font-size: 6px; font-weight: 850; letter-spacing: .08em; text-transform: uppercase; }
+    .business-object header strong { margin-top: 5px; font-size: 15px; }
+    .business-object header b { padding: 5px 7px; border-radius: 999px; color: var(--green-dark); background: white; font-size: 6px; }
+    .lineage { display: grid; grid-template-columns: 1fr 28px 1fr 28px 1fr; align-items: stretch; margin-top: 12px; }
+    .lineage article { min-width: 0; padding: 10px 11px; border: 1px solid #c4d5ca; border-radius: 7px; background: rgba(255,255,255,.82); }
+    .lineage span, .lineage strong, .lineage small { display: block; overflow-wrap: anywhere; }
+    .lineage span { color: var(--green-dark); font-size: 5px; font-weight: 850; text-transform: uppercase; }
+    .lineage strong { margin-top: 5px; font-size: 8px; }
+    .lineage small { margin-top: 4px; color: var(--muted); font-size: 5px; line-height: 1.35; }
+    .lineage > b { display: grid; place-items: center; color: var(--green); font-size: 14px; }
+    .dossier-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 10px; margin-top: 10px; }
+    .dossier-section { min-width: 0; padding: 13px; border: 1px solid var(--line); border-radius: 9px; background: white; }
+    .dossier-section h3 { margin: 4px 0 0; font-size: 11px; }
+    .ad-preview { margin-top: 9px; padding: 12px; border: 1px solid #d6e0eb; border-radius: 7px; }
+    .ad-preview strong { display: block; color: #1656a6; font-size: 12px; }
+    .ad-preview p { margin: 6px 0; color: #34414a; font-size: 7px; line-height: 1.45; }
+    .ad-preview span { color: #16734b; font-size: 6px; }
+    .facts { display: grid; gap: 6px; margin-top: 9px; }
+    .facts div { padding: 8px; border-radius: 6px; background: #f3f6f4; }
+    .facts span, .facts strong { display: block; }
+    .facts span { color: var(--muted); font-size: 5px; text-transform: uppercase; }
+    .facts strong { margin-top: 3px; font-size: 7px; line-height: 1.35; }
+    .stage-summary-a { padding: 20px 18px; border-left: 1px solid var(--line); background: rgba(255,255,255,.82); }
+    .stage-summary-a > header { padding-bottom: 13px; border-bottom: 1px solid var(--line); }
+    .stage-summary-a h2 { margin: 5px 0 7px; font-size: 17px; }
+    .stage-summary-a > header p:not(.eyebrow) { margin: 0; color: var(--muted); font-size: 7px; line-height: 1.45; }
+    .summary-block { margin-top: 10px; padding: 11px; border: 1px solid var(--line); border-radius: 8px; background: white; }
+    .summary-block > span { color: var(--muted); font-size: 5px; font-weight: 850; text-transform: uppercase; }
+    .summary-block h3 { margin: 6px 0 4px; font-size: 10px; }
+    .summary-block p { margin: 0; color: var(--muted); font-size: 6px; line-height: 1.45; }
+    .summary-block details { margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--line); }
+    .summary-block summary { color: var(--green-dark); cursor: pointer; font-size: 6px; font-weight: 800; }
+    .summary-block details p { margin-top: 6px; }
+    .human-boundary { border-color: #bcb5d3; background: var(--violet-soft); }
+    .human-boundary > span, .human-boundary h3 { color: var(--violet); }
+
+    /* Variant B — chronological operations rail */
+    .workspace-b { display: grid; grid-template-columns: 405px minmax(0, 1fr); min-height: 708px; }
+    .timeline-b { padding: 21px 20px; border-right: 1px solid var(--line); background: #17261e; color: #f5fbf7; }
+    .timeline-b .eyebrow { color: #78d1a5; }
+    .timeline-b > h2 { margin: 6px 0 5px; font-size: 21px; }
+    .timeline-b > p:not(.eyebrow) { margin: 0; color: #adc0b6; font-size: 7px; line-height: 1.5; }
+    .timeline-list { display: grid; gap: 0; margin-top: 15px; }
+    .timeline-item { position: relative; display: grid; grid-template-columns: 25px minmax(0, 1fr); gap: 10px; width: 100%; padding: 0 0 15px; border: 0; color: inherit; background: transparent; text-align: left; }
+    .timeline-item:not(:last-child)::after { position: absolute; top: 25px; bottom: 0; left: 12px; width: 1px; background: rgba(255,255,255,.2); content: ""; }
+    .timeline-item .dot { position: relative; z-index: 1; display: grid; width: 25px; height: 25px; place-items: center; border: 1px solid rgba(255,255,255,.28); border-radius: 50%; color: #c4d2ca; background: #17261e; font-size: 7px; font-weight: 850; }
+    .timeline-item[data-status="done"] .dot { border-color: #78d1a5; color: #15231b; background: #78d1a5; }
+    .timeline-item[data-status="active"] .dot { border-color: #94c9e8; color: #13242d; background: #94c9e8; box-shadow: 0 0 0 4px rgba(148,201,232,.12); }
+    .timeline-item[data-status="returned"] .dot { border-color: #efbd70; color: #2b2010; background: #efbd70; }
+    .timeline-item[data-status="boundary"] .dot { border-color: #c6bcea; color: #201c30; background: #c6bcea; }
+    .timeline-copy { min-width: 0; padding: 1px 7px 8px; border-radius: 7px; }
+    .timeline-item:hover .timeline-copy, .timeline-item[aria-pressed="true"] .timeline-copy { background: rgba(255,255,255,.07); }
+    .timeline-copy span, .timeline-copy strong, .timeline-copy small { display: block; }
+    .timeline-copy span { color: #78d1a5; font-size: 5px; font-weight: 850; text-transform: uppercase; }
+    .timeline-copy strong { margin-top: 4px; font-size: 9px; }
+    .timeline-copy small { margin-top: 4px; color: #9fb3a8; font-size: 6px; line-height: 1.4; }
+    .timeline-boundary { margin-top: 1px; padding: 9px 10px; border: 1px dashed rgba(198,188,234,.52); border-radius: 7px; color: #ddd7f1; background: rgba(103,91,144,.15); font-size: 6px; line-height: 1.45; }
+    .inspection-b { min-width: 0; padding: 23px 26px; }
+    .inspection-head { display: flex; gap: 22px; justify-content: space-between; align-items: flex-start; padding-bottom: 14px; border-bottom: 1px solid var(--line-strong); }
+    .inspection-head h2 { margin: 6px 0 5px; font-size: 24px; letter-spacing: -.035em; }
+    .inspection-head p:not(.eyebrow) { max-width: 680px; margin: 0; color: var(--muted); font-size: 8px; line-height: 1.45; }
+    .inspection-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(360px, .95fr); gap: 11px; margin-top: 12px; }
+    .inspection-card { min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 9px; background: white; }
+    .inspection-card h3 { margin: 5px 0 0; font-size: 12px; }
+    .contract-table { margin-top: 10px; overflow: hidden; border: 1px solid var(--line); border-radius: 7px; }
+    .contract-row { display: grid; grid-template-columns: 105px minmax(0, 1fr); min-height: 43px; border-top: 1px solid var(--line); }
+    .contract-row:first-child { border-top: 0; }
+    .contract-row > * { padding: 8px 9px; }
+    .contract-row > span { color: var(--muted); background: #f5f7f5; font-size: 5px; font-weight: 850; text-transform: uppercase; }
+    .contract-row > div strong, .contract-row > div small { display: block; }
+    .contract-row > div strong { font-size: 7px; }
+    .contract-row > div small { margin-top: 3px; color: var(--muted); font-size: 5px; line-height: 1.4; }
+    .trace-notice { margin-top: 10px; padding: 10px; border-radius: 7px; color: var(--green-dark); background: var(--green-soft); font-size: 6px; line-height: 1.45; }
+    .dossier-mini { display: grid; gap: 8px; margin-top: 10px; }
+    .dossier-mini article { padding: 10px; border-radius: 7px; background: #f4f6f4; }
+    .dossier-mini span, .dossier-mini strong, .dossier-mini small { display: block; }
+    .dossier-mini span { color: var(--green-dark); font-size: 5px; font-weight: 850; text-transform: uppercase; }
+    .dossier-mini strong { margin-top: 5px; font-size: 8px; }
+    .dossier-mini small { margin-top: 4px; color: var(--muted); font-size: 5px; line-height: 1.4; }
+
+    /* Variant C — handoff map */
+    .workspace-c { padding: 22px 24px 23px; min-height: 690px; }
+    .map-head { display: flex; gap: 20px; justify-content: space-between; align-items: flex-start; }
+    .map-head h2 { margin: 6px 0 5px; font-size: 24px; letter-spacing: -.035em; }
+    .map-head p:not(.eyebrow) { max-width: 720px; margin: 0; color: var(--muted); font-size: 8px; line-height: 1.5; }
+    .handoff-map { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) 34px minmax(0, 1fr); gap: 8px; align-items: stretch; margin-top: 14px; }
+    .map-stage { position: relative; min-width: 0; min-height: 202px; padding: 13px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: white; text-align: left; }
+    .map-stage:not(.boundary-stage)::after { position: absolute; top: 50%; right: -13px; z-index: 2; color: #9aac9f; content: "→"; font-size: 15px; }
+    .map-stage[data-status="active"] { border-color: #8eb7d0; background: var(--blue-soft); box-shadow: inset 0 0 0 1px rgba(47,94,125,.08); }
+    .map-stage[data-status="returned"] { border-color: #d8b478; background: var(--amber-soft); }
+    .map-stage[data-status="done"] { border-color: #9fc8ad; }
+    .map-stage:hover, .map-stage[aria-pressed="true"] { box-shadow: 0 0 0 3px rgba(13,117,72,.11); }
+    .map-stage > span { color: var(--green-dark); font-size: 5px; font-weight: 850; text-transform: uppercase; }
+    .map-stage h3 { margin: 8px 0 5px; font-size: 12px; }
+    .map-stage > p { margin: 0; color: var(--muted); font-size: 6px; line-height: 1.45; }
+    .map-stage dl { display: grid; gap: 6px; margin: 11px 0 0; }
+    .map-stage dl div { padding-top: 6px; border-top: 1px solid rgba(105,118,110,.17); }
+    .map-stage dt { color: var(--muted); font-size: 5px; }
+    .map-stage dd { margin: 3px 0 0; font-size: 6px; font-weight: 760; line-height: 1.35; }
+    .boundary-divider { display: grid; place-items: center; color: var(--violet); font-size: 6px; font-weight: 850; text-align: center; writing-mode: vertical-rl; transform: rotate(180deg); }
+    .boundary-stage { border-style: dashed; border-color: #afa6cb; background: var(--violet-soft); }
+    .boundary-stage > span, .boundary-stage h3 { color: var(--violet); }
+    .map-lower { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(420px, .8fr); gap: 10px; margin-top: 11px; }
+    .return-card, .selected-output { padding: 14px; border: 1px solid var(--line); border-radius: 9px; background: white; }
+    .return-card header, .selected-output header { display: flex; gap: 12px; justify-content: space-between; align-items: flex-start; }
+    .return-card h3, .selected-output h3 { margin: 5px 0 0; font-size: 12px; }
+    .return-flow { display: grid; grid-template-columns: 1fr 24px 1fr 24px 1fr; align-items: stretch; margin-top: 10px; }
+    .return-flow article { padding: 9px; border-radius: 7px; background: #f4f6f4; }
+    .return-flow article.returned { background: var(--amber-soft); }
+    .return-flow span, .return-flow strong { display: block; }
+    .return-flow span { color: var(--muted); font-size: 5px; text-transform: uppercase; }
+    .return-flow strong { margin-top: 4px; font-size: 6px; line-height: 1.4; }
+    .return-flow b { display: grid; place-items: center; color: var(--amber); font-size: 13px; }
+    .selected-output > p { margin: 9px 0 0; color: var(--muted); font-size: 7px; line-height: 1.5; }
+    .output-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+    .output-tags span { padding: 5px 7px; border-radius: 999px; color: var(--green-dark); background: var(--green-soft); font-size: 5px; font-weight: 800; }
+
+    /* Safe trace drawer */
+    .trace-dialog { width: min(600px, calc(100vw - 80px)); height: calc(100vh - 40px); max-height: none; margin: 20px 20px 20px auto; padding: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 14px; color: var(--ink); background: var(--paper); box-shadow: 0 28px 90px rgba(14,27,19,.28); }
+    .trace-dialog::backdrop { background: rgba(18,29,23,.35); backdrop-filter: blur(2px); }
+    .trace-dialog form { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; }
+    .trace-head { display: flex; gap: 20px; justify-content: space-between; padding: 22px 23px 17px; border-bottom: 1px solid var(--line); background: linear-gradient(135deg, #fbfefb, var(--green-soft)); }
+    .trace-head h2 { margin: 6px 0 5px; font-size: 21px; letter-spacing: -.03em; }
+    .trace-head p:not(.eyebrow) { margin: 0; color: var(--muted); font-size: 7px; line-height: 1.45; }
+    .trace-close { width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 50%; color: var(--ink); background: white; font-size: 17px; }
+    .trace-body { overflow: auto; padding: 17px 22px 25px; }
+    .safety-strip { padding: 11px 12px; border: 1px solid #aecdb9; border-radius: 8px; color: var(--green-dark); background: #f5fbf7; font-size: 7px; line-height: 1.5; }
+    .trace-section { margin-top: 11px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: white; }
+    .trace-section > span { color: var(--muted); font-size: 5px; font-weight: 850; text-transform: uppercase; }
+    .trace-section h3 { margin: 6px 0 4px; font-size: 11px; }
+    .trace-section p { margin: 0; color: var(--muted); font-size: 7px; line-height: 1.5; }
+    .trace-list { display: grid; gap: 6px; margin: 9px 0 0; padding: 0; list-style: none; }
+    .trace-list li { display: grid; grid-template-columns: 102px minmax(0, 1fr); gap: 8px; padding-top: 6px; border-top: 1px solid var(--line); }
+    .trace-list span { color: var(--muted); font-size: 6px; }
+    .trace-list strong { font-size: 7px; line-height: 1.4; }
+    .trace-footnote { margin: 12px 1px 0; color: var(--muted); font-size: 6px; line-height: 1.5; }
+
+    .prototype-switcher { position: fixed; z-index: 100; right: 50%; bottom: 19px; display: grid; grid-template-columns: 44px minmax(310px, auto) 44px; align-items: center; overflow: hidden; border: 1px solid rgba(255,255,255,.18); border-radius: 999px; color: white; background: #101914; box-shadow: 0 18px 44px rgba(12,22,16,.34); transform: translateX(50%); }
+    .prototype-switcher button { height: 47px; border: 0; color: white; background: transparent; font-size: 18px; }
+    .prototype-switcher button:hover { background: rgba(255,255,255,.1); }
+    .prototype-switcher div { padding: 0 18px; text-align: center; }
+    .prototype-switcher strong, .prototype-switcher small { display: block; }
+    .prototype-switcher strong { font-size: 10px; }
+    .prototype-switcher small { margin-top: 3px; color: #a7b7ae; font-size: 7px; }
+    .toast { position: fixed; z-index: 110; top: 84px; right: 28px; max-width: 410px; padding: 12px 14px; border: 1px solid #aacbb8; border-radius: 8px; color: var(--green-dark); background: #f5fbf7; box-shadow: var(--shadow); font-size: 10px; line-height: 1.45; }
+
+    /* Variant A focus: readability pass for the 1920×1080 review. */
+    .shell { padding-bottom: 48px; }
+    .prototype-switcher { display: none; }
+    .topbar nav span { font-size: 11px; }
+    .prototype-mark { font-size: 9px; }
+    .eyebrow { font-size: 10px; }
+    .page-head p:not(.eyebrow) { font-size: 12px; }
+    .btn { font-size: 11px; }
+    .run-state span { font-size: 8px; }
+    .run-state strong { font-size: 11px; }
+    .scenario-button { font-size: 9px; }
+    .legend { font-size: 8px; }
+    .variant-note { font-size: 10px; }
+    .status-pill { font-size: 8px; }
+    .journey-a strong { font-size: 10px; }
+    .journey-a small { font-size: 7px; }
+    .current-stage-card p:not(.eyebrow) { font-size: 10px; }
+    .business-object header span { font-size: 8px; }
+    .business-object header strong { font-size: 17px; }
+    .business-object header b { font-size: 8px; }
+    .lineage span { font-size: 7px; }
+    .lineage strong { font-size: 10px; }
+    .lineage small { font-size: 7px; }
+    .dossier-section h3 { font-size: 13px; }
+    .ad-preview strong { font-size: 14px; }
+    .ad-preview p { font-size: 9px; }
+    .ad-preview span { font-size: 8px; }
+    .facts span { font-size: 7px; }
+    .facts strong { font-size: 9px; }
+    .stage-summary-a > header p:not(.eyebrow) { font-size: 9px; }
+    .stage-summary-a h2 { font-size: 19px; }
+    .summary-block > span { font-size: 7px; }
+    .summary-block h3 { font-size: 12px; }
+    .summary-block p, .summary-block summary { font-size: 8px; }
+    .trace-head p:not(.eyebrow), .safety-strip, .trace-section p { font-size: 9px; }
+    .trace-section > span { font-size: 7px; }
+    .trace-section h3 { font-size: 13px; }
+    .trace-list span, .trace-footnote { font-size: 8px; }
+    .trace-list strong { font-size: 9px; }
+
+    @media (max-width: 1500px) {
+      .shell { width: calc(100% - 44px); }
+      .page-head h1 { font-size: 27px; }
+      .workspace-a { grid-template-columns: minmax(0, 1fr) 340px; }
+      .workspace-b { grid-template-columns: 360px minmax(0, 1fr); }
+      .map-stage { padding: 10px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><b>M</b><span>MOX-ADV</span></div>
+    <nav aria-label="Основная навигация"><span class="active">Стратегия</span><span>Управление</span><span>Мониторинг</span><span>SEO</span><span>Каналы</span></nav>
+    <div class="prototype-mark">Throwaway prototype · Wayfinder #311</div>
+  </header>
+
+  <main class="shell">
+    <header class="page-head">
+      <div><p class="eyebrow">P0 · ПРОЗРАЧНЫЙ ПАЙПЛАЙН</p><h1>От цели до готовой кампании — без технической консоли</h1><p>Dashboard показывает текущий бизнес-результат и понятный ход работы. Исполнители, входы, доказательства, возвраты и передачи доступны по запросу как очищенные факты — без скрытого рассуждения, секретов и технического шума.</p></div>
+      <div class="run-controls">
+        <div class="run-state"><span>Текущий запуск</span><strong id="run-label">Выполняется · этап 3 из 5</strong></div>
+        <button class="btn primary" id="start-run" type="button">Запустить</button>
+        <button class="btn danger" id="stop-run" type="button">Остановить</button>
+      </div>
+    </header>
+
+    <section class="scenario-bar" aria-label="Сценарии состояния прототипа">
+      <div>
+        <button class="scenario-button" type="button" data-scenario="working">Обычный ход</button>
+        <button class="scenario-button" type="button" data-scenario="returned">Возврат по доказательству</button>
+        <button class="scenario-button" type="button" data-scenario="ready">Передача готова</button>
+      </div>
+      <div class="legend" aria-label="Легенда состояний"><span><i class="done"></i>Завершён</span><span><i class="active"></i>Выполняется</span><span><i class="waiting"></i>Ожидает</span><span><i class="returned"></i>Возвращён</span></div>
+    </section>
+
+    <section data-variant="A">
+      <p class="variant-note"><b>«Результат + проверяемый след».</b> Бизнес-первичный слой: пять этапов, выбранное досье и безопасная глубина по кнопке «Как получен результат».</p>
+      <ol class="journey-a" aria-label="Путь подготовки кампании">
+        <li><button type="button" data-stage="goal"><span class="step-icon">1</span><div><strong>Цель кампании</strong><small data-stage-note>Желаемый результат</small></div></button></li>
+        <li><button type="button" data-stage="evidence"><span class="step-icon">2</span><div><strong>Сбор сведений</strong><small data-stage-note>Подтверждённые факты</small></div></button></li>
+        <li><button type="button" data-stage="strategy"><span class="step-icon">3</span><div><strong>Стратегия</strong><small data-stage-note>Принятое решение</small></div></button></li>
+        <li><button type="button" data-stage="campaigns"><span class="step-icon">4</span><div><strong>Кампании</strong><small data-stage-note>Гипотезы и Draft</small></div></button></li>
+        <li><button type="button" data-stage="review"><span class="step-icon">5</span><div><strong>Проверка публикации</strong><small data-stage-note>Отдельная граница</small></div></button></li>
+      </ol>
+      <article class="surface workspace-a">
+        <section class="result-a">
+          <header class="current-stage-card">
+            <div><p class="eyebrow">ТЕКУЩИЙ БИЗНЕС-РЕЗУЛЬТАТ</p><h2 id="a-headline">Strategy Agent формирует Campaign Strategy</h2><p id="a-summary">Собирает одно доказательное решение по предложению, аудитории, результату, географии, периоду, посадочной и бюджету.</p></div>
+            <div class="stage-actions"><span class="status-pill active" id="a-status">Выполняется</span><button class="btn" type="button" data-open-trace>Как получен результат</button></div>
+          </header>
+          <section class="business-object">
+            <header><div><span>ВЫБРАННОЕ ДОСЬЕ CAMPAIGN HYPOTHESIS</span><strong>Фиксированная цена снимает риск смены бухгалтера</strong></div><b id="dossier-state">Текущая пара</b></header>
+            <div class="lineage"><article><span>Campaign Strategy</span><strong>Заявки на разбор бухгалтерии</strong><small>strategy-17 · принята Strategy Agent</small></article><b>→</b><article><span>Campaign Hypothesis</span><strong>Поиск в момент смены бухгалтера</strong><small>Один механизм · одна аудитория</small></article><b>→</b><article><span>Campaign Draft</span><strong>draft-04 · Поиск · Москва и МО</strong><small>Полная проекция будущей кампании</small></article></div>
+          </section>
+          <div class="dossier-grid">
+            <section class="dossier-section"><p class="eyebrow">ЧТО УВИДИТ КЛИЕНТ</p><h3>Объявление и переход</h3><div class="ad-preview"><strong>Бухгалтерия для ООО и ИП — фиксированная цена</strong><p>Разберём текущий учёт и покажем стоимость сопровождения без найма штатного специалиста.</p><span>example.ru/accounting · Москва и Московская область</span></div></section>
+            <section class="dossier-section"><p class="eyebrow">ГРАНИЦЫ DRAFT</p><h3>Точная будущая кампания</h3><div class="facts"><div><span>Целевое действие</span><strong>Заявка на разбор учёта</strong></div><div><span>Состав</span><strong>1 кампания · 2 группы · 42 фразы</strong></div><div><span>Внешние записи</span><strong>0 · публикация отдельно</strong></div></div></section>
+          </div>
+        </section>
+        <aside class="stage-summary-a">
+          <header><p class="eyebrow">ВЫБРАННЫЙ ЭТАП</p><h2 id="a-stage-title">Стратегия</h2><p id="a-stage-task">Агент превращает подтверждённые сведения в одну текущую Campaign Strategy.</p></header>
+          <section class="summary-block"><span>Понятный статус</span><h3 id="a-stage-state">Сейчас формируется Strategy</h3><p id="a-stage-result">Готовый результат этого этапа появится только после полной детерминированной проверки.</p></section>
+          <section class="summary-block"><span>Основания</span><h3>5 проверенных семей сведений</h3><p>Сайт, Wordstat, Метрика, экономика и конкурентный контекст. Недоступное необязательное не превращается в человеческое задание.</p><details><summary>Почему такой вывод</summary><p>Использованы только текущие подтверждённые факты; редкая история Метрики отмечена как ограничение и не выдана за будущий результат.</p></details></section>
+          <section class="summary-block human-boundary"><span>ОТДЕЛЬНАЯ ГРАНИЦА</span><h3>Проверка публикации не является продолжением агента</h3><p>Она открывается только для полной текущей пары. Переход сам не создаёт кампанию, не начинает показы и не разрешает расходы.</p></section>
+        </aside>
+      </article>
+    </section>
+
+    <section data-variant="B" hidden>
+      <p class="variant-note"><b>Вариант B · «Хронология этапов».</b> Исполнитель и передача видны рядом с каждым этапом; выбранный этап раскрывает полный очищенный контракт, а досье остаётся в контексте.</p>
+      <article class="surface workspace-b">
+        <aside class="timeline-b">
+          <p class="eyebrow">ХОД ТЕКУЩЕГО ЗАПУСКА</p><h2>Пять бизнес-этапов</h2><p>Вызовы инструментов и повторы не становятся отдельными этапами. Нажмите этап, чтобы увидеть его безопасный контракт.</p>
+          <div class="timeline-list">
+            <button class="timeline-item" type="button" data-stage="goal"><span class="dot">1</span><span class="timeline-copy"><span data-stage-role>Goal Agent + валидатор</span><strong>Цель кампании</strong><small data-stage-note>Желаемый результат</small></span></button>
+            <button class="timeline-item" type="button" data-stage="evidence"><span class="dot">2</span><span class="timeline-copy"><span data-stage-role>Evidence Analyst + адаптеры</span><strong>Сбор сведений</strong><small data-stage-note>Подтверждённые факты</small></span></button>
+            <button class="timeline-item" type="button" data-stage="strategy"><span class="dot">3</span><span class="timeline-copy"><span data-stage-role>Strategy Agent + валидатор</span><strong>Стратегия</strong><small data-stage-note>Принятое решение</small></span></button>
+            <button class="timeline-item" type="button" data-stage="campaigns"><span class="dot">4</span><span class="timeline-copy"><span data-stage-role>Design Agent + Direct Compiler</span><strong>Кампании</strong><small data-stage-note>Гипотезы и Draft</small></span></button>
+            <button class="timeline-item" type="button" data-stage="review"><span class="dot">5</span><span class="timeline-copy"><span data-stage-role>Человек + точный preflight</span><strong>Проверка публикации</strong><small data-stage-note>Отдельная граница</small></span></button>
+          </div>
+          <div class="timeline-boundary">Пунктирная граница: базовый пайплайн заканчивается до внешней записи. Публикация и расход не входят в этот запуск.</div>
+        </aside>
+        <section class="inspection-b">
+          <header class="inspection-head"><div><p class="eyebrow">ОЧИЩЕННЫЙ КОНТРАКТ ЭТАПА</p><h2 id="b-stage-title">Стратегия</h2><p id="b-stage-task">Strategy Agent формирует, исправляет и принимает Campaign Strategy; код разрешает переход только после полной проверки.</p></div><div class="stage-actions"><span class="status-pill active" id="b-status">Выполняется</span><button class="btn" type="button" data-open-trace>Вся доступная глубина</button></div></header>
+          <div class="inspection-grid">
+            <section class="inspection-card"><p class="eyebrow">ПЕРЕДАЧА РЕЗУЛЬТАТА</p><h3>Вход → работа → проверенный выход</h3><div class="contract-table">
+              <div class="contract-row"><span>Исполнитель</span><div><strong id="b-role">Strategy Agent + Strategy Validator</strong><small>Агент отвечает за смысл; код — за формальную истину и переход.</small></div></div>
+              <div class="contract-row"><span>Входы</span><div><strong id="b-inputs">Текущая цель, Evidence Snapshot и бизнес-вход</strong><small>Только неизменяемые ссылки на разрешённые сведения.</small></div></div>
+              <div class="contract-row"><span>Задача</span><div><strong id="b-task">Сформировать одну полную доказательную Strategy</strong><small>Без нового человеческого утверждения и без расширения полномочий.</small></div></div>
+              <div class="contract-row"><span>Выход</span><div><strong id="b-output">CampaignStrategyRevision либо типизированный возврат</strong><small>Частичный непроверенный результат не становится текущим.</small></div></div>
+              <div class="contract-row"><span>Переход</span><div><strong id="b-transition">Успех → «Кампании»</strong><small>Недостаток evidence → точный возврат в «Сбор сведений».</small></div></div>
+            </div><div class="trace-notice">Скрытое рассуждение не показывается. Доступны подтверждённые факты, выполненные проверки, безопасные исправления и причина перехода.</div></section>
+            <section class="inspection-card"><p class="eyebrow">СВЯЗАННОЕ ДОСЬЕ</p><h3>Campaign Hypothesis + Campaign Draft</h3><div class="dossier-mini"><article><span>Гипотеза</span><strong>Фиксированная цена снимает риск смены бухгалтера</strong><small>Текущий бизнес-смысл одной будущей кампании.</small></article><article><span>Проекция</span><strong>draft-04 · Поиск · Москва и МО</strong><small>1 кампания · 2 группы · 42 фразы · измеримая заявка.</small></article><article><span>Происхождение</span><strong>Strategy → Hypothesis → точные поля Direct</strong><small>Wordstat, сайт, Метрика и версии правил раскрываются по запросу.</small></article></div><button class="btn" style="width:100%;margin-top:9px" type="button" data-demo>Открыть досье</button></section>
+          </div>
+        </section>
+      </article>
+    </section>
+
+    <section data-variant="C" hidden>
+      <p class="variant-note"><b>Вариант C · «Карта передач».</b> Оркестрация показана как четыре автоматизированных узла и вынесенная человеческая граница; возврат визуально отделён от обычного прогресса.</p>
+      <article class="surface workspace-c">
+        <header class="map-head"><div><p class="eyebrow">КАРТА ПЕРЕДАЧИ БИЗНЕС-РЕЗУЛЬТАТОВ</p><h2>Каждый этап получает проверенный объект, а не свободный текст</h2><p>Карта показывает ответственность и направление движения. Детали инструментов, попыток и доказательств доступны только по запросу; основной объект остаётся Campaign Hypothesis и её текущий Campaign Draft.</p></div><button class="btn" type="button" data-open-trace>Проверить происхождение</button></header>
+        <div class="handoff-map">
+          <button class="map-stage" type="button" data-stage="goal"><span data-stage-role>Goal Agent + код</span><h3>Цель кампании</h3><p data-stage-note>Желаемый результат</p><dl><div><dt>Получает</dt><dd>Бизнес-вход и сведения о компании</dd></div><div><dt>Передаёт</dt><dd>GoalRevision</dd></div></dl></button>
+          <button class="map-stage" type="button" data-stage="evidence"><span data-stage-role>Evidence Analyst + чтения</span><h3>Сбор сведений</h3><p data-stage-note>Подтверждённые факты</p><dl><div><dt>Получает</dt><dd>GoalRevision</dd></div><div><dt>Передаёт</dt><dd>Analytics Evidence Snapshot</dd></div></dl></button>
+          <button class="map-stage" type="button" data-stage="strategy"><span data-stage-role>Strategy Agent + код</span><h3>Стратегия</h3><p data-stage-note>Принятое решение</p><dl><div><dt>Получает</dt><dd>Goal + Evidence Snapshot</dd></div><div><dt>Передаёт</dt><dd>CampaignStrategyRevision</dd></div></dl></button>
+          <button class="map-stage" type="button" data-stage="campaigns"><span data-stage-role>Design Agent + Compiler</span><h3>Кампании</h3><p data-stage-note>Гипотезы и Draft</p><dl><div><dt>Получает</dt><dd>Strategy + evidence + rules</dd></div><div><dt>Передаёт</dt><dd>Hypothesis + полный Draft</dd></div></dl></button>
+          <div class="boundary-divider">ОТДЕЛЬНАЯ ГРАНИЦА</div>
+          <button class="map-stage boundary-stage" type="button" data-stage="review"><span data-stage-role>Человек</span><h3>Проверка публикации</h3><p data-stage-note>Не входит в автоматический запуск</p><dl><div><dt>Получает</dt><dd>Точную полную пару</dd></div><div><dt>Не делает</dt><dd>Не публикует и не расходует</dd></div></dl></button>
+        </div>
+        <div class="map-lower">
+          <section class="return-card"><header><div><p class="eyebrow">ТОЧНЫЙ ВОЗВРАТ</p><h3 id="c-return-title">Возврата сейчас нет</h3></div><span class="status-pill done" id="c-return-status">Прямой переход</span></header><div class="return-flow"><article><span>Источник</span><strong id="c-return-from">Сбор сведений</strong></article><b>→</b><article class="returned"><span>Причина</span><strong id="c-return-reason">Все обязательные доказательства доступны</strong></article><b>→</b><article><span>Цель</span><strong id="c-return-to">Стратегия</strong></article></div></section>
+          <section class="selected-output"><header><div><p class="eyebrow">ВЫБРАННЫЙ РЕЗУЛЬТАТ</p><h3 id="c-stage-title">Strategy Agent формирует Strategy</h3></div><span class="status-pill active" id="c-status">Выполняется</span></header><p id="c-stage-task">Результат станет текущим только после проверки всех ссылок, обязательных политик и внутренней согласованности.</p><div class="output-tags"><span>strategy-17</span><span>Evidence Snapshot</span><span>0 внешних записей</span></div></section>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <dialog class="trace-dialog" id="trace-dialog" aria-labelledby="trace-title">
+    <form method="dialog">
+      <header class="trace-head"><div><p class="eyebrow">КАК ПОЛУЧЕН РЕЗУЛЬТАТ</p><h2 id="trace-title">Стратегия</h2><p>Очищенные проверяемые факты исполнения. Не технический журнал и не скрытое рассуждение.</p></div><button class="trace-close" value="close" aria-label="Закрыть">×</button></header>
+      <div class="trace-body">
+        <div class="safety-strip"><strong>Граница раскрытия.</strong> Здесь нет chain-of-thought, сырых сообщений модели, токенов, персональных данных, provider ID и полных технических дампов. Для проверки доступны только факты, входы, результаты формальных проверок, безопасные исправления и переходы.</div>
+        <section class="trace-section"><span>ИСПОЛНИТЕЛЬ И ЗАДАЧА</span><h3 id="trace-role">Strategy Agent + Strategy Validator</h3><p id="trace-task">Сформировать одну доказательную Campaign Strategy и разрешить переход только после полной проверки.</p></section>
+        <section class="trace-section"><span>ВХОДЫ И ДОКАЗАТЕЛЬСТВА</span><h3 id="trace-inputs">Цель, бизнес-вход и Analytics Evidence Snapshot</h3><p id="trace-evidence">Сайт, Wordstat, Метрика, экономика и конкурентный контекст; каждая семья сохраняет источник, свежесть и ограничение.</p><ul class="trace-list"><li><span>Передано</span><strong id="trace-input-ref">Текущие проверенные редакции</strong></li><li><span>Не передано</span><strong>Сырые tool outputs, секреты и неподтверждённые догадки</strong></li></ul></section>
+        <section class="trace-section"><span>ПРОВЕРЕННЫЙ ВЫХОД</span><h3 id="trace-output">CampaignStrategyRevision</h3><p id="trace-checks">Проверены полнота, происхождение, обязательные политики и согласованность цели, аудитории, предложения, сообщения, измерения, периода и бюджета.</p></section>
+        <section class="trace-section"><span>ИСПРАВЛЕНИЯ, ПОВТОРЫ И ВОЗВРАТ</span><h3 id="trace-repair">Безопасная нормализация выполнена кодом</h3><p id="trace-return">Содержательный дефект возвращается тому же агенту одним консолидированным пакетом. Недостающее доказательство возвращает этап в «Сбор сведений» с точной причиной.</p></section>
+        <section class="trace-section"><span>ПЕРЕДАЧА</span><h3 id="trace-transition">После успеха → «Кампании»</h3><p>Следующий этап получает типизированный неизменяемый объект, его версию и ссылки на evidence. Свободный текст не является контрактом передачи.</p></section>
+        <p class="trace-footnote">Тот же очищенный след доступен ассистенту для свободного ответа в чате. Отдельная обязательная форма объяснения не создаётся.</p>
+      </div>
+    </form>
+  </dialog>
+
+  <aside class="prototype-switcher" aria-label="Переключатель вариантов прототипа">
+    <button type="button" id="previous" aria-label="Предыдущий вариант">←</button>
+    <div><strong id="variant-label">A · Результат + проверяемый след</strong><small>Стрелки ← → переключают варианты</small></div>
+    <button type="button" id="next" aria-label="Следующий вариант">→</button>
+  </aside>
+  <div class="toast" id="toast" hidden></div>
+
+  <script>
+    const variants = [
+      { key: "A", name: "Результат + проверяемый след" },
+      { key: "B", name: "Хронология этапов" },
+      { key: "C", name: "Карта передач" },
+    ];
+
+    const baseStages = {
+      goal: {
+        title: "Цель кампании",
+        role: "Goal Agent + детерминированный валидатор",
+        task: "Формализовать желаемый бизнес-результат и квалифицированное действие без подмены намерения владельца.",
+        inputs: "Бизнес-вход, область рекламодателя и разрешённые сведения о компании",
+        output: "GoalRevision либо подготовленный пакет выбора результата",
+        transition: "Успех → «Сбор сведений»",
+        evidence: "Собственный сайт и разрешённые сведения о компании; каждая правка сохраняет человеческое происхождение.",
+        checks: "Проверены полнота, однозначность результата, происхождение и отсутствие придуманного бизнес-факта.",
+        repair: "Формальная нормализация не меняет смысл; материально разные цели остаются решением владельца.",
+        returnText: "Материальная правка цели создаёт новую редакцию и инвалидирует зависимый конус.",
+      },
+      evidence: {
+        title: "Сбор сведений",
+        role: "Evidence Analyst + типизированные адаптеры + Snapshot Builder",
+        task: "Получить подтверждённые наблюдения и собрать достаточный Analytics Evidence Snapshot.",
+        inputs: "GoalRevision, бизнес-вход, read-only доступы и требования следующих этапов",
+        output: "Analytics Evidence Snapshot либо один точечный пакет обязательных запросов",
+        transition: "Успех → «Стратегия»; конфликт цели → «Цель кампании»",
+        evidence: "Сайт, Wordstat, Метрика, собственная история Direct, финансовый и конкурентный контекст в допустимом scope.",
+        checks: "Проверены происхождение, свежесть, coverage, конфликты, ссылки и типизированная схема Snapshot.",
+        repair: "Временное безопасное чтение — до трёх повторов; необязательное недоступное остаётся UNAVAILABLE без задания человеку.",
+        returnText: "Конфликт с целью возвращает поток в «Цель кампании»; обязательный недоступный вход останавливает Draft.",
+      },
+      strategy: {
+        title: "Стратегия",
+        role: "Strategy Agent + Strategy Validator",
+        task: "Сформировать, исправить и принять одну текущую Campaign Strategy без отдельного человеческого утверждения.",
+        inputs: "GoalRevision, бизнес-вход, Analytics Evidence Snapshot и точная версия Campaign Playbook",
+        output: "CampaignStrategyRevision либо EvidenceRequest / GoalConflict",
+        transition: "Успех → «Кампании»",
+        evidence: "Сайт, Wordstat, Метрика, экономика и конкурентный контекст; каждая семья сохраняет источник, свежесть и ограничение.",
+        checks: "Проверены полнота, происхождение, обязательные политики и согласованность цели, аудитории, предложения, сообщения, измерения, периода и бюджета.",
+        repair: "Формальная нормализация выполняется кодом; содержательный дефект один раз возвращается Strategy Agent единым пакетом.",
+        returnText: "Недостающее доказательство возвращает поток в «Сбор сведений»; конфликт результата — в «Цель кампании».",
+      },
+      campaigns: {
+        title: "Кампании",
+        role: "Campaign Design Agent + Direct Compiler + валидаторы",
+        task: "Атомарно сформировать одну или несколько полных пар Campaign Hypothesis + Campaign Draft.",
+        inputs: "Campaign Strategy, Evidence Snapshot, Wordstat, измеримость, landing, capabilities и Playbook",
+        output: "Полные текущие пары Hypothesis + Draft с publish_fingerprint",
+        transition: "Успех → отдельная «Проверка публикации»",
+        evidence: "Точные решения Strategy и ссылки на evidence сопоставлены с каждой материальной частью будущей Direct Projection.",
+        checks: "Проверены схема API, capabilities, лимиты, UTM, материалы, бюджеты, ссылки и отсутствие неподдерживаемых полей.",
+        repair: "Формальное исправляет код; содержательное один раз возвращается Design Agent. Частичный Draft не показывается.",
+        returnText: "Общий пробел evidence → «Сбор сведений»; дефект Strategy → «Стратегия»; локальный дефект исправляется внутри этапа.",
+      },
+      review: {
+        title: "Проверка публикации",
+        role: "Человек + точный preflight отдельного модуля",
+        task: "Просмотреть полную текущую пару и при желании отредактировать поддерживаемые поля.",
+        inputs: "Campaign Hypothesis, полный Draft, lineage, evidence, исправления и publish_fingerprint",
+        output: "Новая проверенная редакция пары либо неизменённый текущий Draft",
+        transition: "Публикация требует отдельного точного человеческого решения",
+        evidence: "Досье показывает Strategy → Hypothesis → Draft, клиентский preview и точное происхождение материальных полей.",
+        checks: "Текущий базовый пайплайн уже завершён. Этот шаг не является подтверждением агента и сам не пишет в Direct.",
+        repair: "Смысловая правка возвращает пару в Design Agent; техническая — в Direct Compiler; создаётся новая редакция.",
+        returnText: "Старая передача аннулируется при любом материальном изменении выбранной пары.",
+      },
+    };
+
+    const scenarios = {
+      working: {
+        run: "Выполняется · этап 3 из 5",
+        activeStage: "strategy",
+        statuses: { goal: "done", evidence: "done", strategy: "active", campaigns: "waiting", review: "boundary" },
+        notes: { goal: "Цель сформирована", evidence: "Snapshot получен", strategy: "Формируется Strategy", campaigns: "Ожидает Strategy", review: "Отдельная граница" },
+        headline: "Формируется Campaign Strategy",
+        summary: "Собирает одно доказательное решение по предложению, аудитории, результату, географии, периоду, посадочной и бюджету.",
+        result: "Готовый результат этого этапа появится только после полной детерминированной проверки.",
+        dossier: "Предыдущая текущая пара · только чтение",
+        returnTitle: "Возврата сейчас нет",
+        returnStatus: "Прямой переход",
+        returnState: "done",
+        returnFrom: "Сбор сведений",
+        returnReason: "Все обязательные доказательства доступны",
+        returnTo: "Стратегия",
+      },
+      returned: {
+        run: "Выполняется · возврат к этапу 2",
+        activeStage: "evidence",
+        statuses: { goal: "done", evidence: "active", strategy: "returned", campaigns: "waiting", review: "boundary" },
+        notes: { goal: "Цель сформирована", evidence: "Получаем точное evidence", strategy: "Возвращена к сбору", campaigns: "Ожидает новую Strategy", review: "Отдельная граница" },
+        headline: "Сбор сведений уточняет измеримость заявки",
+        summary: "Strategy Agent обнаружил, что историческая воронка редкая, а тестовое событие Метрики нужно подтвердить заново. Возврат называет точную зависимость — без частичного Draft.",
+        result: "Evidence Analyst повторяет только безопасное read-only чтение; Campaign Draft не создаётся до подтверждения обязательной измеримости.",
+        dossier: "Предыдущая пара устарела · только аудит",
+        returnTitle: "Strategy вернула точный EvidenceRequest",
+        returnStatus: "Возврат",
+        returnState: "returned",
+        returnFrom: "Стратегия",
+        returnReason: "Нужно подтвердить тестовое событие основной цели",
+        returnTo: "Сбор сведений",
+      },
+      ready: {
+        run: "Завершён · пара передана к проверке",
+        activeStage: "review",
+        statuses: { goal: "done", evidence: "done", strategy: "done", campaigns: "done", review: "boundary" },
+        notes: { goal: "Цель сформирована", evidence: "Snapshot получен", strategy: "Strategy принята", campaigns: "Полная пара готова", review: "Доступна отдельно" },
+        headline: "Campaign Hypothesis и полный Campaign Draft готовы",
+        summary: "Клиентский preview, Direct Projection и происхождение материальных решений доступны в досье. Базовый запуск завершён без внешней записи.",
+        result: "Редактирование снова доступно. Кнопка перехода открывает отдельную проверку и не публикует кампанию.",
+        dossier: "Текущая полная пара",
+        returnTitle: "Пара передана без возврата",
+        returnStatus: "Готово",
+        returnState: "done",
+        returnFrom: "Кампании",
+        returnReason: "Полная пара прошла внутренние проверки",
+        returnTo: "Проверка публикации",
+      },
+    };
+
+    let currentVariant = "A";
+    let currentScenario = "working";
+    let selectedStage = "strategy";
+    let toastTimer;
+
+    function statusLabel(status) {
+      return ({ done: "Завершён", active: "Выполняется", waiting: "Ожидает", returned: "Возвращён", boundary: "Отдельная граница" })[status];
+    }
+
+    function setStatusPill(element, status) {
+      element.className = `status-pill ${status}`;
+      element.textContent = statusLabel(status);
+    }
+
+    function renderStageSelection() {
+      const stage = baseStages[selectedStage];
+      const scenario = scenarios[currentScenario];
+      const status = scenario.statuses[selectedStage];
+      document.querySelectorAll("[data-stage]").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.stage === selectedStage)));
+      document.getElementById("a-stage-title").textContent = stage.title;
+      document.getElementById("a-stage-task").textContent = stage.task;
+      document.getElementById("a-stage-state").textContent = statusLabel(status);
+      document.getElementById("a-stage-result").textContent = selectedStage === scenario.activeStage ? scenario.result : `${stage.output}. ${stage.transition}.`;
+      document.getElementById("b-stage-title").textContent = stage.title;
+      document.getElementById("b-stage-task").textContent = stage.task;
+      document.getElementById("b-role").textContent = stage.role;
+      document.getElementById("b-inputs").textContent = stage.inputs;
+      document.getElementById("b-task").textContent = stage.task;
+      document.getElementById("b-output").textContent = stage.output;
+      document.getElementById("b-transition").textContent = stage.transition;
+      document.getElementById("c-stage-title").textContent = stage.title;
+      document.getElementById("c-stage-task").textContent = stage.task;
+      setStatusPill(document.getElementById("a-status"), status);
+      setStatusPill(document.getElementById("b-status"), status);
+      setStatusPill(document.getElementById("c-status"), status);
+      document.getElementById("trace-title").textContent = stage.title;
+      document.getElementById("trace-role").textContent = stage.role;
+      document.getElementById("trace-task").textContent = stage.task;
+      document.getElementById("trace-inputs").textContent = stage.inputs;
+      document.getElementById("trace-evidence").textContent = stage.evidence;
+      document.getElementById("trace-input-ref").textContent = stage.inputs;
+      document.getElementById("trace-output").textContent = stage.output;
+      document.getElementById("trace-checks").textContent = stage.checks;
+      document.getElementById("trace-repair").textContent = stage.repair;
+      document.getElementById("trace-return").textContent = stage.returnText;
+      document.getElementById("trace-transition").textContent = stage.transition;
+    }
+
+    function applyScenario(key, keepSelection = false) {
+      currentScenario = scenarios[key] ? key : "working";
+      const scenario = scenarios[currentScenario];
+      if (!keepSelection) selectedStage = scenario.activeStage;
+      document.querySelectorAll("[data-scenario]").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.scenario === currentScenario)));
+      document.querySelectorAll("[data-stage]").forEach((button) => {
+        const stageKey = button.dataset.stage;
+        button.dataset.status = scenario.statuses[stageKey];
+        const note = button.querySelector("[data-stage-note]");
+        if (note) note.textContent = scenario.notes[stageKey];
+      });
+      document.getElementById("run-label").textContent = scenario.run;
+      document.getElementById("a-headline").textContent = scenario.headline;
+      document.getElementById("a-summary").textContent = scenario.summary;
+      document.getElementById("dossier-state").textContent = scenario.dossier;
+      document.getElementById("c-return-title").textContent = scenario.returnTitle;
+      document.getElementById("c-return-from").textContent = scenario.returnFrom;
+      document.getElementById("c-return-reason").textContent = scenario.returnReason;
+      document.getElementById("c-return-to").textContent = scenario.returnTo;
+      setStatusPill(document.getElementById("c-return-status"), scenario.returnState);
+      document.getElementById("stop-run").hidden = currentScenario === "ready";
+      document.getElementById("start-run").hidden = currentScenario !== "ready";
+      const url = new URL(window.location.href);
+      url.searchParams.set("scenario", currentScenario);
+      history.replaceState({}, "", url);
+      renderStageSelection();
+    }
+
+    function applyVariant(key) {
+      currentVariant = variants.some((item) => item.key === key) ? key : "A";
+      document.querySelectorAll("[data-variant]").forEach((section) => section.hidden = section.dataset.variant !== currentVariant);
+      const item = variants.find((variant) => variant.key === currentVariant);
+      document.getElementById("variant-label").textContent = `${item.key} · ${item.name}`;
+      const url = new URL(window.location.href);
+      url.searchParams.set("variant", currentVariant);
+      history.replaceState({}, "", url);
+      document.title = `Прототип #311 · ${item.name}`;
+    }
+
+    function cycle(delta) {
+      const index = variants.findIndex((item) => item.key === currentVariant);
+      applyVariant(variants[(index + delta + variants.length) % variants.length].key);
+    }
+
+    function showToast(message) {
+      clearTimeout(toastTimer);
+      const toast = document.getElementById("toast");
+      toast.textContent = message;
+      toast.hidden = false;
+      toastTimer = setTimeout(() => { toast.hidden = true; }, 2800);
+    }
+
+    document.querySelectorAll("[data-stage]").forEach((button) => button.addEventListener("click", () => {
+      selectedStage = button.dataset.stage;
+      renderStageSelection();
+    }));
+    document.querySelectorAll("[data-scenario]").forEach((button) => button.addEventListener("click", () => applyScenario(button.dataset.scenario)));
+    document.querySelectorAll("[data-open-trace]").forEach((button) => button.addEventListener("click", () => document.getElementById("trace-dialog").showModal()));
+    document.querySelectorAll("[data-demo]").forEach((button) => button.addEventListener("click", () => showToast("В рабочем продукте ассистент ответит по текущим объектам и очищенному следу. Прототип не меняет данные.")));
+    document.getElementById("start-run").addEventListener("click", () => applyScenario("working"));
+    document.getElementById("stop-run").addEventListener("click", () => showToast("Остановка завершит запуск, отбросит непроверенный частичный выход и вернёт редактирование. Возобновления с точки нет."));
+    const params = new URL(window.location.href).searchParams;
+    applyVariant("A");
+    applyScenario(params.get("scenario") || "working");
+  </script>
+</body>
+</html>

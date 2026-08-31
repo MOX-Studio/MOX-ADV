@@ -2658,7 +2658,14 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
     invalidateStrategyDownstream(state);
   }
 
-  if (legacyDocument && state.strategy_questionnaire && state.strategy_questionnaire.schema_version !== STRATEGY_QUESTIONNAIRE_SCHEMA) {
+  const strategyQuestionnaireRequiresSafeRebuild = state.strategy_questionnaire && (
+    (legacyDocument && state.strategy_questionnaire.schema_version !== STRATEGY_QUESTIONNAIRE_SCHEMA)
+    || (
+      state.strategy_questionnaire.schema_version === STRATEGY_QUESTIONNAIRE_SCHEMA
+      && String(state.strategy_questionnaire.contract_version) === "2.0.0"
+    )
+  );
+  if (strategyQuestionnaireRequiresSafeRebuild) {
     state.strategy_questionnaire = null;
     invalidateStrategyDownstream(state);
     state.last_cascade = cascadeRecord(state, "STRATEGY", updatedAt, ["recommendation_set", "campaign_drafts", "shortlist", "confirmation"]);
