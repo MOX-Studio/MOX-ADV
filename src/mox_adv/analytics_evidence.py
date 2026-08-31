@@ -1181,3 +1181,316 @@ class EvidenceSnapshotBuilderV1:
         return ordered_claims, tuple(
             sorted(conflicts, key=lambda item: item.conflict_id)
         )
+
+
+EvidenceStageStatus = Literal["READY", "REQUIRED_INPUT", "TECHNICAL_FAILURE"]
+EvidenceStageNextAction = Literal[
+    "CONTINUE_PIPELINE",
+    "PROVIDE_REQUIRED_INPUTS",
+    "RETRY_COLLECTION",
+    "RESOLVE_TECHNICAL_FAILURE",
+]
+
+
+@dataclass(frozen=True)
+class RequiredBusinessInput:
+    """One shared fact that no permitted source could recover."""
+
+    input_id: str
+    subject: str
+    predicate: str
+    scope: EvidenceScope
+    attempted_request_ids: Tuple[str, ...]
+    attempted_sources: Tuple[str, ...]
+    limitations: Tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        for name in ("input_id", "subject", "predicate"):
+            object.__setattr__(self, name, _required_text(getattr(self, name), name))
+        for name in ("attempted_request_ids", "attempted_sources", "limitations"):
+            values = tuple(
+                sorted(
+                    {
+                        _required_text(item, name)
+                        for item in getattr(self, name)
+                    }
+                )
+            )
+            if not values:
+                raise EvidenceContractError(
+                    "A required business input must record " + name + "."
+                )
+            object.__setattr__(self, name, values)
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "input_id": self.input_id,
+            "subject": self.subject,
+            "predicate": self.predicate,
+            "scope": self.scope.as_dict(),
+            "attempted_request_ids": list(self.attempted_request_ids),
+            "attempted_sources": list(self.attempted_sources),
+            "limitations": list(self.limitations),
+        }
+
+
+@dataclass(frozen=True)
+class RequiredInputPackage:
+    """One immutable owner request containing every unresolved required fact."""
+
+    package_id: str
+    snapshot_id: str
+    inputs: Tuple[RequiredBusinessInput, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "package_id",
+            _required_text(self.package_id, "package_id"),
+        )
+        object.__setattr__(
+            self,
+            "snapshot_id",
+            _required_text(self.snapshot_id, "snapshot_id"),
+        )
+        if not self.inputs:
+            raise EvidenceContractError(
+                "A required input package must contain at least one input."
+            )
+        if len({item.input_id for item in self.inputs}) != len(self.inputs):
+            raise EvidenceContractError(
+                "Required business input identifiers must be unique."
+            )
+        object.__setattr__(
+            self,
+            "inputs",
+            tuple(sorted(self.inputs, key=lambda item: item.input_id)),
+        )
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "package_id": self.package_id,
+            "snapshot_id": self.snapshot_id,
+            "inputs": [item.as_dict() for item in self.inputs],
+        }
+
+    def verify_fingerprint(self) -> bool:
+        value = self.as_dict()
+        value.pop("package_id")
+        return self.package_id == _content_id("required-input-package", value)
+
+
+@dataclass(frozen=True)
+class EvidenceStageOutcome:
+    """Closed terminal projection for the evidence collection stage.
+
+    Campaign artifacts and external writes are deliberately fixed to absence.
+    They can only be created by a later stage after a READY outcome.
+    """
+
+    status: EvidenceStageStatus
+    next_action: EvidenceStageNextAction
+    snapshot: Optional[AnalyticsEvidenceSnapshot]
+    required_input_package: Optional[RequiredInputPackage]
+    technical_reason_code: Optional[str] = None
+    failed_request_id: Optional[str] = None
+    retryable: bool = False
+
+    def __post_init__(self) -> None:
+        if self.status not in {"READY", "REQUIRED_INPUT", "TECHNICAL_FAILURE"}:
+            raise EvidenceContractError("Evidence stage status is invalid.")
+        expected_action: Dict[str, Tuple[str, ...]] = {
+            "READY": ("CONTINUE_PIPELINE",),
+            "REQUIRED_INPUT": ("PROVIDE_REQUIRED_INPUTS",),
+            "TECHNICAL_FAILURE": (
+                "RETRY_COLLECTION",
+                "RESOLVE_TECHNICAL_FAILURE",
+            ),
+        }
+        if self.next_action not in expected_action[self.status]:
+            raise EvidenceContractError(
+                "Evidence stage next action does not match its status."
+            )
+        if self.status == "READY":
+            valid = (
+                self.snapshot is not None
+                and self.required_input_package is None
+                and self.technical_reason_code is None
+                and self.failed_request_id is None
+                and not self.retryable
+            )
+        elif self.status == "REQUIRED_INPUT":
+            valid = (
+                self.snapshot is not None
+                and self.required_input_package is not None
+                and self.required_input_package.snapshot_id
+                == self.snapshot.snapshot_id
+                and self.technical_reason_code is None
+                and self.failed_request_id is None
+                and not self.retryable
+            )
+        else:
+            valid = (
+                self.snapshot is None
+                and self.required_input_package is None
+                and self.technical_reason_code
+                in {"TRANSIENT_READ_EXHAUSTED", "EVIDENCE_READ_FAILED"}
+                and self.failed_request_id is not None
+                and (
+                    (self.retryable and self.next_action == "RETRY_COLLECTION")
+                    or (
+                        not self.retryable
+                        and self.next_action == "RESOLVE_TECHNICAL_FAILURE"
+                    )
+                )
+            )
+        if not valid:
+            raise EvidenceContractError(
+                "Evidence stage terminal fields do not match its status."
+            )
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "status": self.status,
+            "next_action": self.next_action,
+            "analytics_evidence_snapshot": (
+                None if self.snapshot is None else self.snapshot.as_dict()
+            ),
+            "required_input_package": (
+                None
+                if self.required_input_package is None
+                else self.required_input_package.as_dict()
+            ),
+            "technical_reason_code": self.technical_reason_code,
+            "failed_request_id": self.failed_request_id,
+            "retryable": self.retryable,
+            "current_campaign_hypothesis": None,
+            "current_campaign_draft": None,
+            "external_writes": [],
+        }
+
+
+class EvidenceCollectionStageV1:
+    """Collect evidence and stop atomically before any incomplete campaign work."""
+
+    def __init__(
+        self,
+        collector: EvidenceCollectorV1,
+        builder: Optional[EvidenceSnapshotBuilderV1] = None,
+    ) -> None:
+        self._collector = collector
+        self._builder = builder or EvidenceSnapshotBuilderV1()
+
+    def run(
+        self,
+        generated_at: str,
+        requests: Sequence[EvidenceRequest],
+    ) -> EvidenceStageOutcome:
+        try:
+            observations = self._collector.collect(requests)
+        except EvidenceTechnicalError as error:
+            return EvidenceStageOutcome(
+                status="TECHNICAL_FAILURE",
+                next_action=(
+                    "RETRY_COLLECTION"
+                    if error.retryable
+                    else "RESOLVE_TECHNICAL_FAILURE"
+                ),
+                snapshot=None,
+                required_input_package=None,
+                technical_reason_code=error.code,
+                failed_request_id=error.request_id,
+                retryable=error.retryable,
+            )
+
+        snapshot = self._builder.build(generated_at, requests, observations)
+        required_input_package = self._required_input_package(requests, snapshot)
+        if required_input_package is not None:
+            return EvidenceStageOutcome(
+                status="REQUIRED_INPUT",
+                next_action="PROVIDE_REQUIRED_INPUTS",
+                snapshot=snapshot,
+                required_input_package=required_input_package,
+            )
+        return EvidenceStageOutcome(
+            status="READY",
+            next_action="CONTINUE_PIPELINE",
+            snapshot=snapshot,
+            required_input_package=None,
+        )
+
+    @staticmethod
+    def _required_input_package(
+        requests: Sequence[EvidenceRequest],
+        snapshot: AnalyticsEvidenceSnapshot,
+    ) -> Optional[RequiredInputPackage]:
+        request_groups: Dict[
+            Tuple[str, str, EvidenceScope],
+            list[EvidenceRequest],
+        ] = {}
+        for request in requests:
+            request_groups.setdefault(
+                (request.subject, request.predicate, request.scope),
+                [],
+            ).append(request)
+        observation_groups: Dict[
+            Tuple[str, str, EvidenceScope],
+            list[EvidenceObservation],
+        ] = {}
+        for observation in snapshot.observations:
+            observation_groups.setdefault(
+                (observation.subject, observation.predicate, observation.scope),
+                [],
+            ).append(observation)
+
+        inputs = []
+        for (subject, predicate, scope), grouped_requests in request_groups.items():
+            if not any(item.required for item in grouped_requests):
+                continue
+            grouped_observations = observation_groups[(subject, predicate, scope)]
+            if any(
+                item.availability == "AVAILABLE"
+                for item in grouped_observations
+            ):
+                continue
+            body = {
+                "subject": subject,
+                "predicate": predicate,
+                "scope": scope.as_dict(),
+                "attempted_request_ids": sorted(
+                    item.request_id for item in grouped_requests
+                ),
+                "attempted_sources": sorted(
+                    {item.source for item in grouped_requests}
+                ),
+                "limitations": sorted(
+                    {
+                        limitation
+                        for item in grouped_observations
+                        for limitation in item.limitations
+                    }
+                ),
+            }
+            inputs.append(
+                RequiredBusinessInput(
+                    input_id=_content_id("required-business-input", body),
+                    subject=subject,
+                    predicate=predicate,
+                    scope=scope,
+                    attempted_request_ids=tuple(body["attempted_request_ids"]),
+                    attempted_sources=tuple(body["attempted_sources"]),
+                    limitations=tuple(body["limitations"]),
+                )
+            )
+        if not inputs:
+            return None
+        ordered_inputs = tuple(sorted(inputs, key=lambda item: item.input_id))
+        package_body = {
+            "snapshot_id": snapshot.snapshot_id,
+            "inputs": [item.as_dict() for item in ordered_inputs],
+        }
+        return RequiredInputPackage(
+            package_id=_content_id("required-input-package", package_body),
+            snapshot_id=snapshot.snapshot_id,
+            inputs=ordered_inputs,
+        )

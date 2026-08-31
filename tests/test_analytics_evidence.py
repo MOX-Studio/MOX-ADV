@@ -8,6 +8,7 @@ from mox_adv.analytics_evidence import (
     AdapterRead,
     CachedEvidenceArtifact,
     EvidenceAdapterError,
+    EvidenceCollectionStageV1,
     EvidenceCollectorV1,
     EvidenceContractError,
     EvidenceFreshness,
@@ -497,6 +498,160 @@ class AnalyticsEvidenceSnapshotTests(unittest.TestCase):
         self.assertFalse(caught.exception.retryable)
         self.assertEqual(1, adapter.calls)
         self.assertEqual([], sleeps)
+
+    def test_required_shared_gap_returns_one_atomic_input_package(self) -> None:
+        required_site = request("site-price", "site.example")
+        optional_catalog = request(
+            "catalog-price",
+            "catalog.example",
+            required=False,
+        )
+        required_market = replace(
+            request("market-size", "market.example"),
+            predicate="market-size-rub",
+        )
+        optional_audience = replace(
+            request("audience-age", "audience.example", required=False),
+            predicate="audience-age",
+        )
+        requests = (
+            required_site,
+            optional_catalog,
+            required_market,
+            optional_audience,
+        )
+        adapters = {
+            item.source: StaticAdapter(
+                item.source,
+                {
+                    item.request_id: AdapterRead(
+                        request_id=item.request_id,
+                        source=item.source,
+                        source_locator="api://" + item.source + "/facts",
+                        adapter_version="fact-read-v1",
+                        observed_at=OBSERVED_AT,
+                        availability="UNAVAILABLE",
+                        limitations=("Permitted source has no accessible value.",),
+                    )
+                },
+            )
+            for item in requests
+        }
+        normalizers = {
+            item.source: ScalarNormalizer(item.source) for item in requests
+        }
+
+        outcome = EvidenceCollectionStageV1(
+            EvidenceCollectorV1(adapters, normalizers)
+        ).run(GENERATED_AT, requests)
+
+        self.assertEqual("REQUIRED_INPUT", outcome.status)
+        self.assertEqual("PROVIDE_REQUIRED_INPUTS", outcome.next_action)
+        self.assertIsNotNone(outcome.snapshot)
+        package = outcome.required_input_package
+        self.assertIsNotNone(package)
+        assert package is not None
+        self.assertTrue(package.verify_fingerprint())
+        self.assertEqual(2, len(package.inputs))
+        price_input = next(
+            item for item in package.inputs if item.predicate == "monthly-price-rub"
+        )
+        self.assertEqual(
+            ("catalog-price", "site-price"),
+            price_input.attempted_request_ids,
+        )
+        self.assertEqual(
+            ("catalog.example", "site.example"),
+            price_input.attempted_sources,
+        )
+        packaged_request_ids = {
+            request_id
+            for item in package.inputs
+            for request_id in item.attempted_request_ids
+        }
+        self.assertIn("market-size", packaged_request_ids)
+        self.assertNotIn("audience-age", packaged_request_ids)
+        projection = outcome.as_dict()
+        self.assertIsNone(projection["current_campaign_hypothesis"])
+        self.assertIsNone(projection["current_campaign_draft"])
+        self.assertEqual([], projection["external_writes"])
+        with self.assertRaises(FrozenInstanceError):
+            package.snapshot_id = "changed"  # type: ignore[misc]
+
+    def test_available_permitted_source_avoids_business_input_request(self) -> None:
+        required_site = request("site-price", "site.example")
+        fallback_catalog = request(
+            "catalog-price",
+            "catalog.example",
+            required=False,
+        )
+        unavailable = AdapterRead(
+            request_id=required_site.request_id,
+            source=required_site.source,
+            source_locator="https://site.example/pricing",
+            adapter_version="site-read-v1",
+            observed_at=OBSERVED_AT,
+            availability="UNAVAILABLE",
+            limitations=("Site did not expose the value.",),
+        )
+        adapters = {
+            required_site.source: StaticAdapter(
+                required_site.source,
+                {required_site.request_id: unavailable},
+            ),
+            fallback_catalog.source: StaticAdapter(
+                fallback_catalog.source,
+                {
+                    fallback_catalog.request_id: available_read(
+                        fallback_catalog.request_id,
+                        fallback_catalog.source,
+                        1200,
+                    )
+                },
+            ),
+        }
+        normalizers = {
+            source: ScalarNormalizer(source) for source in adapters
+        }
+
+        outcome = EvidenceCollectionStageV1(
+            EvidenceCollectorV1(adapters, normalizers)
+        ).run(GENERATED_AT, (required_site, fallback_catalog))
+
+        self.assertEqual("READY", outcome.status)
+        self.assertEqual("CONTINUE_PIPELINE", outcome.next_action)
+        self.assertIsNone(outcome.required_input_package)
+        self.assertEqual([], outcome.as_dict()["external_writes"])
+
+    def test_technical_failure_is_sanitized_and_requests_no_business_data(
+        self,
+    ) -> None:
+        evidence_request = request("site-price", "site.example")
+        adapter = SequencedAdapter(
+            "site.example",
+            [TransientEvidenceAdapterError("secret upstream detail")] * 3,
+        )
+        stage = EvidenceCollectionStageV1(
+            EvidenceCollectorV1(
+                {adapter.source: adapter},
+                {adapter.source: ScalarNormalizer(adapter.source)},
+                sleeper=lambda _: None,
+            )
+        )
+
+        outcome = stage.run(GENERATED_AT, (evidence_request,))
+
+        self.assertEqual("TECHNICAL_FAILURE", outcome.status)
+        self.assertEqual("TRANSIENT_READ_EXHAUSTED", outcome.technical_reason_code)
+        self.assertEqual("RETRY_COLLECTION", outcome.next_action)
+        self.assertTrue(outcome.retryable)
+        projection = outcome.as_dict()
+        self.assertIsNone(projection["analytics_evidence_snapshot"])
+        self.assertIsNone(projection["required_input_package"])
+        self.assertIsNone(projection["current_campaign_hypothesis"])
+        self.assertIsNone(projection["current_campaign_draft"])
+        self.assertEqual([], projection["external_writes"])
+        self.assertNotIn("secret upstream detail", str(projection))
 
 
 if __name__ == "__main__":
