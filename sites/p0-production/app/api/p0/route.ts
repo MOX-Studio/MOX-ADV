@@ -78,7 +78,7 @@ export async function POST(request: Request) {
           currentBackend.snapshot(),
           currentBackend.diagnostics(),
         ]);
-        const pipeline = await controller.start(key, diagnostics as unknown as PipelineHistoricalView);
+        const pipeline = await controller.startAndExecute(key, diagnostics as unknown as PipelineHistoricalView);
         return Response.json(projectPublicationReviewBoundary(value, pipeline), { status: 201 });
       }
       if (pipelineAction === "CORRECT_GOAL") {

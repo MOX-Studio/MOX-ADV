@@ -14,6 +14,7 @@ import {
   type OwnerResultExplanation,
   type OwnerResultProvenance,
 } from "./pipeline-result-explanation.ts";
+import { executeProductionPipeline } from "./pipeline-production-executor.ts";
 import {
   PIPELINE_INPUT_VERSIONS_SCHEMA,
   PIPELINE_STAGES,
@@ -380,7 +381,7 @@ export class OwnerPipelineController {
     return this.project(await this.orchestrator.current(ownerKey), ownerKey);
   }
 
-  async start(ownerKey: string, view: PipelineHistoricalView) {
+  private async frozenInputVersions(ownerKey: string, view: PipelineHistoricalView) {
     const [versions, currentGoal] = await Promise.all([
       pipelineInputVersions(view),
       this.goalStore?.loadCurrent(ownerKey) ?? null,
@@ -392,7 +393,54 @@ export class OwnerPipelineController {
         digest: currentGoal.revision.digest,
       };
     }
+    return { versions, currentGoal };
+  }
+
+  private async persistFormedGoal(ownerKey: string, run: PipelineRunState) {
+    let savedGoal = await this.goalStore?.loadCurrent(ownerKey) ?? null;
+    if (this.goalStore && run.goal_formation.status === "VERIFIED" && !savedGoal) {
+      const formed: CurrentGoal = {
+        schema_version: CURRENT_GOAL_SCHEMA,
+        owner_key: ownerKey,
+        revision: run.goal_formation.revision,
+        source: "GOAL_AGENT",
+        invalidation: null,
+      };
+      if (!await this.goalStore.append(formed, null)) throw new Error("Текущая Цель изменилась. Обновите Dashboard.");
+      savedGoal = formed;
+    }
+    return savedGoal;
+  }
+
+  async start(ownerKey: string, view: PipelineHistoricalView) {
+    const { versions } = await this.frozenInputVersions(ownerKey, view);
     return this.project(await this.orchestrator.start(ownerKey, versions), ownerKey);
+  }
+
+  async startAndExecute(ownerKey: string, view: PipelineHistoricalView) {
+    const { versions, currentGoal } = await this.frozenInputVersions(ownerKey, view);
+    const started = await this.orchestrator.start(ownerKey, versions);
+    try {
+      const completed = await executeProductionPipeline({
+        orchestrator: this.orchestrator,
+        run: started,
+        view,
+        currentGoal,
+      });
+      await this.persistFormedGoal(ownerKey, completed);
+      return this.project(completed, ownerKey);
+    } catch (error) {
+      const current = await this.orchestrator.current(ownerKey);
+      if (current?.run_id === started.run_id && current.status === "ACTIVE") {
+        await this.orchestrator.stop({
+          run_id: current.run_id,
+          expected_version: current.version,
+          reason_code: "PRODUCTION_EXECUTION_FAILED",
+          reason: "Production executor безопасно остановлен до внешней записи.",
+        });
+      }
+      throw error;
+    }
   }
 
   async explain(ownerKey: string, input: { question: unknown; pairKey?: unknown }): Promise<OwnerResultExplanation> {
@@ -412,18 +460,7 @@ export class OwnerPipelineController {
       expected_version: input.expectedVersion,
       candidate: input.candidate,
     });
-    let savedGoal = await this.goalStore?.loadCurrent(ownerKey) ?? null;
-    if (this.goalStore && run.goal_formation.status === "VERIFIED" && !savedGoal) {
-      const formed: CurrentGoal = {
-        schema_version: CURRENT_GOAL_SCHEMA,
-        owner_key: ownerKey,
-        revision: run.goal_formation.revision,
-        source: "GOAL_AGENT",
-        invalidation: null,
-      };
-      if (!await this.goalStore.append(formed, null)) throw new Error("Текущая Цель изменилась. Обновите Dashboard.");
-      savedGoal = formed;
-    }
+    await this.persistFormedGoal(ownerKey, run);
     return this.project(run, ownerKey);
   }
 

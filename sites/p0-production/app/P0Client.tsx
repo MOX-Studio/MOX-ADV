@@ -236,7 +236,8 @@ export default function P0Client() {
       ? pipelineStage.tone === "complete" ? "complete" : pipelineStage.tone === "active" ? "current" : "upcoming"
       : projection.journey.stages.find((stage) => stage.id === activeStage)?.status ?? "upcoming";
   const viewingCurrentStage = activeStage === authoritativeStage(projection);
-  const pipelineControl = projection.pipeline && projection.pipeline.status !== "NOT_STARTED"
+  const pipelineControl = projection.pipeline && (projection.pipeline.status !== "NOT_STARTED"
+    || (projection.journey.currentStage === "review" && projection.campaignOptions.length > 0))
     ? projection.pipeline
     : null;
   const ownerHasAction = Boolean(projection.primaryAction || projection.goalInterview?.primaryAction);

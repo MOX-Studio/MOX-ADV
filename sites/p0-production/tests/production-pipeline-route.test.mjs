@@ -12,6 +12,7 @@ test("production route prepares real owner inputs without fixture or legacy-tabl
   assert.match(routeSource, /ownerOverview as productionOwnerOverview/u);
   assert.match(routeSource, /submitOwnerAction as productionSubmitOwnerAction/u);
   assert.match(routeSource, /currentBackend\.diagnostics\(\)/u);
+  assert.match(routeSource, /controller\.startAndExecute\(key, diagnostics/u);
 });
 
 test("production route keeps pipeline actions typed and denies editing while a run is active", () => {
@@ -20,8 +21,8 @@ test("production route keeps pipeline actions typed and denies editing while a r
   assert.match(routeSource, /Редактирование недоступно во время активного запуска/u);
 });
 
-test("NOT_STARTED pipeline does not hide production owner-journey actions or expose an inert launch", () => {
+test("NOT_STARTED pipeline keeps owner-journey actions and exposes Start only for current Drafts at review", () => {
   assert.match(clientSource, /projection\.pipeline && projection\.pipeline\.status !== "NOT_STARTED"\s*\? projection\.pipeline\.stages\.find/u);
-  assert.match(clientSource, /const pipelineControl = projection\.pipeline && projection\.pipeline\.status !== "NOT_STARTED"/u);
+  assert.match(clientSource, /projection\.journey\.currentStage === "review" && projection\.campaignOptions\.length > 0/u);
   assert.doesNotMatch(clientSource, /status: pipeline \? "Ожидает"/u);
 });
