@@ -23,7 +23,7 @@ test("owner campaign surface renders an independent business editor without expo
   assert.match(ownerSource, /save_draft/u);
   assert.match(ownerSource, /save_auction_protocol/u);
   assert.doesNotMatch(clientSource, /publish_fingerprint|draft_revision_id|provider_ids|field_registry|draft_id/u);
-  assert.doesNotMatch(clientSource, /Фильтр вариантов|Открыть точную проекцию|Показать скрытые/u);
+  assert.doesNotMatch(clientSource, /Фильтр вариантов|Открыть точную проекцию|Показать скрытые|campaign\.readiness|campaign\.comparativeScore/u);
 });
 
 test("owner surface renders exactly one opaque primary action seam", () => {
@@ -35,17 +35,14 @@ test("owner surface renders exactly one opaque primary action seam", () => {
   assert.doesNotMatch(clientSource, /expected_revision|allowed_commands|CONFIRM_EXACT_SHORTLIST_PACKAGE/u);
 });
 
-test("owner package review shows exact business outcomes and one no-write accept/reject decision", () => {
-  assert.match(ownerSource, /preflightGates/u);
-  assert.match(clientSource, /Предпубликационная проверка/u);
-  assert.match(clientSource, /Месячный бюджет Strategy/u);
-  assert.match(clientSource, /ОДНО ЯВНОЕ РЕШЕНИЕ ВЛАДЕЛЬЦА/u);
-  assert.match(clientSource, /Отклонить и вернуться к редактированию/u);
-  assert.match(clientSource, /Принять точный пакет/u);
-  assert.match(ownerSource, /Внешних записей — 0, показы — 0, расходы — 0/u);
+test("owner Dashboard keeps current campaigns but omits the legacy package gate", () => {
+  assert.match(clientSource, /ТЕКУЩИЕ CAMPAIGN DRAFT/u);
+  assert.match(clientSource, /ТЕКУЩАЯ КАМПАНИЯ/u);
+  assert.match(clientSource, /campaign\.offer/u);
   assert.match(ownerSource, /confirm_package/u);
   assert.match(ownerSource, /reject_package/u);
-  assert.doesNotMatch(clientSource, /package_id|gate_id|package_review_id|account_lock/u);
+  assert.doesNotMatch(clientSource, /projection\.packageSummary|projection\.packageDecision/u);
+  assert.doesNotMatch(clientSource, /Принять точный пакет|Предпубликационная проверка|Месячный бюджет Strategy/u);
 });
 
 test("safe continuation remains agent-owned while initial real creation needs a separate stage", () => {

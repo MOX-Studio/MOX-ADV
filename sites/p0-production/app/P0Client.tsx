@@ -4,7 +4,6 @@ import Link from "next/link";
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import styles from "./prototype/prd-149/prototype.module.css";
 import AnalyticsSummaryDisclosure from "./AnalyticsSummaryDisclosure";
-import { OwnerViabilitySummary } from "./OwnerViabilitySummary";
 import type {
   OwnerActionField,
   OwnerJourneyProjection,
@@ -165,64 +164,6 @@ export default function P0Client() {
     }
   }
 
-  async function submitStrategyDecision(handle: string) {
-    if (busy) return;
-    setBusy(true);
-    setError("");
-    try {
-      const next = await request("/api/p0", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ handle, values: {} }),
-      });
-      setProjection(next);
-      setSelectedStage(next.journey.currentStage);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function submitPackageDecision(handle: string) {
-    if (busy) return;
-    setBusy(true);
-    setError("");
-    try {
-      const next = await request("/api/p0", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ handle, values: {} }),
-      });
-      setProjection(next);
-      setSelectedStage(next.journey.currentStage);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function submitStrategyEdit(event: FormEvent<HTMLFormElement>, handle: string, fields: OwnerActionField[]) {
-    event.preventDefault();
-    if (busy) return;
-    setBusy(true);
-    setError("");
-    try {
-      const next = await request("/api/p0", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ handle, values: actionValues(event.currentTarget, fields) }),
-      });
-      setProjection(next);
-      setSelectedStage(next.journey.currentStage);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function submitGoalCorrection(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (busy) return;
@@ -292,6 +233,16 @@ export default function P0Client() {
       ? pipelineStage.tone === "complete" ? "complete" : pipelineStage.tone === "active" ? "current" : "upcoming"
       : projection.journey.stages.find((stage) => stage.id === activeStage)?.status ?? "upcoming";
   const viewingCurrentStage = activeStage === (projection.pipeline?.currentStage ?? projection.journey.currentStage);
+  const ownerHasAction = Boolean(projection.primaryAction || projection.goalInterview?.primaryAction);
+  const ownerActionProblem = ownerHasAction
+    ? projection.cards.find((card) => card.kind === "human-decision-gate")
+      ?? projection.cards.find((card) => card.kind === "problem")
+      ?? null
+    : null;
+  const autonomousWork = projection.pipeline?.active
+    || projection.businessOutcome.status === "working"
+    || projection.agentActivity?.status === "working"
+    || projection.agentActivity?.status === "waiting";
 
   function chooseStage(stage: OwnerJourneyStageId) {
     setSelectedStage(stage);
@@ -364,12 +315,6 @@ export default function P0Client() {
             <p className="owner-cost-semantics"><b>Разделение стоимости:</b> стоимость перехода отражает аукционный CPC по ключевой фразе; целевая стоимость результата относится к бизнес-экономике. Ни одно из значений не является прогнозом эффективности.</p>
             {projection.campaignStrategy.materialQuestions.length > 0 && <div className="owner-model-questions"><h3>Только существенные вопросы</h3><ul>{projection.campaignStrategy.materialQuestions.map((item) => <li key={item.field}><strong>{item.field}: {item.question}</strong><span>{item.recommendation} {item.consequences}</span></li>)}</ul></div>}
             {projection.campaignStrategy.decisionGate && <article className="owner-card human-decision-gate"><span>РЕШЕНИЕ ВЛАДЕЛЬЦА</span><h3>{projection.campaignStrategy.decisionGate.recommendation}</h3><p><b>Основание:</b> {projection.campaignStrategy.decisionGate.evidence}</p><p><b>Уверенность:</b> {projection.campaignStrategy.decisionGate.confidence}</p><p><b>Альтернативы:</b> {projection.campaignStrategy.decisionGate.alternatives}</p><p><b>Последствия:</b> {projection.campaignStrategy.decisionGate.consequences}</p></article>}
-            {projection.campaignStrategy.ownerReview && <StrategyOwnerReview
-              review={projection.campaignStrategy.ownerReview}
-              busy={busy}
-              onDecision={submitStrategyDecision}
-              onEdit={submitStrategyEdit}
-            />}
           </section>}
 
           {activeStage === "findings" && activeStageStatus !== "upcoming" && projection.demandCostResearch && <section className="owner-demand-cost" aria-labelledby="owner-demand-cost-title">
@@ -389,22 +334,6 @@ export default function P0Client() {
 
           {activeStage === "strategy" && activeStageStatus !== "upcoming" && projection.appliedPractice && <section className="owner-recommendation" aria-labelledby="owner-applied-practice-title">
             <span>Применённая практика</span><h3 id="owner-applied-practice-title">{projection.appliedPractice.practice}</h3><p>{projection.appliedPractice.limitation}</p>
-          </section>}
-
-          {activeStage === "findings" && activeStageStatus !== "upcoming" && projection.businessReadiness && <section className="owner-business-readiness" aria-labelledby="owner-business-readiness-title">
-            <header><div><p className="owner-eyebrow">ИЗМЕРИМОСТЬ И ПОСАДОЧНАЯ</p><h2 id="owner-business-readiness-title">Готовность бизнес-результата</h2></div><strong>{projection.businessReadiness.status}</strong></header>
-            <div className="owner-demand-cost-grid">
-              <article className="owner-measurement-report" data-measurement-state={projection.businessReadiness.measurement.report.state}>
-                <span>Измеримость</span><h3>{projection.businessReadiness.measurement.report.state}</h3><p>{projection.businessReadiness.measurement.report.conclusion}</p>
-                <dl className="owner-measurement-summary"><div><dt>Окно отчёта</dt><dd>{projection.businessReadiness.measurement.report.window}</dd></div><div><dt>Достижения</dt><dd>{projection.businessReadiness.measurement.report.reaches}</dd></div><div><dt>Свежесть</dt><dd>{projection.businessReadiness.measurement.report.freshness}</dd></div></dl>
-                <h4>Качество отчёта</h4><dl>{projection.businessReadiness.measurement.report.quality.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl>
-                <details><summary>Все проверки измеримости</summary><p>{projection.businessReadiness.measurement.summary}</p><dl>{projection.businessReadiness.measurement.checks.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.result}. {item.limitation}</dd></div>)}</dl></details>
-              </article>
-              <article><span>Посадочная по устройствам</span><h3>{projection.businessReadiness.destination.status}</h3><dl>{projection.businessReadiness.destination.scopes.map((scope) => <div key={scope.device}><dt>{scope.device}</dt><dd>{scope.classification}. {scope.conclusion}</dd></div>)}</dl></article>
-            </div>
-            {projection.businessReadiness.destination.priorityCorrections.length > 0 && <div><h3>До трёх приоритетных исправлений</h3><ol>{projection.businessReadiness.destination.priorityCorrections.map((item) => <li key={`${item.priority}-${item.action}`}><strong>{item.priority}. {item.action}</strong><span>{item.basis}</span></li>)}</ol></div>}
-            {projection.businessReadiness.repairPlan.length > 0 && <div><h3>Подготовленный план</h3><ol>{projection.businessReadiness.repairPlan.map((item) => <li key={`${item.priority}-${item.action}`}><strong>{item.action}</strong><span>{item.expectedResult}</span></li>)}</ol></div>}
-            {projection.businessReadiness.decisionGate && <article className="owner-card human-decision-gate"><span>РЕШЕНИЕ ВЛАДЕЛЬЦА</span><h3>{projection.businessReadiness.decisionGate.recommendation}</h3><p><b>Доказательства:</b> {projection.businessReadiness.decisionGate.evidence}</p><p><b>Уверенность:</b> {projection.businessReadiness.decisionGate.confidence}</p><p><b>Варианты и последствия:</b> {projection.businessReadiness.decisionGate.options}</p></article>}
           </section>}
 
           {activeStage === "findings" && activeStageStatus !== "upcoming" && projection.competitorMatrix && <section className="owner-competitor-matrix" aria-labelledby="owner-competitor-matrix-title">
@@ -445,11 +374,11 @@ export default function P0Client() {
             <span>{projection.agentActivity.completed} из {projection.agentActivity.total}</span>
           </section>}
 
-          {viewingCurrentStage && <section className="owner-cards" aria-label="Выводы и решения">
-            {projection.cards.map((card, index) => <article key={`${card.kind}-${index}`} className={`owner-card ${card.kind}`}>
-              <span>{cardLabels[card.kind]}</span><h3>{card.title}</h3><p>{card.body}</p>
-              {card.facts && <dl>{card.facts.map((fact) => <div key={fact.label}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}</dl>}
-            </article>)}
+          {viewingCurrentStage && ownerActionProblem && <section className="owner-cards" aria-label="Проблема, требующая действия владельца">
+            <article className={`owner-card ${ownerActionProblem.kind}`}>
+              <span>{cardLabels[ownerActionProblem.kind]}</span><h3>{ownerActionProblem.title}</h3><p>{ownerActionProblem.body}</p>
+              {ownerActionProblem.facts && <dl>{ownerActionProblem.facts.map((fact) => <div key={fact.label}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}</dl>}
+            </article>
           </section>}
 
           {activeStage === "review" && publicationReviewHandoff && <section className="owner-recommendation publication-review-boundary" role="status">
@@ -468,32 +397,13 @@ export default function P0Client() {
             />)}</div>
           </section>}
 
-          {activeStage === "review" && activeStageStatus !== "upcoming" && projection.packageSummary && <section className="owner-package" aria-labelledby="owner-package-title">
-            <header><div><p className="owner-eyebrow">ИТОГОВАЯ ПРОВЕРКА</p><h2 id="owner-package-title">{projection.packageSummary.campaignCount} кампании к созданию</h2></div><strong>{projection.packageSummary.preflight}</strong></header>
-            <p>{projection.packageSummary.execution}</p>
-            <div className="owner-demand-cost-grid">
-              <article><span>Месячный бюджет Strategy</span><h3>{projection.packageSummary.strategyMonthlyBudget}</h3></article>
-              <article><span>Сумма выбранного пакета</span><h3>{projection.packageSummary.orderedPackageBudget}</h3><p>{projection.packageSummary.budgetAlignment.classification}. {projection.packageSummary.budgetAlignment.explanation}</p></article>
-            </div>
-            <div><h3>Бюджеты и периоды выбранных тестов</h3><ol>{projection.packageSummary.campaignBudgets.map((campaign) => <li key={`${campaign.name}-${campaign.period}`}><strong>{campaign.name}</strong><span>{campaign.budget} · {campaign.period}</span></li>)}</ol></div>
-            <div><h3>Предпубликационная проверка</h3><ol>{projection.packageSummary.preflightGates.map((gate) => <li key={gate.label}><strong>{gate.label} · {gate.status}</strong><span>{gate.explanation}</span></li>)}</ol></div>
-            {projection.packageSummary.outcomes.length > 0 && <ul>{projection.packageSummary.outcomes.map((item) => <li key={item.campaign}><strong>{item.campaign}</strong><span>{item.outcome}</span></li>)}</ul>}
-          </section>}
-
-          {activeStage === "review" && activeStageStatus !== "upcoming" && projection.packageDecision && <PackageOwnerDecision
-            decision={projection.packageDecision}
-            busy={busy}
-            onDecision={submitPackageDecision}
-          />}
-
-          {viewingCurrentStage && projection.materialUnknowns.length > 0 && <details className={styles.disclosure} open><summary>СУЩЕСТВЕННЫЕ НЕИЗВЕСТНЫЕ</summary><ul>{projection.materialUnknowns.map((item) => <li key={item}>{item}</li>)}</ul></details>}
-
           {viewingCurrentStage && projection.primaryAction && <form key={projection.primaryAction.handle} className="owner-action" onSubmit={submit}>
             <header><p className="owner-eyebrow">СЛЕДУЮЩИЙ ШАГ</p><h2>{projection.primaryAction.label}</h2><p>{projection.primaryAction.description}</p></header>
             {projection.primaryAction.fields.length > 0 && <div className="owner-fields">{projection.primaryAction.fields.map((field) => <OwnerField key={field.key} field={field} />)}</div>}
             <button className={styles.primaryButton} type="submit" disabled={busy}>{busy ? "Агент выполняет работу…" : projection.primaryAction.label}</button>
           </form>}
-          {viewingCurrentStage && !projection.primaryAction && projection.businessOutcome.status === "working" && <div className="owner-progress" role="status"><i /><div><strong>Агент продолжает работу</strong><p>Ожидание, повторные проверки и безопасная сверка не требуют действий владельца.</p></div></div>}
+          {viewingCurrentStage && !projection.primaryAction && autonomousWork && <div className="owner-progress" role="status"><i /><div><strong>Агент продолжает работу</strong><p>Автоматические проверки и безопасная сверка не требуют действий владельца.</p></div></div>}
+          {viewingCurrentStage && !projection.primaryAction && !autonomousWork && <section className="owner-terminal-result" role="status"><span>ТЕКУЩИЙ РЕЗУЛЬТАТ</span><h2>{projection.businessOutcome.headline}</h2><p>{projection.businessOutcome.summary}</p></section>}
           {error && <p className="owner-error" role="alert" ref={errorRef} tabIndex={-1}>{error}</p>}
         </section>
 
@@ -502,85 +412,7 @@ export default function P0Client() {
   </div>;
 }
 
-type StrategyOwnerReviewProjection = NonNullable<NonNullable<OwnerJourneyProjection["campaignStrategy"]>["ownerReview"]>;
-type PackageDecisionProjection = NonNullable<OwnerJourneyProjection["packageDecision"]>;
 type CampaignOptionProjection = OwnerJourneyProjection["campaignOptions"][number];
-
-function PackageOwnerDecision({
-  decision,
-  busy,
-  onDecision,
-}: {
-  decision: PackageDecisionProjection;
-  busy: boolean;
-  onDecision: (handle: string) => Promise<void>;
-}) {
-  return <section className="owner-package-decision" data-decision-status={decision.status} aria-labelledby="owner-package-decision-title">
-    <header>
-      <div><p className="owner-eyebrow">ОДНО ЯВНОЕ РЕШЕНИЕ ВЛАДЕЛЬЦА</p><h2 id="owner-package-decision-title">Принять или отклонить точный пакет</h2><p>{decision.exactVersion}</p></div>
-      <strong>{decision.status}</strong>
-    </header>
-    <p className="owner-package-safety" role="status">{decision.safety}</p>
-    <section className="owner-package-recommendation"><span>Рекомендация</span><h3>{decision.recommendation}</h3></section>
-    <section className="owner-package-exact" aria-labelledby="owner-package-exact-title">
-      <h3 id="owner-package-exact-title">Точная видимая версия</h3>
-      <ol>{decision.campaigns.map((campaign) => <li key={`${campaign.order}-${campaign.name}`}><b>{campaign.order}</b><strong>{campaign.name}</strong><span>{campaign.budget} · {campaign.period}</span></li>)}</ol>
-    </section>
-    <div className="owner-package-decision-grid">
-      <section><h3>Альтернативы</h3><ul>{decision.alternatives.map((item) => <li key={item}>{item}</li>)}</ul></section>
-      <section><h3>Последствия</h3><ul>{decision.consequences.map((item) => <li key={item}>{item}</li>)}</ul></section>
-      <section><h3>Риски и границы</h3><ul>{decision.risks.map((item) => <li key={item}>{item}</li>)}</ul></section>
-      <section><h3>Следующий реальный этап</h3><p>{decision.nextRealStage}</p></section>
-    </div>
-    {decision.history.length > 0 && <details className="owner-package-history"><summary>Сохранённые решения · {decision.history.length}</summary><ol>{decision.history.map((item, index) => <li key={`${item.decidedAt}-${index}`}><strong>{item.verdict}</strong><span>{item.exactVersion}</span><small>{item.decidedAt}</small></li>)}</ol></details>}
-    {(decision.acceptHandle || decision.rejectHandle) && <footer>
-      {decision.rejectHandle && <button type="button" onClick={() => onDecision(decision.rejectHandle!)} disabled={busy}>Отклонить и вернуться к редактированию</button>}
-      {decision.acceptHandle && <button type="button" className="owner-package-accept" onClick={() => onDecision(decision.acceptHandle!)} disabled={busy}>{busy ? "Записываю решение…" : "Принять точный пакет"}</button>}
-    </footer>}
-  </section>;
-}
-
-function StrategyOwnerReview({
-  review,
-  busy,
-  onDecision,
-  onEdit,
-}: {
-  review: StrategyOwnerReviewProjection;
-  busy: boolean;
-  onDecision: (handle: string) => Promise<void>;
-  onEdit: (event: FormEvent<HTMLFormElement>, handle: string, fields: OwnerActionField[]) => Promise<void>;
-}) {
-  const [editing, setEditing] = useState(false);
-  return <section className="owner-strategy-review" data-review-status={review.status} aria-labelledby="owner-strategy-review-title">
-    <header>
-      <div><p className="owner-eyebrow">ОТДЕЛЬНЫЙ ШАГ ВЛАДЕЛЬЦА</p><h3 id="owner-strategy-review-title">Проверка точной версии стратегии</h3><p>Сначала проверьте весь бизнес-смысл и доказательства. Только отдельное подтверждение откроет черновики кампаний.</p></div>
-      <strong>{review.versionLabel} · {review.status}</strong>
-    </header>
-    <p className="owner-strategy-exactness">{review.exactBinding}</p>
-    <div className="owner-strategy-review-summary">{review.summary.map((item) => <article key={item.label}><span>{item.label}</span><strong>{item.value}</strong><p>{item.explanation}</p></article>)}</div>
-    <section className="owner-strategy-review-decisions" aria-labelledby="owner-strategy-decisions-title">
-      <h4 id="owner-strategy-decisions-title">Полная стратегия рядом с основаниями</h4>
-      <div>{review.decisions.map((item) => <article key={item.label}><header><strong>{item.label}</strong><span>{item.confidence}</span></header><p>{item.value}</p><small>{item.evidence}</small></article>)}</div>
-    </section>
-    <div className="owner-strategy-review-boundaries">
-      <section><h4>Альтернативы</h4><ul>{review.alternatives.map((item) => <li key={item}>{item}</li>)}</ul></section>
-      <section><h4>Ограничения и доказательства</h4><ul>{review.limitations.map((item) => <li key={item}>{item}</li>)}</ul></section>
-    </div>
-    {(review.rejectHandle || review.confirmHandle) && <footer>
-      {review.rejectHandle && <button type="button" onClick={() => onDecision(review.rejectHandle!)} disabled={busy}>Вернуться к редактированию</button>}
-      {review.confirmHandle && <button type="button" className="owner-strategy-confirm" onClick={() => onDecision(review.confirmHandle!)} disabled={busy}>{busy ? "Подтверждаю…" : "Подтвердить точную версию"}</button>}
-    </footer>}
-    {review.editorHandle && <div className="owner-strategy-version-editor">
-      <button type="button" onClick={() => setEditing((value) => !value)} aria-expanded={editing}>{editing ? "Закрыть редактор стратегии" : "Изменить стратегию"}</button>
-      {editing && <form onSubmit={(event) => onEdit(event, review.editorHandle!, review.editorFields)}>
-        <p>Существенное сохранение сразу отменит это подтверждение и закроет черновики до новой отдельной проверки. Нормализация без изменения смысла сохранит текущую версию.</p>
-        <div className="owner-fields">{review.editorFields.map((field) => <OwnerField key={field.key} field={field} />)}</div>
-        <footer><button type="button" onClick={(event) => { event.currentTarget.form?.reset(); setEditing(false); }}>Отменить правки</button><button type="submit" disabled={busy}>{busy ? "Сохраняю…" : "Сохранить и проверить новую версию"}</button></footer>
-      </form>}
-    </div>}
-  </section>;
-}
 
 function CampaignOption({
   campaign,
@@ -593,17 +425,15 @@ function CampaignOption({
 }) {
   const [editing, setEditing] = useState(false);
   const canEdit = Boolean(campaign.editor.publicationHandle || campaign.editor.protocolHandle);
-  return <article className={campaign.selected ? "selected" : ""} data-validation-status={campaign.editor.validationStatus}>
-    <header><span>{campaign.status} · {campaign.readiness}</span>{campaign.selected ? <b>Выбрана владельцем</b> : campaign.agentRecommended && <b>Рекомендация агента</b>}</header>
+  return <article>
+    <header><span>ТЕКУЩАЯ КАМПАНИЯ</span></header>
     <h3>{campaign.name}</h3>
     <div className="owner-draft-version">
-      <div><span>{campaign.editor.versionLabel}</span><strong>{campaign.editor.validationStatus}</strong><small>{campaign.editor.validationExplanation}</small></div>
+      <div><span>{campaign.editor.versionLabel}</span></div>
       {canEdit ? <button type="button" onClick={() => setEditing((value) => !value)} aria-expanded={editing}>{editing ? "Закрыть редактор" : "Редактировать черновик"}</button>
         : <span>Редактирование завершено</span>}
     </div>
-    {campaign.editor.feedback && <p className="owner-draft-feedback" role="status">{campaign.editor.feedback}</p>}
     <dl><div><dt>Предложение</dt><dd>{campaign.offer}</dd></div><div><dt>Аудитория</dt><dd>{campaign.audience}</dd></div><div><dt>Куда ведём</dt><dd>{campaign.destination}</dd></div></dl>
-    <OwnerViabilitySummary campaign={campaign} />
     {editing && <section className="owner-draft-editor" aria-label={`Редактор черновика «${campaign.name}»`}>
       <header><div><span>РУЧНОЕ РЕДАКТИРОВАНИЕ</span><h4>Точная сохранённая редакция кампании</h4></div><strong>Без технических идентификаторов</strong></header>
       <p>Каждая форма изменяет только эту кампанию. Существенная правка создаёт новую редакцию; отмена возвращает сохранённые значения.</p>
@@ -658,7 +488,7 @@ function CampaignOption({
 
 function Hero({ projection }: { projection: OwnerJourneyProjection }) {
   return <section className={styles.hero}>
-    <div><p className={styles.eyebrow}>P0 · ПРОИЗВОДСТВЕННЫЙ МОДУЛЬ</p><h1>Стратегия и рекламные кампании</h1><p>Агент ведёт владельца от бизнес-цели до точного пакета кампаний.</p></div>
+    <div><p className={styles.eyebrow}>P0 · ПРОИЗВОДСТВЕННЫЙ МОДУЛЬ</p><h1>Стратегия и рекламные кампании</h1><p>Агент ведёт владельца от бизнес-цели до готовых рекламных кампаний.</p></div>
     <div className={styles.heroOutcome}><span>Текущий результат</span><strong>{projection.businessOutcome.headline}</strong><small>{projection.businessOutcome.summary}</small></div>
   </section>;
 }
@@ -847,7 +677,7 @@ function AgentRail({ projection }: { projection: OwnerJourneyProjection }) {
       <h2>Карта автоматизации</h2>
       <div><span>Исследование</span><strong>АГЕНТ</strong></div>
       <div><span>Бизнес-смысл</span><strong>ИСПРАВЛЯЕТ ВЛАДЕЛЕЦ</strong></div>
-      <div><span>Точный пакет</span><strong>РАЗОВОЕ ПРАВО</strong></div>
+      <div><span>Текущие кампании</span><strong>ГОТОВИТ АГЕНТ</strong></div>
       <div><span>Запуск показов и расходов</span><strong className={styles.unavailable}>ЗАПРЕЩЁН В P0</strong></div>
     </section>
   </aside>;

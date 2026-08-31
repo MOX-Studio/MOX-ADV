@@ -37,17 +37,9 @@ test("production page consumes only the typed owner projection", () => {
   assert.doesNotMatch(clientSource, /schema_version|revision_history|provider_ids|publish_fingerprint/u);
 });
 
-test("owner measurement report renders all readiness states, explicit window and quality evidence", () => {
-  assert.match(clientSource, /data-measurement-state/u);
-  for (const label of ["Окно отчёта", "Достижения", "Свежесть", "Качество отчёта", "Все проверки измеримости"]) {
-    assert.match(clientSource, new RegExp(label, "u"));
-  }
-  for (const state of ["Готово", "Редкие данные", "Устарело", "Ошибка", "Недоступно"]) {
-    assert.match(ownerSource, new RegExp(state, "u"));
-  }
-  for (const quality of ["Выборка", "Приватность", "Задержка", "Размер"]) {
-    assert.match(ownerSource, new RegExp(quality, "u"));
-  }
+test("owner Dashboard does not promote legacy readiness checks to the main screen", () => {
+  assert.doesNotMatch(clientSource, /projection\.businessReadiness|data-measurement-state|Все проверки измеримости/u);
+  assert.match(ownerSource, /projectMeasurementReadinessForOwner/u);
 });
 
 test("goal interview renders recommendations, corrections, saved answers and accessible keyboard status without technical identifiers", () => {
@@ -68,22 +60,20 @@ test("goal interview renders recommendations, corrections, saved answers and acc
   assert.match(ownerStyles, /\.owner-interview\b/u);
 });
 
-test("owner gets a separate exact Strategy review with explicit confirm, reject and edit paths", () => {
-  for (const label of [
-    "Проверка точной версии стратегии",
-    "Полная стратегия рядом с основаниями",
-    "Альтернативы",
-    "Ограничения и доказательства",
-    "Вернуться к редактированию",
-    "Подтвердить точную версию",
-    "Изменить стратегию",
-  ]) {
-    assert.match(clientSource, new RegExp(label, "u"));
-  }
+test("owner Dashboard omits routine Strategy confirmation while preserving the historical contract", () => {
+  assert.doesNotMatch(clientSource, /Подтвердить точную версию|Проверка точной версии стратегии|StrategyOwnerReview/u);
   assert.match(ownerSource, /confirm_strategy_review/u);
   assert.match(ownerSource, /reject_strategy_review/u);
   assert.match(ownerSource, /review_strategy/u);
-  assert.match(ownerStyles, /\.owner-strategy-review\b/u);
+});
+
+test("owner Dashboard shows at most one actionable problem and explicit autonomous or terminal state", () => {
+  assert.match(clientSource, /projection\.cards\.find\(\(card\) => card\.kind === "human-decision-gate"\)/u);
+  assert.match(clientSource, /projection\.cards\.find\(\(card\) => card\.kind === "problem"\)/u);
+  assert.doesNotMatch(clientSource, /projection\.cards\.map/u);
+  assert.match(clientSource, /Агент продолжает работу/u);
+  assert.match(clientSource, /owner-terminal-result/u);
+  assert.match(ownerStyles, /\.owner-terminal-result\b/u);
 });
 
 test("owner Direct report omits the guidance cards below its verified details", () => {
@@ -102,7 +92,7 @@ test("competitor disclosure separates testable hypotheses from performance facts
 });
 
 test("owner interface fixes the accepted five stages and exposes only planned product modules", () => {
-  for (const label of ["Цель", "Что узнал агент", "Стратегия", "Кампании", "Проверка и создание"]) {
+  for (const label of ["Цель", "Что узнал агент", "Стратегия", "Кампании", "Проверка публикации"]) {
     assert.match(ownerSource, new RegExp(label, "u"));
   }
   for (const label of ["Стратегия", "Управление", "Мониторинг", "SEO", "Каналы", "VK · В РАЗРАБОТКЕ"]) {
