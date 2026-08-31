@@ -1,6 +1,13 @@
 import { validateCampaignPairs } from "./campaign-pair-validation.ts";
 import type { GoalCandidate } from "./goal-revision.ts";
 import {
+  CURRENT_GOAL_SCHEMA,
+  goalDependencies,
+  reviseCurrentGoal,
+  type CurrentGoal,
+  type CurrentGoalStore,
+} from "./goal-revision-lifecycle.ts";
+import {
   PIPELINE_INPUT_VERSIONS_SCHEMA,
   PIPELINE_STAGES,
   PipelineOrchestrator,
@@ -47,6 +54,8 @@ export type OwnerPipelineProjection = {
         provenance: string[];
         knownConstraints: string[];
         ownerConfirmationRequired: false;
+        rebuildRequired: string[];
+        canCorrect: boolean;
       }
     | {
         status: "MATERIAL_DECISION_REQUIRED";
@@ -221,7 +230,7 @@ function stageLabel(stageId: PipelineStageId) {
   return PIPELINE_STAGES.find((stage) => stage.id === stageId)?.label ?? stageId;
 }
 
-export function projectOwnerPipeline(run: PipelineRunState | null): OwnerPipelineProjection {
+export function projectOwnerPipeline(run: PipelineRunState | null, currentGoal: CurrentGoal | null = null): OwnerPipelineProjection {
   if (!run) {
     return {
       runId: null,
@@ -241,19 +250,34 @@ export function projectOwnerPipeline(run: PipelineRunState | null): OwnerPipelin
         tone: "pending",
       })),
       return: null,
-      goalFormation: { status: "PENDING" },
+      goalFormation: currentGoal ? {
+        status: "VERIFIED",
+        versionLabel: `Версия ${currentGoal.revision.version}`,
+        desiredOutcome: currentGoal.revision.desired_outcome,
+        qualifiedAction: currentGoal.revision.qualified_action,
+        provenance: currentGoal.revision.provenance.map((item) => `${item.evidence} · ${item.locator}`),
+        knownConstraints: currentGoal.revision.known_constraints.map((item) => item.constraint),
+        ownerConfirmationRequired: false,
+        rebuildRequired: currentGoal.invalidation?.dependencies.map((item) => item.explanation) ?? [],
+        canCorrect: true,
+      } : { status: "PENDING" },
       canStart: true,
       canStop: false,
     };
   }
-  const stateText = run.status === "ACTIVE"
-    ? `Выполняется этап «${stageLabel(run.current_stage)}».`
-    : run.status === "STOPPED"
-      ? `Запуск остановлен на этапе «${stageLabel(run.current_stage)}». Следующий запуск будет новым.`
-      : run.status === "COMPLETED"
-        ? "Пять этапов завершены. Внешняя запись не выполнялась."
-        : "Запуск завершён технической ошибкой без внешней записи.";
-  const persistedGoalFormation = run.goal_formation;
+  const goalInvalidated = Boolean(currentGoal?.invalidation);
+  const stateText = goalInvalidated
+    ? "Текущая Цель исправлена. Зависимые результаты помечены для пересборки в новом запуске."
+    : run.status === "ACTIVE"
+      ? `Выполняется этап «${stageLabel(run.current_stage)}».`
+      : run.status === "STOPPED"
+        ? `Запуск остановлен на этапе «${stageLabel(run.current_stage)}». Следующий запуск будет новым.`
+        : run.status === "COMPLETED"
+          ? "Пять этапов завершены. Внешняя запись не выполнялась."
+          : "Запуск завершён технической ошибкой без внешней записи.";
+  const persistedGoalFormation = currentGoal
+    ? { status: "VERIFIED" as const, revision: currentGoal.revision }
+    : run.goal_formation;
   const goalFormation: OwnerPipelineProjection["goalFormation"] = persistedGoalFormation.status === "VERIFIED"
     ? {
         status: "VERIFIED",
@@ -263,6 +287,8 @@ export function projectOwnerPipeline(run: PipelineRunState | null): OwnerPipelin
         provenance: persistedGoalFormation.revision.provenance.map((item) => `${item.evidence} · ${item.locator}`),
         knownConstraints: persistedGoalFormation.revision.known_constraints.map((item) => item.constraint),
         ownerConfirmationRequired: false,
+        rebuildRequired: currentGoal?.invalidation?.dependencies.map((item) => item.explanation) ?? [],
+        canCorrect: run.status !== "ACTIVE",
       }
     : persistedGoalFormation.status === "MATERIAL_DECISION_REQUIRED"
       ? {
@@ -285,14 +311,18 @@ export function projectOwnerPipeline(run: PipelineRunState | null): OwnerPipelin
     status: run.status,
     active: run.status === "ACTIVE",
     editingLocked: run.status === "ACTIVE",
-    currentStage: OWNER_STAGE_BY_PIPELINE[run.current_stage],
-    currentTask: run.status === "ACTIVE" ? TASK_BY_STAGE[run.current_stage] : stateText,
+    currentStage: goalInvalidated ? "goal" : OWNER_STAGE_BY_PIPELINE[run.current_stage],
+    currentTask: goalInvalidated
+      ? "Сохранённая правка Цели готова для нового запуска."
+      : run.status === "ACTIVE" ? TASK_BY_STAGE[run.current_stage] : stateText,
     stateText,
-    stages: run.stages.map((stage) => ({
+    stages: run.stages.map((stage, index) => ({
       id: OWNER_STAGE_BY_PIPELINE[stage.id],
       pipelineStageId: stage.id,
       label: stage.label,
-      ...PRESENTATION_BY_STATUS[stage.status],
+      ...(goalInvalidated
+        ? PRESENTATION_BY_STATUS[index === 0 ? "COMPLETED" : "PENDING"]
+        : PRESENTATION_BY_STATUS[stage.status]),
     })),
     return: run.last_transition.kind === "RETURN" && run.last_transition.source_stage && run.last_transition.target_stage
       ? {
@@ -309,17 +339,39 @@ export function projectOwnerPipeline(run: PipelineRunState | null): OwnerPipelin
 
 export class OwnerPipelineController {
   private readonly orchestrator: PipelineOrchestrator;
+  private readonly goalStore: CurrentGoalStore | null;
+  private readonly now: () => string;
 
-  constructor(store: PipelineRunStore, input: { now?: () => string; newRunId?: () => string } = {}) {
+  constructor(
+    store: PipelineRunStore,
+    input: { now?: () => string; newRunId?: () => string; goalStore?: CurrentGoalStore } = {},
+  ) {
     this.orchestrator = new PipelineOrchestrator({ store, ...input });
+    this.goalStore = input.goalStore ?? null;
+    this.now = input.now ?? (() => new Date().toISOString());
   }
 
   async current(ownerKey: string) {
-    return projectOwnerPipeline(await this.orchestrator.current(ownerKey));
+    const [run, goal] = await Promise.all([
+      this.orchestrator.current(ownerKey),
+      this.goalStore?.loadCurrent(ownerKey) ?? null,
+    ]);
+    return projectOwnerPipeline(run, goal);
   }
 
   async start(ownerKey: string, view: PipelineHistoricalView) {
-    return projectOwnerPipeline(await this.orchestrator.start(ownerKey, await pipelineInputVersions(view)));
+    const [versions, currentGoal] = await Promise.all([
+      pipelineInputVersions(view),
+      this.goalStore?.loadCurrent(ownerKey) ?? null,
+    ]);
+    if (currentGoal) {
+      versions.goal_revision = {
+        schema_version: currentGoal.revision.schema_version,
+        revision_id: currentGoal.revision.goal_revision_id,
+        digest: currentGoal.revision.digest,
+      };
+    }
+    return projectOwnerPipeline(await this.orchestrator.start(ownerKey, versions), currentGoal);
   }
 
   async recordGoalCandidate(ownerKey: string, input: { runId: string; expectedVersion: number; candidate: GoalCandidate }) {
@@ -327,11 +379,46 @@ export class OwnerPipelineController {
     if (!current || current.run_id !== input.runId) {
       throw new Error("Активный запуск изменился. Обновите Dashboard.");
     }
-    return projectOwnerPipeline(await this.orchestrator.recordGoalCandidate({
+    const run = await this.orchestrator.recordGoalCandidate({
       run_id: input.runId,
       expected_version: input.expectedVersion,
       candidate: input.candidate,
-    }));
+    });
+    let savedGoal = await this.goalStore?.loadCurrent(ownerKey) ?? null;
+    if (this.goalStore && run.goal_formation.status === "VERIFIED" && !savedGoal) {
+      const formed: CurrentGoal = {
+        schema_version: CURRENT_GOAL_SCHEMA,
+        owner_key: ownerKey,
+        revision: run.goal_formation.revision,
+        source: "GOAL_AGENT",
+        invalidation: null,
+      };
+      if (!await this.goalStore.append(formed, null)) throw new Error("Текущая Цель изменилась. Обновите Dashboard.");
+      savedGoal = formed;
+    }
+    return projectOwnerPipeline(run, savedGoal);
+  }
+
+  async correctGoal(ownerKey: string, input: { desiredOutcome: string; qualifiedAction: string }) {
+    if (!this.goalStore) throw new Error("Хранилище текущей Цели недоступно.");
+    const [run, currentGoal] = await Promise.all([
+      this.orchestrator.current(ownerKey),
+      this.goalStore.loadCurrent(ownerKey),
+    ]);
+    if (run?.status === "ACTIVE") throw new Error("Остановите активный запуск перед исправлением Цели.");
+    if (!currentGoal) throw new Error("Сначала сформируйте проверенную Цель.");
+    const result = await reviseCurrentGoal({
+      current: currentGoal,
+      desired_outcome: input.desiredOutcome,
+      qualified_action: input.qualifiedAction,
+      corrected_at: this.now(),
+      dependencies: run ? goalDependencies(run.input_versions) : [],
+    });
+    if (result.material_change
+      && !await this.goalStore.append(result.current, currentGoal.revision.version)) {
+      throw new Error("Текущая Цель изменилась. Обновите Dashboard.");
+    }
+    return projectOwnerPipeline(run, result.current);
   }
 
   async stop(ownerKey: string, input: { runId: string; expectedVersion: number }) {
@@ -339,9 +426,10 @@ export class OwnerPipelineController {
     if (!current || current.run_id !== input.runId) {
       throw new Error("Активный запуск изменился. Обновите Dashboard.");
     }
-    return projectOwnerPipeline(await this.orchestrator.stop({
+    const stopped = await this.orchestrator.stop({
       run_id: input.runId,
       expected_version: input.expectedVersion,
-    }));
+    });
+    return projectOwnerPipeline(stopped, await this.goalStore?.loadCurrent(ownerKey) ?? null);
   }
 }

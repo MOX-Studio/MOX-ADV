@@ -223,6 +223,31 @@ export default function P0Client() {
     }
   }
 
+  async function submitGoalCorrection(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy) return;
+    const values = new FormData(event.currentTarget);
+    setBusy(true);
+    setError("");
+    try {
+      const next = await request("/api/p0", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pipeline_action: "CORRECT_GOAL",
+          desired_outcome: String(values.get("desired_outcome") ?? ""),
+          qualified_action: String(values.get("qualified_action") ?? ""),
+        }),
+      });
+      setProjection(next);
+      setSelectedStage("goal");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function submitPipelineAction(action: "START" | "STOP") {
     if (busy) return;
     const pipeline = projection?.pipeline;
@@ -260,9 +285,12 @@ export default function P0Client() {
   const activeStage = selectedStage ?? authoritativeStage(projection);
   const publicationReviewHandoff = projection.pipeline?.status === "COMPLETED"
     && projection.pipeline.currentStage === "review";
+  const pipelineStage = projection.pipeline?.stages.find((stage) => stage.id === activeStage);
   const activeStageStatus = publicationReviewHandoff && activeStage === "review"
     ? "complete"
-    : projection.journey.stages.find((stage) => stage.id === activeStage)?.status ?? "upcoming";
+    : pipelineStage
+      ? pipelineStage.tone === "complete" ? "complete" : pipelineStage.tone === "active" ? "current" : "upcoming"
+      : projection.journey.stages.find((stage) => stage.id === activeStage)?.status ?? "upcoming";
   const viewingCurrentStage = activeStage === (projection.pipeline?.currentStage ?? projection.journey.currentStage);
 
   function chooseStage(stage: OwnerJourneyStageId) {
@@ -296,8 +324,8 @@ export default function P0Client() {
 
           {activeStageStatus === "upcoming" && <StageUnavailable projection={projection} stage={activeStage} />}
           {activeStage === "goal" && activeStageStatus !== "upcoming" && <GoalStageSummary projection={projection} />}
-          {activeStage === "goal" && activeStageStatus !== "upcoming" && projection.pipeline && <GoalFormationSummary pipeline={projection.pipeline} />}
-          {activeStage === "goal" && activeStageStatus !== "upcoming" && projection.goalInterview && <GoalInterview
+          {activeStage === "goal" && activeStageStatus !== "upcoming" && projection.pipeline && <GoalFormationSummary pipeline={projection.pipeline} busy={busy} onCorrect={submitGoalCorrection} />}
+          {activeStage === "goal" && activeStageStatus !== "upcoming" && projection.goalInterview && projection.pipeline?.goalFormation.status !== "VERIFIED" && <GoalInterview
             interview={projection.goalInterview}
             busy={busy}
             headingRef={interviewHeadingRef}
@@ -701,7 +729,15 @@ function StageNavigation({ projection, selectedStage, onStage }: { projection: O
   </ol>;
 }
 
-function GoalFormationSummary({ pipeline }: { pipeline: PipelineProjection }) {
+function GoalFormationSummary({
+  pipeline,
+  busy,
+  onCorrect,
+}: {
+  pipeline: PipelineProjection;
+  busy: boolean;
+  onCorrect: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+}) {
   const formation = pipeline.goalFormation;
   if (formation.status === "PENDING") {
     return <section className="owner-goal-formation" data-goal-status="PENDING" aria-live="polite">
@@ -717,6 +753,13 @@ function GoalFormationSummary({ pipeline }: { pipeline: PipelineProjection }) {
         <section><h3>Доказательства</h3><ul>{formation.provenance.map((item) => <li key={item}>{item}</li>)}</ul></section>
         <section><h3>Известные ограничения</h3>{formation.knownConstraints.length ? <ul>{formation.knownConstraints.map((item) => <li key={item}>{item}</li>)}</ul> : <p>Дополнительные известные ограничения не зафиксированы.</p>}</section>
       </div>
+      {formation.rebuildRequired.length > 0 && <section className="owner-goal-rebuild" role="status"><h3>Что требует пересборки</h3><ul>{formation.rebuildRequired.map((item) => <li key={item}>{item}</li>)}</ul><p>Независимые результаты не аннулируются.</p></section>}
+      {formation.canCorrect && <form className="owner-goal-correction" onSubmit={onCorrect}>
+        <h3>Исправить текущую Цель</h3><p>Существенная правка создаст новую редакцию и аннулирует только зависимые сведения, Strategy и пары.</p>
+        <label><span>Желаемый бизнес-результат</span><textarea name="desired_outcome" defaultValue={formation.desiredOutcome} required maxLength={1000} /></label>
+        <label><span>Квалифицированное действие</span><textarea name="qualified_action" defaultValue={formation.qualifiedAction} required maxLength={1000} /></label>
+        <button type="submit" disabled={busy}>{busy ? "Сохраняю…" : "Сохранить исправление"}</button>
+      </form>}
     </section>;
   }
   return <section className="owner-goal-formation owner-goal-decision" data-goal-status="MATERIAL_DECISION_REQUIRED" aria-labelledby="owner-goal-decision-title">
@@ -732,12 +775,15 @@ function GoalFormationSummary({ pipeline }: { pipeline: PipelineProjection }) {
 }
 
 function GoalStageSummary({ projection }: { projection: OwnerJourneyProjection }) {
+  const currentGoal = projection.pipeline?.goalFormation.status === "VERIFIED"
+    ? projection.pipeline.goalFormation
+    : null;
   const qualifiedResult = projection.businessModel?.fields.find((field) => field.label === "Квалифицированный результат");
   return <section className="owner-stage-summary" aria-labelledby="owner-goal-summary-title">
     <header><div><p className="owner-eyebrow">ЦЕЛЬ</p><h2 id="owner-goal-summary-title">Цель и бизнес-результат</h2></div><strong>{projection.campaignGoalConfirmed ? "Сформирована" : projection.campaignGoal ? "Рекомендация агента" : "Текущий этап"}</strong></header>
     <div>
-      <article><span>Цель рекламной кампании</span><strong>{projection.campaignGoal ?? "Агент готовит рекомендацию"}</strong><p>{projection.campaignGoalConfirmed ? "Цель сохранена после подтверждения и определяет бизнес-смысл дальнейшей стратегии." : "Это подготовленная рекомендация; владелец может исправить её перед сохранением."}</p></article>
-      <article><span>Качественный результат</span><strong>{qualifiedResult?.value ?? projection.businessOutcome.headline}</strong><p>{qualifiedResult?.limitation ?? projection.businessOutcome.summary}</p></article>
+      <article><span>Цель рекламной кампании</span><strong>{currentGoal?.desiredOutcome ?? projection.campaignGoal ?? "Агент готовит рекомендацию"}</strong><p>{currentGoal ? "Показана только текущая проверенная редакция Цели." : projection.campaignGoalConfirmed ? "Цель сохранена после подтверждения и определяет бизнес-смысл дальнейшей стратегии." : "Это подготовленная рекомендация; владелец может исправить её перед сохранением."}</p></article>
+      <article><span>Качественный результат</span><strong>{currentGoal?.qualifiedAction ?? qualifiedResult?.value ?? projection.businessOutcome.headline}</strong><p>{currentGoal ? "Текущее квалифицированное действие связано с этой редакцией Цели." : qualifiedResult?.limitation ?? projection.businessOutcome.summary}</p></article>
       <article><span>Целевая стоимость результата</span><strong>{projection.businessModel?.economics.targetResultCost ?? "Будет рассчитана после подтверждения экономики"}</strong><p>{projection.businessModel?.economics.explanation ?? "Агент сначала проверяет доступные факты и готовит цель для решения владельца."}</p></article>
     </div>
   </section>;

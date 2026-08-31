@@ -8,6 +8,7 @@ import {
   userKey,
 } from "../../../lib/p0";
 import { D1PipelineRunStore } from "../../../lib/pipeline-orchestrator-d1-store";
+import { D1CurrentGoalStore } from "../../../lib/goal-revision-d1-store";
 import {
   OwnerPipelineController,
   type PipelineHistoricalView,
@@ -46,7 +47,9 @@ async function fixtureBackend(request: Request) {
 }
 
 function pipelineController() {
-  return new OwnerPipelineController(new D1PipelineRunStore(env.DB));
+  return new OwnerPipelineController(new D1PipelineRunStore(env.DB), {
+    goalStore: new D1CurrentGoalStore(env.DB),
+  });
 }
 
 async function backend(request: Request) {
@@ -95,6 +98,13 @@ export async function POST(request: Request) {
       const pipeline = await controller.stop(key, {
         runId: String(payload.run_id ?? ""),
         expectedVersion: Number(payload.expected_version),
+      });
+      return Response.json({ ...(await currentBackend.snapshot()), pipeline }, { status: 201 });
+    }
+    if (pipelineAction === "CORRECT_GOAL") {
+      const pipeline = await controller.correctGoal(key, {
+        desiredOutcome: String(payload.desired_outcome ?? ""),
+        qualifiedAction: String(payload.qualified_action ?? ""),
       });
       return Response.json({ ...(await currentBackend.snapshot()), pipeline }, { status: 201 });
     }

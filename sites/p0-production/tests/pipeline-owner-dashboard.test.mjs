@@ -10,6 +10,7 @@ import { PipelineOrchestrator } from "../lib/pipeline-orchestrator.ts";
 
 class MemoryPipelineStore {
   runs = new Map();
+  auditEvents = new Map();
   order = [];
 
   async load(runId) {
@@ -26,17 +27,23 @@ class MemoryPipelineStore {
     return state ? structuredClone(state) : null;
   }
 
-  async initialize(state) {
+  async loadAudit(runId) {
+    return structuredClone(this.auditEvents.get(runId) ?? []);
+  }
+
+  async initialize(state, event) {
     if (this.runs.has(state.run_id) || await this.loadActive(state.owner_key)) return false;
     this.runs.set(state.run_id, structuredClone(state));
+    this.auditEvents.set(state.run_id, [structuredClone(event)]);
     this.order.push(state.run_id);
     return true;
   }
 
-  async compareAndSwap(runId, expectedVersion, state) {
+  async compareAndSwap(runId, expectedVersion, state, event) {
     const current = this.runs.get(runId);
     if (!current || current.version !== expectedVersion) return false;
     this.runs.set(runId, structuredClone(state));
+    this.auditEvents.set(runId, [...(this.auditEvents.get(runId) ?? []), structuredClone(event)]);
     return true;
   }
 }
@@ -53,6 +60,32 @@ function goalCandidate(materialAmbiguity = null) {
     ],
     known_constraints: [{ constraint: "Исключить случайные обращения", input_ids: ["business_input"] }],
     material_ambiguity: materialAmbiguity,
+  };
+}
+
+function verifiedAttempt(run, stage, character) {
+  const reference = (name) => ({
+    schema_version: `${name}-v1`,
+    revision_id: `${name}-1`,
+    digest: `sha256:${character.repeat(64)}`,
+  });
+  return {
+    actor: { actor_id: `strategy-agent-${stage.toLowerCase()}`, actor_type: "AGENT", role: "STAGE_EXECUTOR" },
+    inputs: [run.input_versions.business_input],
+    evidence: [run.input_versions.analytics_evidence_snapshot ?? run.input_versions.business_input],
+    output: reference(`${stage.toLowerCase()}-output`),
+    checks: [{ check_id: `${stage}_CHECK`, status: "PASSED", policy: run.input_versions.pipeline_policy }],
+    schemas: [reference(`${stage.toLowerCase()}-schema`)],
+    policies: [run.input_versions.pipeline_policy],
+    campaign_playbook: run.input_versions.campaign_playbook,
+  };
+}
+
+function discardedAttempt(run, stage, character) {
+  const attempt = verifiedAttempt(run, stage, character);
+  return {
+    ...attempt,
+    checks: [{ ...attempt.checks[0], status: "FAILED" }],
   };
 }
 
@@ -211,9 +244,9 @@ test("Dashboard projection names the return source, exact reason and determinist
     expected_version: run.version,
     candidate: goalCandidate(),
   });
-  for (const [source, code] of [
-    ["EVIDENCE_COLLECTION", "EVIDENCE_VERIFIED"],
-    ["STRATEGY", "STRATEGY_VERIFIED"],
+  for (const [source, code, character] of [
+    ["EVIDENCE_COLLECTION", "EVIDENCE_VERIFIED", "a"],
+    ["STRATEGY", "STRATEGY_VERIFIED", "b"],
   ]) {
     run = await orchestrator.advance({
       run_id: run.run_id,
@@ -221,6 +254,7 @@ test("Dashboard projection names the return source, exact reason and determinist
       source_stage: source,
       reason_code: code,
       reason: "Проверенный выход сохранён детерминированным оркестратором.",
+      attempt: verifiedAttempt(run, source, character),
     });
   }
   run = await orchestrator.returnTo({
@@ -229,6 +263,7 @@ test("Dashboard projection names the return source, exact reason and determinist
     source_stage: "CAMPAIGNS",
     cause: "STRATEGY_DEFECT",
     reason: "Для полного черновика не хватает точной географии в Strategy.",
+    attempt: discardedAttempt(run, "CAMPAIGNS", "c"),
   });
 
   const projection = projectOwnerPipeline(run);

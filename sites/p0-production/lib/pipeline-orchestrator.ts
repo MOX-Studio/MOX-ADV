@@ -577,7 +577,7 @@ export function pipelineGoalInputReferences(input: PipelineInputVersions): GoalI
     input_id: "business_input",
     ...input.business_input,
   }];
-  if (input.goal_revision) references.push({ input_id: "prior_goal_revision", ...input.goal_revision });
+  if (input.goal_revision) references.push({ input_id: "priority_goal_revision", ...input.goal_revision });
   return references;
 }
 
