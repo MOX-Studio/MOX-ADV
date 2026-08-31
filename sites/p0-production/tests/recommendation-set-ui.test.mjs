@@ -23,6 +23,7 @@ const recommendationSet = {
     generated_count: 4,
     visible_count: 3,
     hidden_count: 1,
+    current_campaign_pairs: 3,
     reconciliation: { generated_equals_visible_plus_hidden: true },
   },
   capability_profile: {
@@ -56,18 +57,17 @@ const recommendationSet = {
   }],
 };
 
-test("Recommendation Set UI discloses reconciled audit counts plus exact capability and playbook lineage", async (t) => {
+test("Recommendation Set UI shows only current complete pairs while keeping internal candidate audit private", async (t) => {
   const { RecommendationSetDisclosure } = await loadComponents(t);
   const html = renderToStaticMarkup(React.createElement(RecommendationSetDisclosure, { recommendationSet }));
-  assert.match(html, /4 создано/);
-  assert.match(html, /3 видимых · 1 скрытых · сверка успешна/);
+  assert.match(html, /3 полных пар/);
+  assert.match(html, /внутренние отброшенные направления не являются результатом/);
   assert.match(html, /p0-curated-playbook-2026-08@1.0.0/);
   assert.match(html, /Активно и утверждено/);
   assert.match(html, /UNIFIED_CAMPAIGN · UNIFIED_AD_GROUP · EXPLICIT_KEYWORDS · RESPONSIVE_AD/);
   assert.match(html, /стратегия поиска WB_MAXIMUM_CLICKS · стратегия сетей Показы отключены/);
   assert.match(html, /direct-capability:owner-account:core/);
-  assert.match(html, /Проверка скрытых кандидатов · 1/);
-  assert.match(html, /HIDDEN:PLAYBOOK_RULE_CONTRADICTED/);
+  assert.doesNotMatch(html, /playbook-rule:contradicted|HIDDEN:PLAYBOOK_RULE_CONTRADICTED/);
   assert.match(html, /Пока нет честно жизнеспособных кампаний/);
   assert.match(html, /AUCTION_PROTOCOL_PREREGISTRATION_PENDING/);
 });

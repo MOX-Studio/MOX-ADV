@@ -15,23 +15,22 @@ test("Campaign Canvas applies deterministic variant and evidence-status filters 
     variant: "IMPROVEMENT",
     evidence: "AVAILABLE",
     sort: "RANK",
-    includeHidden: false,
   });
   assert.deepEqual(result.map((draft) => draft.draft_id), ["draft-a"]);
 
-  const tied = filterAndSortCampaignDrafts(drafts, { variant: "ALL", evidence: "ALL", sort: "RANK", includeHidden: false });
+  const tied = filterAndSortCampaignDrafts(drafts, { variant: "ALL", evidence: "ALL", sort: "RANK" });
   assert.deepEqual(tied.map((draft) => draft.draft_id), ["draft-a", "draft-b", "draft-c"]);
   assert.equal(tied[0].viability_score.rank, tied[1].viability_score.rank);
 });
 
-test("rank and score sorting use stable IDs only for equal display values and hidden Drafts remain discoverable", () => {
+test("rank and score sorting use stable IDs while internal hidden candidates never become Dashboard results", () => {
   assert.deepEqual(
-    filterAndSortCampaignDrafts(drafts, { variant: "ALL", evidence: "ALL", sort: "SCORE", includeHidden: true }).map((draft) => draft.draft_id),
-    ["draft-a", "draft-b", "draft-c", "draft-hidden"],
+    filterAndSortCampaignDrafts(drafts, { variant: "ALL", evidence: "ALL", sort: "SCORE" }).map((draft) => draft.draft_id),
+    ["draft-a", "draft-b", "draft-c"],
   );
   assert.deepEqual(
-    filterAndSortCampaignDrafts(drafts, { variant: "ALL", evidence: "EVIDENCE_GAP", sort: "RANK", includeHidden: true }).map((draft) => draft.draft_id),
-    ["draft-hidden"],
+    filterAndSortCampaignDrafts(drafts, { variant: "ALL", evidence: "EVIDENCE_GAP", sort: "RANK" }).map((draft) => draft.draft_id),
+    [],
   );
   assert.equal(drafts[3].suppression_reason, "HIDDEN:NO_MATERIAL_DELTA");
 });

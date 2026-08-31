@@ -12,8 +12,6 @@ const changedFamilyLabels: Record<string, string> = {
 };
 
 export function RecommendationSetDisclosure({ recommendationSet }: { recommendationSet: Record<string, any> }) {
-  const candidateAudit = Array.isArray(recommendationSet.candidate_audit) ? recommendationSet.candidate_audit : [];
-  const hiddenAudit = candidateAudit.filter((item: Record<string, any>) => item.visibility === "HIDDEN");
   const coverage = recommendationSet.coverage || {};
   const profile = recommendationSet.capability_profile || {};
   const playbook = recommendationSet.playbook_release || {};
@@ -22,7 +20,7 @@ export function RecommendationSetDisclosure({ recommendationSet }: { recommendat
   const repairPlan = Array.isArray(viabilityOutcome.repair_plan) ? viabilityOutcome.repair_plan : [];
   return <>
     <div className="context-strip">
-      <div><span>Покрытие</span><strong>{coverage.generated_count ?? candidateAudit.length} создано</strong><small>{coverage.visible_count ?? 0} видимых · {coverage.hidden_count ?? hiddenAudit.length} скрытых · сверка {coverage.reconciliation?.generated_equals_visible_plus_hidden ? "успешна" : "заблокирована"}</small></div>
+      <div><span>Текущий набор</span><strong>{coverage.current_campaign_pairs ?? coverage.visible_drafts ?? 0} полных пар</strong><small>Показаны только текущие Campaign Hypothesis + Campaign Draft; внутренние отброшенные направления не являются результатом.</small></div>
       <div><span>Профиль Яндекс Директа</span><strong>Единая кампания · Поиск</strong><small>{profile.profile_id || "—"}@{profile.profile_version || "—"} · стратегия поиска {profile.search_strategy || "не указана"} · стратегия сетей {machineLabel(profile.network_strategy, "показы отключены")}</small></div>
       <div><span>Безопасный финиш</span><strong>Только остановленная кампания</strong><small>Явная остановка подтверждается до дочерних записей</small></div>
     </div>
@@ -32,7 +30,6 @@ export function RecommendationSetDisclosure({ recommendationSet }: { recommendat
       <div><strong>Правила сравнительной оценки</strong><code>{scoreContract.version || "viability-score/1.0.0"}</code><small>18 спрос · 12 стоимость · 20 экономика · 18 соответствие · 12 Директ · 10 измерение · 10 доказательства = 100% · середина для неизвестного 50</small></div>
     </section>
     {viabilityOutcome.status === "NO_VIABLE_DRAFTS" && <section className="wide viability-summary blocked" aria-label="Нет жизнеспособных черновиков"><strong>Пока нет честно жизнеспособных кампаний</strong><p>Положительный результат не подставляется принудительно. Выполните приоритетный план и пересчитайте exact revision.</p><ol>{repairPlan.map((item: Record<string, any>) => <li key={item.code}><b>{item.priority}. {item.code}</b> · {localizedText(item.action)}</li>)}</ol></section>}
-    {hiddenAudit.length > 0 && <details className="hidden-drafts"><summary>Проверка скрытых кандидатов · {hiddenAudit.length}</summary><ul>{hiddenAudit.map((item: Record<string, any>) => <li key={item.candidate_id}><strong>{machineLabel(item.candidate_type)}{item.playbook_rule_id ? ` · ${item.playbook_rule_id}` : ""}</strong><span>{item.reason_code}{item.draft_id ? ` · ${item.draft_id}` : ""}</span></li>)}</ul></details>}
   </>;
 }
 

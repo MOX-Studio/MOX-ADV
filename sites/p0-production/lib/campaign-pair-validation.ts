@@ -8,7 +8,7 @@ import { fingerprintDirectProjection } from "./campaign-fanout.ts";
 import { strategyAnswerValue, strategyPeriod } from "./campaign-strategy.ts";
 
 export const CAMPAIGN_PAIR_VALIDATION_SCHEMA = "campaign-pair-validation-v1";
-export const CAMPAIGN_PAIR_VALIDATION_CONTRACT = "1.0.0";
+export const CAMPAIGN_PAIR_VALIDATION_CONTRACT = "1.1.0";
 
 export type CampaignPairViolationCategory =
   | "PAIR_COMPLETENESS"
@@ -42,12 +42,20 @@ export type CampaignPairCheck = {
   violations: CampaignPairViolation[];
 };
 
+export type CampaignPairRequiredRequestPackage = {
+  schema_version: "campaign-pair-required-request-package-v1";
+  atomic: true;
+  requests: CampaignPairViolation[];
+};
+
 export type CampaignPairValidationResult = {
   schema_version: typeof CAMPAIGN_PAIR_VALIDATION_SCHEMA;
   contract_version: typeof CAMPAIGN_PAIR_VALIDATION_CONTRACT;
   strategy_revision_id: string | null;
   evidence_snapshot_id: string | null;
   field_registry_schema: string;
+  set_disposition: "CURRENT_PAIRS_AVAILABLE" | "BLOCKED_SHARED_REQUIREMENT" | "NO_CURRENT_PAIRS";
+  required_request_package: CampaignPairRequiredRequestPackage | null;
   pairs: CampaignPairCheck[];
 };
 
@@ -66,6 +74,14 @@ const list = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
 
 function exactKeys(value: object, keys: string[]) {
   return JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort());
+}
+
+function validViolationItem(item: CampaignPairViolation) {
+  return Boolean(item) && exactKeys(item, ["category", "code", "executor", "return_target", "pointer", "message"])
+    && ["PAIR_COMPLETENESS", "FIELD_APPLICABILITY", "POLICY", "EVIDENCE", "DIRECT_CAPABILITY"].includes(item.category)
+    && ["STRATEGY_AGENT", "CAMPAIGN_DESIGN_AGENT", "EVIDENCE_ANALYST", "DIRECT_COMPILER"].includes(item.executor)
+    && ["STRATEGY", "EVIDENCE_COLLECTION", "CAMPAIGNS"].includes(item.return_target)
+    && CODE.test(item.code) && Boolean(text(item.pointer)) && Boolean(text(item.message));
 }
 
 function violation(
@@ -481,12 +497,30 @@ export async function validateCampaignPairs(input: ValidationInput): Promise<Cam
     });
   }
 
+  const sharedViolations = pairs.length === 0 ? [] : pairs[0].violations.filter((candidate) =>
+    pairs.every((pair) => pair.violations.some((item) =>
+      item.category === candidate.category
+      && item.code === candidate.code
+      && item.executor === candidate.executor
+      && item.return_target === candidate.return_target
+      && item.pointer === candidate.pointer
+      && item.message === candidate.message
+    ))
+  );
+  const requiredRequestPackage: CampaignPairRequiredRequestPackage | null = sharedViolations.length > 0 ? {
+    schema_version: "campaign-pair-required-request-package-v1",
+    atomic: true,
+    requests: sharedViolations,
+  } : null;
   return {
     schema_version: CAMPAIGN_PAIR_VALIDATION_SCHEMA,
     contract_version: CAMPAIGN_PAIR_VALIDATION_CONTRACT,
     strategy_revision_id: strategyRevisionId || null,
     evidence_snapshot_id: text(analyticsEvidence.snapshot_id) || null,
     field_registry_schema: text(record(recommendationSet.field_registry).schema_version),
+    set_disposition: requiredRequestPackage ? "BLOCKED_SHARED_REQUIREMENT"
+      : pairs.some((pair) => pair.included) ? "CURRENT_PAIRS_AVAILABLE" : "NO_CURRENT_PAIRS",
+    required_request_package: requiredRequestPackage,
     pairs,
   };
 }
@@ -494,14 +528,28 @@ export async function validateCampaignPairs(input: ValidationInput): Promise<Cam
 export function assertCampaignPairValidationResult(value: unknown): asserts value is CampaignPairValidationResult {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Campaign pair validation result is required.");
   const result = value as CampaignPairValidationResult;
-  if (!exactKeys(result, ["schema_version", "contract_version", "strategy_revision_id", "evidence_snapshot_id", "field_registry_schema", "pairs"])
+  if (!exactKeys(result, ["schema_version", "contract_version", "strategy_revision_id", "evidence_snapshot_id", "field_registry_schema", "set_disposition", "required_request_package", "pairs"])
     || result.schema_version !== CAMPAIGN_PAIR_VALIDATION_SCHEMA
     || result.contract_version !== CAMPAIGN_PAIR_VALIDATION_CONTRACT
     || (result.strategy_revision_id !== null && !text(result.strategy_revision_id))
     || (result.evidence_snapshot_id !== null && !text(result.evidence_snapshot_id))
     || typeof result.field_registry_schema !== "string"
+    || !["CURRENT_PAIRS_AVAILABLE", "BLOCKED_SHARED_REQUIREMENT", "NO_CURRENT_PAIRS"].includes(result.set_disposition)
     || !Array.isArray(result.pairs)) {
     throw new Error("Campaign pair validation result does not match the closed schema.");
+  }
+  const requestPackage = result.required_request_package;
+  if (requestPackage !== null && (!exactKeys(requestPackage, ["schema_version", "atomic", "requests"])
+    || requestPackage.schema_version !== "campaign-pair-required-request-package-v1"
+    || requestPackage.atomic !== true
+    || !Array.isArray(requestPackage.requests)
+    || requestPackage.requests.length === 0
+    || requestPackage.requests.some((item) => !validViolationItem(item)))) {
+    throw new Error("Campaign pair required request package is invalid.");
+  }
+  if ((result.set_disposition === "BLOCKED_SHARED_REQUIREMENT") !== (requestPackage !== null)
+    || (result.set_disposition === "CURRENT_PAIRS_AVAILABLE") !== result.pairs.some((pair) => pair.included)) {
+    throw new Error("Campaign pair set disposition is inconsistent.");
   }
   for (const pair of result.pairs) {
     if (!pair || !exactKeys(pair, ["pair_id", "hypothesis_revision_id", "draft_id", "draft_revision_id", "publish_fingerprint", "included", "violations"])
@@ -516,13 +564,7 @@ export function assertCampaignPairValidationResult(value: unknown): asserts valu
       throw new Error("Campaign pair check is invalid.");
     }
     for (const item of pair.violations) {
-      if (!item || !exactKeys(item, ["category", "code", "executor", "return_target", "pointer", "message"])
-        || !["PAIR_COMPLETENESS", "FIELD_APPLICABILITY", "POLICY", "EVIDENCE", "DIRECT_CAPABILITY"].includes(item.category)
-        || !["STRATEGY_AGENT", "CAMPAIGN_DESIGN_AGENT", "EVIDENCE_ANALYST", "DIRECT_COMPILER"].includes(item.executor)
-        || !["STRATEGY", "EVIDENCE_COLLECTION", "CAMPAIGNS"].includes(item.return_target)
-        || !CODE.test(item.code) || !text(item.pointer) || !text(item.message)) {
-        throw new Error("Campaign pair violation is invalid.");
-      }
+      if (!validViolationItem(item)) throw new Error("Campaign pair violation is invalid.");
     }
   }
 }

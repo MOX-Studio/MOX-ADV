@@ -5,7 +5,6 @@ export type CampaignCanvasFilters = {
   variant: "ALL" | "CONTROL" | "IMPROVEMENT";
   evidence: "ALL" | CampaignEvidenceStatus;
   sort: "RANK" | "SCORE";
-  includeHidden: boolean;
 };
 
 type CanvasDraft = Record<string, unknown> & {
@@ -20,7 +19,7 @@ const toFiniteNumberOr = (value: unknown, fallback: number) => Number.isFinite(N
 
 export function filterAndSortCampaignDrafts<T extends CanvasDraft>(drafts: T[], filters: CampaignCanvasFilters): T[] {
   return drafts
-    .filter((draft) => filters.includeHidden || draft.visibility === "VISIBLE")
+    .filter((draft) => draft.visibility === "VISIBLE")
     .filter((draft) => filters.variant === "ALL" || draft.variant?.kind === filters.variant)
     .filter((draft) => filters.evidence === "ALL" || draft.market_evidence_status === filters.evidence)
     .sort((left, right) => {

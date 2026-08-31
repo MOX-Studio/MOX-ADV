@@ -122,17 +122,27 @@ async function completeDraft() {
 }
 
 async function recommendationSet(draft) {
-  const currentDraft = draft ?? await completeDraft();
+  const drafts = Array.isArray(draft) ? draft : [draft ?? await completeDraft()];
   return {
     schema_version: "campaign-recommendation-set-v4",
     recommendation_set_id: "recommendation-set-current",
     strategy_revision_id: strategy.strategy_revision_id,
     analytics_evidence_snapshot_id: analyticsEvidence.snapshot_id,
-    direct_capability_snapshot_id: currentDraft.direct_capability_snapshot_id,
+    direct_capability_snapshot_id: drafts[0].direct_capability_snapshot_id,
     field_registry: DIRECT_V501_DRAFT_FIELD_REGISTRY,
     playbook_release: { status: "NOT_APPLICABLE", release_id: null },
-    drafts: [currentDraft],
+    drafts,
   };
+}
+
+async function independentDraft(suffix) {
+  const draft = await completeDraft();
+  draft.draft_id = `campaign-draft-${suffix}`;
+  draft.draft_revision_id = `campaign-draft-${suffix}@1`;
+  draft.variant.hypothesis.hypothesis_id = `campaign-hypothesis-${suffix}@1`;
+  draft.publish_projection = buildPublishProjection(model, strategy, draft);
+  draft.publish_fingerprint = await fingerprintDirectProjection(draft.publish_projection);
+  return draft;
 }
 
 test("automatically includes a complete verified Hypothesis + Draft pair without comparative admission signals", async () => {
@@ -219,6 +229,72 @@ test("routes evidence and inapplicable-field violations to their exact internal 
       ["INAPPLICABLE_FIELD_PRESENT", "DIRECT_COMPILER", "CAMPAIGNS"],
     ],
   );
+});
+
+test("drops one defective optional direction without losing an independent complete pair", async () => {
+  const complete = await independentDraft("ready");
+  const defective = await independentDraft("optional-defect");
+  delete defective.publish_projection.direct.ad.ResponsiveAd.Texts;
+  defective.publish_fingerprint = await fingerprintDirectProjection(defective.publish_projection);
+
+  const result = await validateCampaignPairs({
+    recommendationSet: await recommendationSet([complete, defective]),
+    strategy,
+    analyticsEvidence,
+  });
+
+  assertCampaignPairValidationResult(result);
+  assert.equal(result.set_disposition, "CURRENT_PAIRS_AVAILABLE");
+  assert.equal(result.required_request_package, null);
+  assert.deepEqual(result.pairs.filter((pair) => pair.included).map((pair) => pair.draft_id), [complete.draft_id]);
+  assert.equal(result.pairs.find((pair) => pair.draft_id === defective.draft_id).violations.some((item) => item.code === "DRAFT_PROJECTION_PARTIAL"), true);
+
+  const dashboard = await pipelineInputVersions({
+    revision: 25,
+    state: {
+      schema_version: "p0-application-document-v19",
+      context_state: { business_goal_decision: { decision_id: "goal-25", value: "Получать заявки" } },
+      business_model: model,
+      analytics_evidence_snapshot: analyticsEvidence,
+      strategy,
+      recommendation_set: await recommendationSet([complete, defective]),
+    },
+  });
+  assert.deepEqual(dashboard.campaign_pairs.map((pair) => pair.draft.revision_id), [complete.draft_revision_id]);
+  assert.equal(dashboard.campaign_pairs.some((pair) => pair.draft.revision_id === defective.draft_revision_id), false);
+});
+
+test("a shared mandatory gap cancels the new set with one atomic request package", async () => {
+  const first = await independentDraft("first");
+  const second = await independentDraft("second");
+  const incompleteStrategy = { ...strategy, geography: "" };
+  const result = await validateCampaignPairs({
+    recommendationSet: await recommendationSet([first, second]),
+    strategy: incompleteStrategy,
+    analyticsEvidence,
+  });
+
+  assertCampaignPairValidationResult(result);
+  assert.equal(result.set_disposition, "BLOCKED_SHARED_REQUIREMENT");
+  assert.equal(result.pairs.some((pair) => pair.included), false);
+  assert.equal(result.required_request_package.schema_version, "campaign-pair-required-request-package-v1");
+  assert.equal(result.required_request_package.atomic, true);
+  assert.deepEqual(result.required_request_package.requests.map((request) => request.code), ["STRATEGY_CONTENT_INCOMPLETE"]);
+
+  const dashboard = await pipelineInputVersions({
+    revision: 26,
+    state: {
+      schema_version: "p0-application-document-v19",
+      context_state: { business_goal_decision: { decision_id: "goal-26", value: "Получать заявки" } },
+      business_model: model,
+      analytics_evidence_snapshot: analyticsEvidence,
+      strategy: incompleteStrategy,
+      recommendation_set: await recommendationSet([first, second]),
+    },
+  });
+  assert.deepEqual(dashboard.campaign_pairs, []);
+  assert.equal(dashboard.campaign_pair_checks.required_request_package.atomic, true);
+  assert.equal(dashboard.campaign_pair_checks.required_request_package.requests.length, 1);
 });
 
 test("the current pipeline input contract contains only pairs included by the authoritative checks", async () => {

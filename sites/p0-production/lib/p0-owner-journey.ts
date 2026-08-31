@@ -26,6 +26,7 @@ import {
   type OwnerAnalyticsSummary,
 } from "./analytics-owner-summary.ts";
 import type { OwnerPipelineProjection } from "./pipeline-owner-dashboard.ts";
+import { validateCampaignPairs } from "./campaign-pair-validation.ts";
 
 export const OWNER_JOURNEY_STAGES = [
   { id: "goal", label: "Цель" },
@@ -1778,9 +1779,15 @@ async function campaignOptions(ownerKey: string, view: InternalView): Promise<Ow
     const draft = record(value);
     return correctedDrafts.get(String(draft.draft_id ?? "")) ?? value;
   });
+  const pairChecks = await validateCampaignPairs({
+    recommendationSet: { ...recommendationSet, drafts },
+    strategy: record(state.strategy),
+    analyticsEvidence: record(state.analytics_evidence_snapshot),
+  });
+  const currentDraftIds = new Set(pairChecks.pairs.filter((pair) => pair.included).map((pair) => pair.draft_id));
   const recommendedIds = new Set(list(record(recommendationSet.recommended_shortlist).draft_ids).map(String));
   return Promise.all(drafts
-    .filter((value) => record(value).visibility !== "HIDDEN")
+    .filter((value) => currentDraftIds.has(String(record(value).draft_id ?? "")))
     .slice(0, 6)
     .map(async (value, index) => {
       const draft = record(value);
