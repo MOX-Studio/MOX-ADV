@@ -1,18 +1,20 @@
 {
   "schema_version": "campaign-recommendation-set-v4",
-  "recommendation_set_id": "recommendation-set-d2422ba66df23dcf90bb",
+  "recommendation_set_id": "recommendation-set-10cced6f4fa0849811ee",
   "capability_profile": "p0-campaign-creation-profile-v1@1.0.0",
   "playbook_release": "test-curated-release-default@1.0.0",
   "coverage": {
     "status": "COMPLETE",
-    "generated_count": 4,
-    "visible_count": 3,
-    "hidden_count": 1,
-    "candidates_total": 4,
-    "visible_drafts": 3,
+    "generated_count": 3,
+    "visible_count": 1,
+    "hidden_count": 2,
+    "blocked_count": 0,
+    "candidates_total": 3,
+    "visible_drafts": 1,
+    "current_campaign_pairs": 1,
     "hidden_drafts": 0,
-    "audited_non_draft_candidates": 1,
-    "publishable_drafts": 3,
+    "audited_non_draft_candidates": 2,
+    "publishable_drafts": 1,
     "evidence_gap_drafts": 0,
     "reconciliation": {
       "generated_equals_visible_plus_hidden": true,
@@ -25,72 +27,41 @@
     ],
     "suppressed_leaf_ids": [],
     "uncovered_leaf_ids": [],
-    "uncovered_axis_members": [],
-    "blocked_count": 0
+    "uncovered_axis_members": []
   },
   "termination": {
     "contract": "FINITE_NON_RECURSIVE_ONE_PASS",
     "recursion_allowed": false,
     "delivery_buckets": 1,
     "comparators_per_bucket": 1,
-    "maximum_improvements_per_bucket": 2,
-    "maximum_drafts_per_bucket": 3,
-    "generated_draft_count": 3,
+    "maximum_improvements_per_bucket": 0,
+    "maximum_drafts_per_bucket": 1,
+    "current_pair_cardinality": "ONE_HYPOTHESIS_TO_ONE_DRAFT_TO_ONE_FUTURE_CAMPAIGN",
+    "generated_draft_count": 1,
     "all_candidates_terminal": true
   },
   "draft_identities": [
     {
-      "draft_id": "draft-901b4f7196adc85d6765",
-      "draft_revision_id": "draft-901b4f7196adc85d6765-r1",
-      "variant": "CONTROL",
-      "playbook_rule_id": null,
-      "visibility": "VISIBLE",
-      "suppression_reason": null,
-      "publish_fingerprint": "sha256:d4e83679dca247edca769cf893c7ab794996a63058e55967baa8e48e9adb74d9",
-      "changed_fields": []
-    },
-    {
-      "draft_id": "draft-3bcfac40cd046fabc2d0",
-      "draft_revision_id": "draft-3bcfac40cd046fabc2d0-r1",
-      "variant": "QUALIFIED_ACTION",
+      "draft_id": "draft-eb1334de24e0541ceb60",
+      "draft_revision_id": "draft-eb1334de24e0541ceb60-r1",
+      "variant": "MATERIAL_CAMPAIGN",
       "playbook_rule_id": "qualified-action-v1",
       "visibility": "VISIBLE",
       "suppression_reason": null,
-      "publish_fingerprint": "sha256:57187881f26d390f1c82fd43f3565aa6651f6e2d9def28d778aa29030268b11b",
-      "changed_fields": [
-        "/direct/ad/ResponsiveAd/Texts",
-        "/direct/keyword/Keyword"
-      ]
-    },
-    {
-      "draft_id": "draft-600a1dc108d504992770",
-      "draft_revision_id": "draft-600a1dc108d504992770-r1",
-      "variant": "AUDIENCE_SPECIFICITY",
-      "playbook_rule_id": "audience-specificity-v1",
-      "visibility": "VISIBLE",
-      "suppression_reason": null,
-      "publish_fingerprint": "sha256:f0c2f9428dd618a37d9db7901be1d6006babdcdde9d655bae76ca4fd60e13bb6",
-      "changed_fields": [
-        "/direct/ad/ResponsiveAd/Texts",
-        "/direct/keyword/Keyword"
-      ]
+      "publish_fingerprint": "sha256:207f1c301b0c8b25571f6be0dd4326aea91de3c947e9ef34868c61d7f8189669",
+      "changed_fields": []
     }
   ],
   "candidate_dispositions": [
     {
-      "candidate_id": "draft-candidate:draft-3bcfac40cd046fabc2d0",
+      "candidate_id": "draft-candidate:draft-eb1334de24e0541ceb60",
       "visibility": "VISIBLE",
       "reason_code": "VISIBLE:GENERATED_DRAFT"
     },
     {
-      "candidate_id": "draft-candidate:draft-600a1dc108d504992770",
-      "visibility": "VISIBLE",
-      "reason_code": "VISIBLE:GENERATED_DRAFT"
-    },
-    {
-      "candidate_id": "draft-candidate:draft-901b4f7196adc85d6765",
-      "visibility": "VISIBLE",
-      "reason_code": "VISIBLE:GENERATED_DRAFT"
+      "candidate_id": "playbook-rule:test-curated-release-default:audience-specificity-v1:delivery-bucket:e25e940d8a805a4649bf:grouped",
+      "visibility": "HIDDEN",
+      "reason_code": "HIDDEN:GROUPED_INSIDE_MATERIAL_CAMPAIGN"
     },
     {
       "candidate_id": "playbook-rule:test-curated-release-default:message-offer-contradicted-v1:PLAYBOOK_RULE_CONTRADICTED",

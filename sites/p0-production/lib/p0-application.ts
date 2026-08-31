@@ -3421,13 +3421,15 @@ function competitorCampaignRecommendationRefreshRequired(state: P0Document) {
   const controlKind = String(record(record(control).variant).control_basis
     ? record(record(record(control).variant).control_basis).kind ?? ""
     : "");
-  const hasCompetitorTreatment = state.recommendation_set.drafts.some((draft) => {
-    const hypothesis = record(record(draft.variant).hypothesis);
-    return record(draft.variant).kind === "IMPROVEMENT"
-      && hypothesis.source === "COMPETITOR_PUBLIC_WEB"
-      && String(hypothesis.hypothesis_id ?? "").endsWith("@1.1.0");
-  });
-  return !controlKind.startsWith("COMPETITIVE_") || !hasCompetitorTreatment;
+  const currentPairsComplete = state.recommendation_set.drafts
+    .filter((draft) => draft.visibility === "VISIBLE")
+    .every((draft) => {
+      const hypothesis = record(record(draft.variant).hypothesis);
+      return record(draft.variant).pair_role === "CURRENT"
+        && hypothesis.draft_revision_id === draft.draft_revision_id
+        && hypothesis.future_campaign_id === draft.future_campaign_id;
+    });
+  return !controlKind.startsWith("COMPETITIVE_") || !currentPairsComplete;
 }
 
 function agentNextBoundary(state: P0Document) {
@@ -3684,7 +3686,7 @@ export class P0Application {
         competitor_campaign_recommendation: {
           refresh_required: competitorCampaignRecommendationRefreshRequired(state),
           current_draft_count: state.recommendation_set?.drafts.length ?? 0,
-          desired_output: "MARKET_CONTROL_PLUS_IMPROVED_HYPOTHESIS",
+          desired_output: "MINIMAL_MATERIAL_CAMPAIGN_PAIRS",
           authority_effect: "LOCAL_DRAFTS_ONLY",
         },
         demand_cost_research: {
@@ -3814,16 +3816,16 @@ export class P0Application {
           competitor_campaign_recommendation_status: "CURRENT",
           draft_count: state.recommendation_set?.drafts.length ?? 0,
         };
-        summary = "Competitor-informed market control and improved hypothesis are already current.";
+        summary = "Competitor evidence and the minimal material campaign pairs are already current.";
       } else {
         const next = await this.command(input.owner_key, {
           action: "recalculate_recommendations",
           expected_revision: stored.revision,
         });
         const control = next.state.recommendation_set?.drafts.find((draft) => record(draft.variant).kind === "CONTROL");
-        const treatment = next.state.recommendation_set?.drafts.find((draft) =>
-          record(draft.variant).kind === "IMPROVEMENT"
-          && record(record(draft.variant).hypothesis).source === "COMPETITOR_PUBLIC_WEB"
+        const currentPair = next.state.recommendation_set?.drafts.find((draft) =>
+          draft.visibility === "VISIBLE"
+          && record(draft.variant).pair_role === "CURRENT"
         );
         const nextContract = await this.agentContract(input.owner_key, input.objective.kind);
         return {
@@ -3833,12 +3835,12 @@ export class P0Application {
             tool_call_id: cleanText(input.call.id, 255),
             tool_name: definition.name,
             trust: "TRUSTED_APPLICATION",
-            summary: "Trusted application generated a local competitor-informed market control and one improved test hypothesis without a provider write.",
+            summary: "Trusted application generated the minimal current material Campaign Hypothesis and Campaign Draft pairs without a provider write.",
             facts: {
               revision: next.revision,
-              competitor_campaign_recommendation_status: control && treatment ? "READY_FOR_REVIEW" : "UNAVAILABLE",
+              competitor_campaign_recommendation_status: control && currentPair ? "READY_FOR_REVIEW" : "UNAVAILABLE",
               control_draft_id: control?.draft_id ?? null,
-              treatment_draft_id: treatment?.draft_id ?? null,
+              treatment_draft_id: null,
               draft_count: next.state.recommendation_set?.drafts.length ?? 0,
               next_boundary: agentNextBoundary(next.state),
             },

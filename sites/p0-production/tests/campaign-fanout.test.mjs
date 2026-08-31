@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -8,7 +8,6 @@ import {
   directProjectionMaterialDelta,
   evaluateDirectCapabilitySelection,
   fingerprintDirectProjection,
-  preserveSelectedConditionalProjection,
 } from "../lib/campaign-fanout.ts";
 import { sealCuratedPlaybookRelease } from "../lib/campaign-playbook.ts";
 
@@ -64,13 +63,17 @@ async function recommendationSet(analyticsEvidence = null, overrides = {}) {
   });
 }
 
-test("deterministically fans one approved Strategy revision out into multiple complete Drafts", async () => {
+test("deterministically emits the minimal set of current Hypothesis-Draft-campaign pairs", async () => {
   const first = await recommendationSet();
   const second = await recommendationSet();
   assert.deepEqual(first, second);
 
   const visible = first.drafts.filter((draft) => draft.visibility === "VISIBLE");
-  assert.equal(visible.length, 3);
+  assert.equal(visible.length, 1);
+  assert.equal(visible[0].campaign_hypothesis_id, visible[0].variant.hypothesis.hypothesis_id);
+  assert.equal(visible[0].draft_revision_id, visible[0].variant.hypothesis.draft_revision_id);
+  assert.equal(visible[0].future_campaign_id, visible[0].variant.hypothesis.future_campaign_id);
+  assert.equal(visible[0].publish_fingerprint, visible[0].variant.hypothesis.publish_fingerprint);
   assert.equal(first.schema_version, "campaign-recommendation-set-v4");
   assert.equal(first.field_registry.schema_version, "direct-v501-draft-field-registry-v2");
   assert.equal(first.field_registry.profile_id, first.capability_profile.profile_id);
@@ -151,7 +154,7 @@ test("keeps evidence-gap Drafts reviewable but outside shortlist and publish", a
     ]);
   }
   assert.equal(value.coverage.publishable_drafts, 0);
-  assert.equal(value.coverage.evidence_gap_drafts, 3);
+  assert.equal(value.coverage.evidence_gap_drafts, 1);
   assert.equal(value.viability_outcome.status, "NO_VIABLE_DRAFTS");
   assert.ok(value.viability_outcome.repair_plan.length >= 1);
   assert.equal(value.recommended_shortlist.draft_ids.length, 0);
@@ -281,7 +284,7 @@ test("requires two independent records of the same pattern before calling a cont
   assert.deepEqual(corroborated.drafts[0].variant.control_basis.evidence_ids, ["evidence-a", "evidence-b"]);
 });
 
-test("turns a 90 percent bounded competitor ad pattern into a market control and one improved hypothesis", async () => {
+test("keeps a bounded competitor pattern as evidence inside one material campaign pair", async () => {
   const candidates = Array.from({ length: 10 }, (_, index) => ({
     competitor: `Конкурент ${index + 1}`,
     rationale: "Сопоставимое публичное предложение",
@@ -332,9 +335,8 @@ test("turns a 90 percent bounded competitor ad pattern into a market control and
   const value = await recommendationSet(evidence, { playbookReleases: [] });
   const visible = value.drafts.filter((draft) => draft.visibility === "VISIBLE");
   const control = visible.find((draft) => draft.variant.kind === "CONTROL");
-  const treatment = visible.find((draft) => draft.variant.kind === "IMPROVEMENT");
 
-  assert.equal(visible.length, 2);
+  assert.equal(visible.length, 1);
   assert.equal(control.variant.control_basis.kind, "COMPETITIVE_AD_NORM_CONTROL");
   assert.equal(control.variant.control_basis.observed_count, 9);
   assert.equal(control.variant.control_basis.denominator, 10);
@@ -343,20 +345,10 @@ test("turns a 90 percent bounded competitor ad pattern into a market control and
   assert.equal(control.variant.control_basis.pattern_id, "generic-branding-search-ad");
   assert.match(control.variant.control_basis.observed_weakness, /B2B-лицо/u);
   assert.match(control.campaign_name, /Рыночный контроль/u);
-  assert.equal(treatment.variant.hypothesis.source, "COMPETITOR_PUBLIC_WEB");
-  assert.equal(treatment.variant.hypothesis.claim_status, "TESTABLE_HYPOTHESIS_NOT_PERFORMANCE_FACT");
-  assert.equal(treatment.variant.hypothesis.changed_family, "AUDIENCE_SPECIFICITY");
-  assert.equal(treatment.variant.hypothesis.competitor_set_rule, "Десять сопоставимых агентств");
-  assert.equal(treatment.variant.hypothesis.prevalence.percent, 90);
-  assert.deepEqual(treatment.variant.hypothesis.evidence_ids, candidates.slice(0, 9).map((_, index) => `evidence-${index + 1}`));
-  assert.deepEqual(treatment.variant.hypothesis.evidence_set.map((item) => item.exact_landing), candidates.slice(0, 9).map((candidate) => candidate.exact_destinations[0]));
-  assert.match(treatment.variant.hypothesis.mechanism, /Проверяемая гипотеза, не факт эффективности/u);
-  assert.match(treatment.variant.hypothesis.mechanism, /9 из 10 конкурентов \(90%\)/u);
-  assert.match(treatment.variant.hypothesis.mechanism, /Уточнить B2B-аудиторию/u);
-  assert.match(treatment.campaign_name, /Улучшенная гипотеза/u);
-  assert.equal(treatment.treatment_delta.exactly_one_hypothesis_family, true);
-  assert.equal(treatment.auction_protocol.attribution.status, "ONE_FACTOR");
-  assert.deepEqual(treatment.auction_protocol.traffic_split, { comparator_percent: 50, treatment_percent: 50 });
+  assert.equal(control.variant.hypothesis.draft_revision_id, control.draft_revision_id);
+  assert.equal(control.variant.hypothesis.future_campaign_id, control.future_campaign_id);
+  assert.equal(control.treatment_delta, null);
+  assert.equal(value.drafts.some((draft) => draft.variant.kind === "IMPROVEMENT"), false);
 });
 
 test("turns public competitor positioning into a clearly qualified control when ad visibility is unavailable", async () => {
@@ -392,26 +384,25 @@ test("turns public competitor positioning into a clearly qualified control when 
     },
   }, { playbookReleases: [] });
   const control = value.drafts.find((draft) => draft.variant.kind === "CONTROL");
-  const treatment = value.drafts.find((draft) => draft.variant.kind === "IMPROVEMENT");
 
   assert.equal(control.variant.control_basis.kind, "COMPETITIVE_POSITIONING_CONTROL");
   assert.match(control.variant.control_basis.scope, /наблюдение публичного позиционирования, а не доказательство запуска рекламы/iu);
   assert.equal(control.variant.control_basis.pattern_id, "dedicated-branding-offer");
-  assert.equal(treatment.variant.hypothesis.prevalence.percent, 100);
-  assert.match(treatment.auction_protocol.tested_change, /Проверяемая гипотеза, не факт эффективности/u);
+  assert.equal(value.drafts.length, 1);
+  assert.equal(control.variant.hypothesis.draft_id, control.draft_id);
 });
 
-test("terminates at one control plus at most two improvements and audits excluded playbook rules", async () => {
+test("terminates at exactly one current pair per material bucket and groups cosmetic rules", async () => {
   const value = await recommendationSet();
   assert.equal(value.termination.contract, "FINITE_NON_RECURSIVE_ONE_PASS");
   assert.equal(value.termination.all_candidates_terminal, true);
   assert.equal(value.termination.comparators_per_bucket, 1);
-  assert.equal(value.termination.maximum_improvements_per_bucket, 2);
+  assert.equal(value.termination.maximum_improvements_per_bucket, 0);
   assert.equal(value.drafts.every((draft) => ["VIABLE", "TESTABLE_WITH_GAPS", "INSUFFICIENT_EVIDENCE", "BLOCKED"].includes(draft.viability_status)), true);
   assert.equal(value.drafts.filter((draft) => draft.variant.kind === "CONTROL").length, 1);
-  assert.equal(value.drafts.filter((draft) => draft.variant.kind === "IMPROVEMENT").length, 2);
-  assert.equal(value.coverage.candidates_total, 4);
-  assert.equal(value.coverage.visible_drafts, 3);
+  assert.equal(value.drafts.filter((draft) => draft.variant.kind === "IMPROVEMENT").length, 0);
+  assert.equal(value.coverage.candidates_total, 3);
+  assert.equal(value.coverage.visible_drafts, 1);
   assert.equal(value.coverage.hidden_drafts, 0);
   assert.equal(value.candidate_audit.some((candidate) => candidate.reason_code === "HIDDEN:PLAYBOOK_RULE_CONTRADICTED"), true);
   assert.equal("score" in value.drafts[0], false);
@@ -573,7 +564,11 @@ test("matches the checked-in Recommendation Set identity and disposition golden"
       reason_code: candidate.reason_code,
     })),
   };
-  const expected = JSON.parse(await readFile(new URL("./fixtures/recommendation-set-golden.json", import.meta.url), "utf8"));
+  const fixtureUrl = new URL("./fixtures/recommendation-set-golden.json", import.meta.url);
+  if (process.env.UPDATE_CAMPAIGN_FANOUT_GOLDEN === "1") {
+    await writeFile(fixtureUrl, `${JSON.stringify(actual, null, 2)}\n`, "utf8");
+  }
+  const expected = JSON.parse(await readFile(fixtureUrl, "utf8"));
   assert.deepEqual(actual, expected);
 });
 
@@ -590,8 +585,10 @@ test("packs compatible keyword clusters before a finite product-audience-offer f
   assert.equal(value.coverage.status, "COMPLETE");
   assert.equal(value.coverage.represented_leaf_ids.length, 2);
   assert.deepEqual(value.coverage.uncovered_leaf_ids, []);
-  assert.equal(value.drafts.length, 3);
+  assert.equal(value.drafts.length, 1);
   assert.equal(value.drafts.every((draft) => draft.demand_cluster_ids.length === 2), true);
+  assert.equal(value.drafts[0].variant.hypothesis.grouped_demand.semantic_keys.length, 2);
+  assert.deepEqual(value.drafts[0].variant.hypothesis.grouped_demand.intents, ["commercial"]);
   assert.equal(value.viability_outcome.status, "NO_VIABLE_DRAFTS");
   assert.equal(value.viability_outcome.repair_plan.some((item) => item.code === "AUCTION_PROTOCOL_PREREGISTRATION_PENDING"), false);
   assert.equal(value.drafts.every((draft) => draft.auction_protocol?.content_hash.startsWith("sha256:")), true);
@@ -613,16 +610,19 @@ test("reconciles canonical leaf coverage for cluster IDs that require normalizat
   assert.equal(value.coverage.status, "COMPLETE");
 });
 
-test("emits exactly one comparator and at most two improvements for every evidence-backed delivery bucket", async () => {
+test("emits exactly one current pair for every evidence-backed material bucket", async () => {
   const evidence = structuredClone(availableDemandEvidence);
   const secondary = evidence.market_evidence.frequency.clusters[1];
   secondary.delivery_key = {
+    product: "Участие со стендом в выставке ИННОПРОМ",
     goal: "Получать заявки на участие",
-    economics: { weekly_budget_rub: 10_000, target_cpa_rub: 2_000 },
+    economics: { target_result_cost: 2_000 },
+    budget: 20_000,
     geography: "Россия",
+    period: { start_date: "2026-09-01", end_date: "2026-09-30" },
     landing: "https://innoprom.com/participant/",
-    message: "Отдельный подтверждённый message regime",
-    management: "p0-campaign-creation-profile-v1@1.0.0",
+    placement: "SEARCH_RESULTS",
+    message: "Косметически другая формулировка внутри кампании",
   };
   secondary.provisional_monthly_budget = 3_000;
   secondary.capacity = {
@@ -635,39 +635,40 @@ test("emits exactly one comparator and at most two improvements for every eviden
   };
   const value = await recommendationSet(evidence);
   assert.equal(value.termination.delivery_buckets, 2);
-  assert.equal(value.drafts.length, 6);
+  assert.equal(value.drafts.length, 2);
   for (const bucket of value.delivery_packing.delivery_buckets) {
     const bucketDrafts = value.drafts.filter((draft) => draft.delivery_bucket_id === bucket.delivery_bucket_id);
     assert.equal(bucketDrafts.filter((draft) => draft.variant.kind === "CONTROL").length, 1);
-    assert.ok(bucketDrafts.filter((draft) => draft.variant.kind === "IMPROVEMENT").length <= 2);
+    assert.equal(bucketDrafts.filter((draft) => draft.variant.kind === "IMPROVEMENT").length, 0);
+    assert.equal(bucketDrafts[0].variant.hypothesis.draft_revision_id, bucketDrafts[0].draft_revision_id);
   }
 });
 
-test("records a material one-family delta from each improvement to its bucket comparator", async () => {
+test("binds every current Hypothesis to exactly one Draft and future campaign", async () => {
   const value = await recommendationSet(availableDemandEvidence);
-  const comparator = value.drafts.find((draft) => draft.variant.kind === "CONTROL");
-  const improvements = value.drafts.filter((draft) => draft.variant.kind === "IMPROVEMENT");
-  assert.equal(improvements.length, 2);
-  for (const improvement of improvements) {
-    assert.equal(improvement.variant.comparator_draft_id, comparator.draft_id);
-    assert.equal(improvement.treatment_delta.comparator_draft_id, comparator.draft_id);
-    assert.equal(improvement.treatment_delta.material, true);
-    assert.equal(improvement.treatment_delta.exactly_one_hypothesis_family, true);
-    assert.equal(improvement.treatment_delta.changed_family, improvement.variant.hypothesis.changed_family);
-    assert.deepEqual(improvement.treatment_delta.changed_fields, improvement.treatment_delta.expected_changed_fields);
+  const pairs = value.drafts.filter((draft) => draft.visibility === "VISIBLE");
+  assert.equal(pairs.length, value.delivery_packing.delivery_buckets.length);
+  assert.equal(new Set(pairs.map((draft) => draft.campaign_hypothesis_id)).size, pairs.length);
+  assert.equal(new Set(pairs.map((draft) => draft.draft_revision_id)).size, pairs.length);
+  assert.equal(new Set(pairs.map((draft) => draft.future_campaign_id)).size, pairs.length);
+  for (const draft of pairs) {
+    assert.equal(draft.variant.hypothesis.hypothesis_id, draft.campaign_hypothesis_id);
+    assert.equal(draft.variant.hypothesis.draft_revision_id, draft.draft_revision_id);
+    assert.equal(draft.variant.hypothesis.future_campaign_id, draft.future_campaign_id);
+    assert.equal(draft.treatment_delta, null);
   }
 });
 
-test("deduplicates identical treatment projections without losing the audited candidate", async () => {
+test("groups cosmetic playbook variants inside one material campaign without losing audit", async () => {
   const release = await playbookRelease([
     playbookRule("qualified-action-a", { priority: 1 }),
     playbookRule("qualified-action-b", { priority: 2 }),
   ]);
   const value = await recommendationSet(availableDemandEvidence, { playbookReleases: [release] });
-  const duplicates = value.drafts.filter((draft) => draft.suppression_reason === "HIDDEN:DUPLICATE_OR_OVERLAP");
-  assert.equal(duplicates.length, 1);
-  assert.ok(duplicates[0].duplicate_of);
-  assert.equal(value.candidate_audit.some((candidate) => candidate.draft_id === duplicates[0].draft_id && candidate.visibility === "HIDDEN"), true);
+  assert.equal(value.drafts.length, 1);
+  assert.equal(value.drafts[0].visibility, "VISIBLE");
+  assert.equal(value.drafts[0].playbook_rule_id, "qualified-action-a");
+  assert.equal(value.candidate_audit.filter((candidate) => candidate.reason_code === "HIDDEN:GROUPED_INSIDE_MATERIAL_CAMPAIGN").length, 1);
   assert.equal(value.coverage.generated_count, value.coverage.visible_count + value.coverage.hidden_count);
 });
 
@@ -759,34 +760,11 @@ test("blocks conditional or unknown selected fields without silently dropping th
     changed_fields: [conditionalField],
     required_capabilities: ["AUTOTARGETING"],
   })]);
-  const blocked = await recommendationSet(availableDemandEvidence, { playbookReleases: [conditionalRelease] });
-  const blockedDraft = blocked.drafts.find((draft) => draft.playbook_rule_id === "autotargeting-rule");
-  assert.ok(blockedDraft.publish_projection.direct.keyword.AutotargetingSettings);
-  assert.deepEqual(blockedDraft.unsupported_fields, [conditionalField]);
-  assert.equal(blockedDraft.visibility, "HIDDEN");
-  assert.equal(blockedDraft.publish_eligibility, "BLOCKED_HARD");
-  assert.equal(blocked.candidate_audit.some((candidate) => candidate.draft_id === blockedDraft.draft_id && candidate.reason_code === "HIDDEN:HARD_INELIGIBLE:UNSUPPORTED_CAPABILITY"), true);
-
-  const eligible = await recommendationSet(availableDemandEvidence, { playbookReleases: [conditionalRelease], directCapabilitySnapshot: snapshot });
-  const eligibleDraft = eligible.drafts.find((draft) => draft.playbook_rule_id === "autotargeting-rule");
-  assert.equal(eligibleDraft.visibility, "VISIBLE");
-  assert.equal(eligibleDraft.publish_eligibility, "ELIGIBLE");
-  assert.equal(eligibleDraft.direct_capability_snapshot_id, snapshot.snapshot_id);
-
-  const ownerEditedProjection = structuredClone(eligibleDraft.publish_projection);
-  delete ownerEditedProjection.direct.keyword.AutotargetingSettings;
-  ownerEditedProjection.direct.ad.ResponsiveAd.Texts = ["Owner-edited text", ...ownerEditedProjection.direct.ad.ResponsiveAd.Texts.slice(1)];
-  const preserved = preserveSelectedConditionalProjection({
-    generatedDraft: eligibleDraft,
-    editedProjection: ownerEditedProjection,
-    snapshot,
-  });
-  assert.deepEqual(
-    preserved.projection.direct.keyword.AutotargetingSettings,
-    eligibleDraft.publish_projection.direct.keyword.AutotargetingSettings,
-  );
-  assert.equal(preserved.projection.direct.ad.ResponsiveAd.Texts[0], "Owner-edited text");
-  assert.equal(preserved.capability_selection.eligible, true);
+  const grouped = await recommendationSet(availableDemandEvidence, { playbookReleases: [conditionalRelease], directCapabilitySnapshot: snapshot });
+  assert.equal(grouped.drafts.length, 1);
+  assert.equal(grouped.drafts[0].playbook_rule_id, null);
+  assert.equal(Object.hasOwn(grouped.drafts[0].publish_projection.direct.keyword, "AutotargetingSettings"), false);
+  assert.equal(grouped.candidate_audit.some((candidate) => candidate.playbook_rule_id === "autotargeting-rule" && candidate.reason_code === "HIDDEN:GROUPED_INSIDE_MATERIAL_CAMPAIGN"), true);
 });
 
 test("pins Strategy, Draft, capability profile and playbook IDs in immutable Draft identity", async () => {

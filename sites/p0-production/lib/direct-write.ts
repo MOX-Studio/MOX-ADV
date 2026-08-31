@@ -8,8 +8,11 @@ export type DirectProjection = {
   brand_claims_contract: Record<string, unknown>;
   lineage: {
     strategy_revision_id?: unknown;
+    campaign_hypothesis_id?: unknown;
+    campaign_hypothesis_revision_id?: unknown;
     draft_id?: unknown;
     draft_revision_id?: unknown;
+    future_campaign_id?: unknown;
     capability_profile_id?: unknown;
     capability_profile_version?: unknown;
     playbook_release_id?: unknown;

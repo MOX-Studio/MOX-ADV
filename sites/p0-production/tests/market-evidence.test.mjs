@@ -569,16 +569,51 @@ test("overlap taxonomy keeps duplicates, coverage, risk, observed cannibalizatio
   assert.equal(classifyDemandRelationship({ left: "стенд выставка", right: "участие выставка" }).state, "UNKNOWN");
 });
 
-test("normalizes the full delivery key and packs compatible long-tail while gating material splits by capacity", async () => {
-  const primaryKey = { goal: "  Заявки ", economics: "CPA 2000", geography: "Москва", landing: "https://EXAMPLE.com/offer/", message: "Участие в выставке", management: "Unified Search" };
+test("normalizes only material campaign axes and packs cosmetic message variants", async () => {
+  const primaryKey = {
+    product: "  Участие в выставке ",
+    goal: "  Заявки ",
+    economics: "CPA 2000",
+    budget: "3000 RUB",
+    geography: "Москва",
+    period: { start_date: "2026-09-01", end_date: "2026-09-30" },
+    landing: "https://EXAMPLE.com/offer/",
+    placement: "Search Results",
+    message: "Участие в выставке",
+    management: "Unified Search",
+  };
   assert.deepEqual(normalizeDeliveryKey(primaryKey), {
+    product: "участие в выставке",
     goal: "заявки",
     economics: "cpa 2000",
+    budget: "3000 rub",
     geography: "москва",
+    period: "{\"end_date\":\"2026-09-30\",\"start_date\":\"2026-09-01\"}",
     landing: "https://example.com/offer",
-    message: "участие в выставке",
-    management: "unified search",
+    placement: "search results",
   });
+  assert.deepEqual(
+    normalizeDeliveryKey({
+      ...primaryKey,
+      message: "Косметически другой текст",
+      management: "Другая внутренняя метка",
+      audience: "Близкая аудитория",
+      intent: "Близкое намерение",
+      phrases: ["вариант фразы"],
+      materials: ["вариант материала"],
+    }),
+    normalizeDeliveryKey(primaryKey),
+  );
+  for (const changedKey of [
+    { ...primaryKey, product: "Другой продукт" },
+    { ...primaryKey, goal: "Другая цель" },
+    { ...primaryKey, economics: "CPA 5000" },
+    { ...primaryKey, budget: "6000 RUB" },
+    { ...primaryKey, geography: "Казань" },
+    { ...primaryKey, period: { start_date: "2026-10-01", end_date: "2026-10-31" } },
+    { ...primaryKey, landing: "https://example.com/other" },
+    { ...primaryKey, placement: "Product Gallery" },
+  ]) assert.notDeepEqual(normalizeDeliveryKey(changedKey), normalizeDeliveryKey(primaryKey));
   const result = await packDemandClusters([
     { cluster_id: "primary", primary: true, demand_status: "AVAILABLE", unique_publish_row_ids: ["r1"], delivery_key: primaryKey, provisional_monthly_budget: 3000 },
     { cluster_id: "long-tail", demand_status: "AVAILABLE", unique_publish_row_ids: ["r2"], delivery_key: { ...primaryKey, goal: "заявки", landing: "https://example.com/offer" }, provisional_monthly_budget: 3000 },
@@ -591,11 +626,10 @@ test("normalizes the full delivery key and packs compatible long-tail while gati
   ]);
 
   assert.equal(result.delivery_buckets.length, 2);
-  assert.deepEqual(result.delivery_buckets.find((bucket) => bucket.disposition === "PACKED").demand_cluster_ids, ["long-tail", "primary"]);
+  assert.deepEqual(result.delivery_buckets.find((bucket) => bucket.disposition === "PACKED").demand_cluster_ids, ["long-tail", "new-message", "primary"]);
   assert.deepEqual(result.delivery_buckets.find((bucket) => bucket.disposition === "STANDALONE").demand_cluster_ids, ["new-economics"]);
   assert.equal(result.cluster_dispositions["new-landing"].disposition, "EVIDENCE_GAP");
-  assert.equal(result.cluster_dispositions["new-message"].disposition, "EVIDENCE_GAP");
-  assert.equal(result.cluster_dispositions["new-message"].reason_codes.includes("CAPACITY_SOURCE_NOT_QUALIFIED"), true);
+  assert.equal(result.cluster_dispositions["new-message"].disposition, "PACKED");
   assert.equal(result.cluster_dispositions.insufficient.disposition, "HIDDEN");
   assert.equal(result.cluster_dispositions.insufficient.reason_codes.includes("INSUFFICIENT_STANDALONE_CAPACITY"), true);
   assert.equal(result.cluster_dispositions.duplicate.disposition, "HIDDEN");

@@ -1689,12 +1689,18 @@ export function classifyDemandRelationship(input: {
 }
 
 export type DeliveryKeyInput = {
+  product?: unknown;
   goal: unknown;
   economics: unknown;
+  budget?: unknown;
   geography: unknown;
+  period?: unknown;
   landing: unknown;
-  message: unknown;
-  management: unknown;
+  placement?: unknown;
+  /** Legacy evidence metadata. Message wording is grouped inside a campaign. */
+  message?: unknown;
+  /** Legacy profile metadata. Only an explicitly independent placement may split campaigns. */
+  management?: unknown;
 };
 
 function normalizedDimension(value: unknown) {
@@ -1718,12 +1724,14 @@ function normalizedLanding(value: unknown) {
 
 export function normalizeDeliveryKey(input: DeliveryKeyInput) {
   return {
+    product: normalizedDimension(input.product),
     goal: normalizedDimension(input.goal),
     economics: normalizedDimension(input.economics),
+    budget: normalizedDimension(input.budget),
     geography: normalizedDimension(input.geography),
+    period: normalizedDimension(input.period),
     landing: normalizedLanding(input.landing),
-    message: normalizedDimension(input.message),
-    management: normalizedDimension(input.management),
+    placement: normalizedDimension(input.placement),
   };
 }
 
@@ -1830,7 +1838,7 @@ export async function packDemandClusters(input: PackableDemandCluster[]) {
     delivery_buckets: deliveryBuckets.sort((left, right) => String(left.delivery_bucket_id).localeCompare(String(right.delivery_bucket_id))),
     cluster_dispositions: Object.fromEntries(Object.entries(clusterDispositions).sort(([left], [right]) => left.localeCompare(right))),
     semantics: {
-      full_delivery_key: ["goal", "economics", "geography", "landing", "message", "management"],
+      full_delivery_key: ["product", "goal", "economics", "budget", "geography", "period", "landing", "placement"],
       compatible_long_tail_suppressed: false,
       split_requires_material_difference_and_evidence_backed_capacity: true,
     },

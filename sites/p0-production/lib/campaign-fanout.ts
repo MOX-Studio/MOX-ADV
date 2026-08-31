@@ -11,11 +11,10 @@ import {
   resolveCuratedPlaybookReleases,
   type CompetitiveSampleRule,
   type CuratedPlaybookRelease,
-  type CuratedPlaybookRule,
   type PlaybookAuditRecord,
   type PlaybookChangedFamily,
 } from "./campaign-playbook.ts";
-import { strategyAnswerValue } from "./campaign-strategy.ts";
+import { strategyAnswerValue, strategyPeriod } from "./campaign-strategy.ts";
 import {
   normalizeDeliveryKey,
   packDemandClusters,
@@ -27,7 +26,7 @@ import {
 } from "./campaign-viability.ts";
 
 const FAN_OUT_CONTRACT = "campaign-fanout-v1";
-const MAX_IMPROVEMENTS_PER_DELIVERY_BUCKET = 2;
+const MAX_IMPROVEMENTS_PER_DELIVERY_BUCKET = 0;
 const PROVIDER_UNORDERED_ARRAY_PATHS = new Set([
   "/ad_group/RegionIds",
   "/ad_group/NegativeKeywords/Items",
@@ -106,6 +105,74 @@ const CONDITIONAL_FIELD_CAPABILITY = new Map([
 const text = (value: unknown) => String(value ?? "").normalize("NFKC").replace(/\s+/gu, " ").trim();
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const keyText = (value: unknown) => text(value).toLocaleLowerCase("ru-RU");
+
+function materialEconomics(value: unknown, fallbackTargetResultCost: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value ?? { target_result_cost: fallbackTargetResultCost };
+  const economics = { ...(value as Record<string, unknown>) };
+  for (const field of ["weekly_budget", "weekly_budget_rub", "monthly_budget", "monthly_budget_rub", "budget"]) delete economics[field];
+  return Object.keys(economics).length ? economics : { target_result_cost: fallbackTargetResultCost };
+}
+
+function materialCampaignKey(
+  deliveryKey: unknown,
+  defaults: {
+    product: unknown;
+    goal: unknown;
+    economics: unknown;
+    budget: unknown;
+    geography: unknown;
+    period: unknown;
+    landing: unknown;
+    placement: unknown;
+  },
+) {
+  const source = record(deliveryKey);
+  const sourceEconomics = source.economics ?? defaults.economics;
+  const sourceManagement = record(source.management);
+  return {
+    product: source.product ?? defaults.product,
+    goal: source.goal ?? defaults.goal,
+    economics: materialEconomics(sourceEconomics, record(defaults.economics).target_result_cost),
+    budget: source.budget ?? record(sourceEconomics).weekly_budget_rub ?? record(sourceEconomics).weekly_budget ?? defaults.budget,
+    geography: source.geography ?? defaults.geography,
+    period: source.period ?? defaults.period,
+    landing: source.landing ?? defaults.landing,
+    placement: source.placement ?? sourceManagement.independent_placement ?? sourceManagement.placement ?? defaults.placement,
+  };
+}
+
+function strategyForMaterialCampaign(strategy: Record<string, unknown>, materialKey: Record<string, unknown>) {
+  const next = structuredClone(strategy);
+  const values = {
+    advertised_offer: materialKey.product,
+    business_goal: materialKey.goal,
+    geography: materialKey.geography,
+    period: materialKey.period,
+    landing_page: materialKey.landing,
+    weekly_budget: materialKey.budget,
+    target_result_cost: record(materialKey.economics).target_result_cost
+      ?? record(materialKey.economics).target_cpa_rub
+      ?? materialKey.economics,
+  };
+  if (Array.isArray(next.answers)) {
+    next.answers = next.answers.map((answer) => {
+      const item = record(answer);
+      return Object.hasOwn(values, String(item.field_id))
+        ? { ...item, value: values[String(item.field_id) as keyof typeof values] }
+        : answer;
+    });
+  }
+  next.advertised_offer = values.advertised_offer;
+  next.goal = values.business_goal;
+  next.geography = values.geography;
+  const period = record(values.period);
+  if (period.start_date) next.period_start = period.start_date;
+  if (period.end_date) next.period_end = period.end_date;
+  next.landing_page = values.landing_page;
+  next.weekly_budget_rub = values.weekly_budget;
+  next.target_cpa_rub = values.target_result_cost;
+  return next;
+}
 
 function canonicalizeProviderProjection(value: unknown, path = ""): unknown {
   if (Array.isArray(value)) {
@@ -317,39 +384,6 @@ function competitiveControlBasis(
   };
 }
 
-function competitorImprovement(controlBasis: Record<string, unknown>) {
-  if (!["COMPETITIVE_AD_NORM_CONTROL", "COMPETITIVE_POSITIONING_CONTROL"].includes(text(controlBasis.kind))) return null;
-  const adObserved = controlBasis.kind === "COMPETITIVE_AD_NORM_CONTROL";
-  const observedCount = Number(controlBasis.observed_count);
-  const denominator = Number(controlBasis.denominator);
-  const prevalencePercent = Number(controlBasis.prevalence_percent);
-  const patternLabel = text(controlBasis.pattern_label) || text(controlBasis.pattern_id);
-  const changedFamily = ["QUALIFIED_ACTION", "AUDIENCE_SPECIFICITY", "MESSAGE_OFFER"].includes(text(controlBasis.changed_family))
-    ? text(controlBasis.changed_family) as "QUALIFIED_ACTION" | "AUDIENCE_SPECIFICITY" | "MESSAGE_OFFER"
-    : "AUDIENCE_SPECIFICITY";
-  const weakness = text(controlBasis.observed_weakness).replace(/[.!?]+$/u, "");
-  const improvement = (text(controlBasis.improvement_hypothesis)
-    || "Уточнить B2B-аудиторию и квалифицированный результат относительно рыночного контроля.").replace(/[.!?]+$/u, "");
-  return {
-    hypothesis_id: `competitor-public-web-${text(controlBasis.pattern_id) || "pattern"}-${changedFamily.toLowerCase()}@1.1.0`,
-    source: "COMPETITOR_PUBLIC_WEB",
-    claim_status: "TESTABLE_HYPOTHESIS_NOT_PERFORMANCE_FACT",
-    mechanism: `Проверяемая гипотеза, не факт эффективности. ${observedCount} из ${denominator} конкурентов (${prevalencePercent}%) используют паттерн «${patternLabel}». ${adObserved ? "Наблюдаемый рекламный паттерн сохраняем как контроль." : "Наблюдаемое позиционирование используем как контроль без заявления о запуске рекламы."}${weakness ? ` Ограничение: ${weakness}.` : ""} Улучшение для цели стратегии: ${improvement}.`,
-    changed_family: changedFamily,
-    competitor_set_rule: text(controlBasis.competitor_set_rule),
-    evidence_ids: Array.isArray(controlBasis.evidence_ids) ? controlBasis.evidence_ids.map(String) : [],
-    evidence_set: Array.isArray(controlBasis.evidence_set) ? controlBasis.evidence_set : [],
-    limitations: [text(controlBasis.limitation)].filter(Boolean),
-    prevalence: {
-      observed_count: Number(controlBasis.observed_count),
-      denominator: Number(controlBasis.denominator),
-      percent: Number(controlBasis.prevalence_percent),
-      sampled_count: Number(controlBasis.sampled_count),
-      evidence_status: text(controlBasis.evidence_status),
-    },
-  };
-}
-
 function variantLabel(family: PlaybookChangedFamily | null, controlKind: string) {
   if (!family) return controlKind.startsWith("COMPETITIVE_") ? "Рыночный контроль" : "STRATEGY_BASELINE_FALLBACK";
   const labels: Record<PlaybookChangedFamily, string> = {
@@ -400,29 +434,17 @@ function editableDraft(
   };
 }
 
-function applyConditionalProjection(
-  projection: Record<string, unknown>,
-  family: PlaybookChangedFamily | null,
-) {
-  const direct = projection.direct as Record<string, unknown>;
-  if (family === "CRITERIA_AUTOTARGETING") {
-    (direct.keyword as Record<string, unknown>).AutotargetingSettings = {
-      Categories: {
-        Exact: "YES",
-        Narrow: "YES",
-        Alternative: "NO",
-        Accessory: "NO",
-        Broader: "NO",
-      },
-    };
-  }
-  if (family === "PLACEMENT") {
-    const campaign = direct.campaign as Record<string, unknown>;
-    const unified = campaign.UnifiedCampaign as Record<string, unknown>;
-    const bidding = unified.BiddingStrategy as Record<string, unknown>;
-    const search = bidding.Search as Record<string, unknown>;
+function applyMaterialPlacement(projection: Record<string, unknown>, placement: unknown) {
+  const selected = keyText(placement).replace(/[\s-]+/gu, "_");
+  if (!selected || selected === "search_results") return [];
+  const productGalleryField = "/direct/campaign/UnifiedCampaign/BiddingStrategy/Search/PlacementTypes/ProductGallery";
+  if (selected === "product_gallery") {
+    const campaign = record(record(projection.direct).campaign);
+    const search = record(record(record(campaign.UnifiedCampaign).BiddingStrategy).Search);
     search.PlacementTypes = { SearchResults: "NO", ProductGallery: "YES" };
+    return [productGalleryField];
   }
+  return [`/direct/campaign/UnifiedCampaign/BiddingStrategy/Search/PlacementTypes/${text(placement)}`];
 }
 
 function treatmentProjection(projection: Record<string, unknown>) {
@@ -727,14 +749,6 @@ function publicationBlocker(code: string, message: string, fieldPath: string | n
   return { code, message, field_path: fieldPath };
 }
 
-function ruleSelectedFields(rule: CuratedPlaybookRule) {
-  return rule.changed_fields.filter((pointer) => CONDITIONAL_FIELD_CAPABILITY.has(pointer));
-}
-
-function expectedChangedFields(rule: CuratedPlaybookRule) {
-  return [...new Set(rule.changed_fields.map(text).filter(Boolean))].sort();
-}
-
 export function recommendationSetViabilityOutcome(drafts: CampaignDraftCandidate[]) {
   const viableCount = drafts.filter((draft) => draft.viability_status === "VIABLE").length;
   if (viableCount > 0) return {
@@ -836,7 +850,6 @@ export async function buildCampaignRecommendationSet({
   });
   const coreCapability = evaluateCoreDirectCapability(directCapabilitySnapshot);
   const controlBasis = competitiveControlBasis(analyticsEvidence, playbook.competitiveSampleRules);
-  const competitorHypothesis = competitorImprovement(controlBasis);
   const marketEvidence = analyticsEvidence?.market_evidence && typeof analyticsEvidence.market_evidence === "object"
     ? analyticsEvidence.market_evidence as Record<string, unknown>
     : {};
@@ -864,12 +877,14 @@ export async function buildCampaignRecommendationSet({
     : { status: "UNAVAILABLE" as const, source: null };
   const provisionalMonthlyBudget = Number(weeklyBudget) * 52 / 12;
   const strategyDeliveryKey = {
+    product: advertisedOffer,
     goal: businessGoal,
-    economics: { weekly_budget_rub: weeklyBudget, target_cpa_rub: targetResultCost },
+    economics: { target_result_cost: targetResultCost },
+    budget: weeklyBudget,
     geography,
+    period: strategyPeriod(strategy),
     landing: landingPage,
-    message: coreMessage,
-    management: `${CORE_DIRECT_CAPABILITY_PROFILE.profile_id}@${CORE_DIRECT_CAPABILITY_PROFILE.profile_version}`,
+    placement: "SEARCH_RESULTS",
   };
   const packableClusters: PackableDemandCluster[] = demandClusters.map((cluster, index) => ({
     cluster_id: text(cluster.cluster_id),
@@ -878,9 +893,7 @@ export async function buildCampaignRecommendationSet({
       ? text(cluster.status) as "AVAILABLE" | "PARTIAL"
       : "UNAVAILABLE",
     unique_publish_row_ids: Array.isArray(cluster.assigned_row_ids) ? cluster.assigned_row_ids.map(text).filter(Boolean) : [],
-    delivery_key: cluster.delivery_key && typeof cluster.delivery_key === "object"
-      ? cluster.delivery_key as PackableDemandCluster["delivery_key"]
-      : strategyDeliveryKey,
+    delivery_key: materialCampaignKey(cluster.delivery_key, strategyDeliveryKey),
     provisional_monthly_budget: Number.isFinite(Number(cluster.provisional_monthly_budget))
       ? Number(cluster.provisional_monthly_budget) : provisionalMonthlyBudget,
     relationship_state: text(cluster.relationship_state) as PackableDemandCluster["relationship_state"],
@@ -888,6 +901,11 @@ export async function buildCampaignRecommendationSet({
       ? cluster.capacity as PackableDemandCluster["capacity"] : capacity,
   }));
   const deliveryPacking = await packDemandClusters(packableClusters);
+  const materialKeysByFingerprint = new Map<string, Record<string, unknown>>();
+  for (const cluster of packableClusters) {
+    const normalized = normalizeDeliveryKey(cluster.delivery_key);
+    materialKeysByFingerprint.set(await sha256(normalized), cluster.delivery_key as Record<string, unknown>);
+  }
   const packedClusterIds = new Set(deliveryPacking.delivery_buckets.flatMap((bucket) => bucket.demand_cluster_ids as string[]));
   const demandReady = frequency.status === "AVAILABLE" && packedClusterIds.size > 0;
   const demandPartial = frequency.status === "PARTIAL" && packedClusterIds.size > 0;
@@ -929,67 +947,83 @@ export async function buildCampaignRecommendationSet({
 
   const candidateAudit: CandidateAuditRecord[] = playbook.audits.map(playbookCandidateAudit);
   const compiled: CampaignDraftCandidate[] = [];
+  const seenPublishFingerprints = new Map<string, string>();
   const seenTreatments = new Map<string, string>();
-  const playbookImprovementLimit = MAX_IMPROVEMENTS_PER_DELIVERY_BUCKET - (competitorHypothesis ? 1 : 0);
-  const activeRules = playbook.rules.slice(0, playbookImprovementLimit);
-  const overflowRules = playbook.rules.slice(playbookImprovementLimit);
+  const selectedContentRule = playbook.rules.find((rule) =>
+    ["QUALIFIED_ACTION", "AUDIENCE_SPECIFICITY", "MESSAGE_OFFER"].includes(rule.changed_family)
+  ) ?? null;
+  const groupedRules = playbook.rules.filter((rule) => rule.rule_id !== selectedContentRule?.rule_id);
   for (const [bucketIndex, bucket] of buckets.entries()) {
     const bucketId = text(bucket.delivery_bucket_id);
-    for (const rule of overflowRules) {
+    for (const rule of groupedRules) {
       candidateAudit.push({
-        candidate_id: `playbook-rule:${playbook.release?.release_id ?? "none"}:${rule.rule_id}:${bucketId}:limit`,
+        candidate_id: `playbook-rule:${playbook.release?.release_id ?? "none"}:${rule.rule_id}:${bucketId}:grouped`,
         candidate_type: "PLAYBOOK_RULE",
         delivery_bucket_id: bucketId,
         draft_id: null,
         visibility: "HIDDEN",
         disposition: "HIDDEN",
-        reason_code: "HIDDEN:PLAYBOOK_RULE_BUCKET_IMPROVEMENT_LIMIT",
+        reason_code: "HIDDEN:GROUPED_INSIDE_MATERIAL_CAMPAIGN",
         playbook_release_id: playbook.release?.release_id ?? null,
         playbook_rule_id: rule.rule_id,
       });
     }
-    const specifications: Array<{
-      rule: CuratedPlaybookRule | null;
-      competitor_hypothesis: ReturnType<typeof competitorImprovement>;
-      family: PlaybookChangedFamily | null;
-    }> = [
-      { rule: null, competitor_hypothesis: null, family: null },
-      ...(competitorHypothesis ? [{ rule: null, competitor_hypothesis: competitorHypothesis, family: competitorHypothesis.changed_family }] : []),
-      ...activeRules.map((rule) => ({ rule, competitor_hypothesis: null, family: rule.changed_family })),
-    ];
-    let comparator: CampaignDraftCandidate | null = null;
-    for (const specification of specifications) {
-      const rule = specification.rule;
-      const publicWebHypothesis = specification.competitor_hypothesis;
-      const isImprovement = Boolean(rule || publicWebHypothesis);
-      const family = specification.family;
-      const clusterIds = (bucket.demand_cluster_ids as string[]).map(text).sort();
+    const clusterIds = (bucket.demand_cluster_ids as string[]).map(text).sort();
       const clusterLabel = clusterIds.length ? `Demand pack: ${clusterIds.join(", ")}` : "Demand evidence gap";
-      const shortLabel = publicWebHypothesis ? "Улучшенная гипотеза" : variantLabel(family, controlBasis.kind);
-      const editable = editableDraft(model, strategy, family, shortLabel, clusterLabel, bucketIndex + 1);
+      const materialKey = materialKeysByFingerprint.get(text(bucket.delivery_key_fingerprint)) ?? strategyDeliveryKey;
+      const materialStrategy = strategyForMaterialCampaign(strategy, materialKey);
+      const shortLabel = variantLabel(null, controlBasis.kind);
+      const editable = editableDraft(model, materialStrategy, selectedContentRule?.changed_family ?? null, shortLabel, clusterLabel, bucketIndex + 1);
       const identityInput = {
         strategy_revision_id: strategyRevisionId,
-        delivery_key_fingerprint: bucket.delivery_key_fingerprint,
+        material_campaign_key_fingerprint: bucket.delivery_key_fingerprint,
         demand_cluster_ids: clusterIds,
-        variant: rule ? `${rule.rule_id}@${rule.rule_version}` : publicWebHypothesis?.hypothesis_id ?? controlBasis.kind,
         capability_profile: `${CORE_DIRECT_CAPABILITY_PROFILE.profile_id}@${CORE_DIRECT_CAPABILITY_PROFILE.profile_version}`,
         playbook_release_digest: playbook.release?.content_digest ?? null,
       };
       const draftIdentity = await sha256(identityInput);
-      const draftId = `draft-${draftIdentity.slice("sha256:".length, "sha256:".length + 20)}`;
+      const identitySuffix = draftIdentity.slice("sha256:".length, "sha256:".length + 20);
+      const draftId = `draft-${identitySuffix}`;
       const draftRevisionId = `${draftId}-r1`;
-      const projection = buildPublishProjection(model, strategy, {
+      const hypothesisId = `campaign-hypothesis-${identitySuffix}`;
+      const hypothesisRevisionId = `${hypothesisId}-r1`;
+      const futureCampaignId = `future-campaign-${identitySuffix}`;
+      const groupedClusters = demandClusters.filter((cluster) => clusterIds.includes(text(cluster.cluster_id)));
+      const semanticKeys = groupedClusters.map((cluster) => cluster.semantic_key ?? null).filter(Boolean);
+      const currentHypothesis = {
+        schema_version: "campaign-hypothesis-v1",
+        hypothesis_id: hypothesisId,
+        hypothesis_revision_id: hypothesisRevisionId,
+        strategy_revision_id: strategyRevisionId,
+        draft_id: draftId,
+        draft_revision_id: draftRevisionId,
+        future_campaign_id: futureCampaignId,
+        material_campaign_key: structuredClone(materialKey),
+        material_campaign_key_fingerprint: bucket.delivery_key_fingerprint,
+        applied_content_rule_id: selectedContentRule?.rule_id ?? null,
+        mechanism: `Одна управляемая кампания для продукта «${text(materialKey.product)}» и цели «${text(materialKey.goal)}».`,
+        grouped_demand: {
+          audiences: [text(targetAudience)].filter(Boolean),
+          intents: [...new Set(semanticKeys.map((key) => text(record(key).intent)).filter(Boolean))].sort(),
+          semantic_keys: semanticKeys,
+          demand_cluster_ids: clusterIds,
+        },
+      };
+      const projection = buildPublishProjection(model, materialStrategy, {
         ...editable,
         draft_id: draftId,
         draft_revision_id: draftRevisionId,
+        campaign_hypothesis_id: hypothesisId,
+        campaign_hypothesis_revision_id: hypothesisRevisionId,
+        future_campaign_id: futureCampaignId,
         strategy_revision_id: strategyRevisionId,
         capability_profile_id: CORE_DIRECT_CAPABILITY_PROFILE.profile_id,
         capability_profile_version: CORE_DIRECT_CAPABILITY_PROFILE.profile_version,
         playbook_release_id: playbook.release?.release_id ?? null,
         playbook_release_version: playbook.release?.release_version ?? null,
-        playbook_rule_id: rule?.rule_id ?? null,
-        playbook_rule_version: rule?.rule_version ?? null,
-        playbook_rule_digest: rule?.content_digest ?? null,
+        playbook_rule_id: selectedContentRule?.rule_id ?? null,
+        playbook_rule_version: selectedContentRule?.rule_version ?? null,
+        playbook_rule_digest: selectedContentRule?.content_digest ?? null,
         advertiser_account: directCapabilitySnapshot?.account ?? "",
         currency: directCapabilitySnapshot?.currency ?? "",
         capability_snapshot_id: directCapabilitySnapshot?.snapshot_id ?? "",
@@ -1004,14 +1038,9 @@ export async function buildCampaignRecommendationSet({
         metrika_registration_test_goal_id: metrikaMeasurementPlan?.registration_test_goal_id,
         metrika_registration_tested_at: metrikaMeasurementPlan?.registration_tested_at,
       }) as unknown as Record<string, unknown>;
-      applyConditionalProjection(projection, family);
-      const actualChangedFields = comparator
-        ? changedPointers(treatmentProjection(comparator.publish_projection), treatmentProjection(projection))
-        : [];
-      const selectedFields = rule ? ruleSelectedFields(rule) : [];
+      const selectedPlacementFields = applyMaterialPlacement(projection, materialKey.placement);
       const capability = evaluateDirectCapabilitySelection({
-        selectedFields,
-        requiredCapabilities: rule?.required_capabilities ?? [],
+        selectedFields: selectedPlacementFields,
         snapshot: directCapabilitySnapshot,
       });
       const publicationBlockers: Array<Record<string, unknown>> = [...coreCapability.blockers];
@@ -1067,24 +1096,18 @@ export async function buildCampaignRecommendationSet({
         "Campaign Draft не имеет допустимого demand evidence и доступен только для review.",
       ));
       publicationBlockers.push(...capability.blockers.map((blocker) => publicationBlocker(blocker.code, blocker.message, blocker.field_path)));
-      const expectedFields = rule ? expectedChangedFields(rule) : publicWebHypothesis ? actualChangedFields : [];
-      const undeclaredChanges = actualChangedFields.filter((pointer) => !expectedFields.includes(pointer));
-      const missingDeclaredChanges = expectedFields.filter((pointer) => !actualChangedFields.includes(pointer));
       let suppressionReason: string | null = null;
-      if (isImprovement && actualChangedFields.length === 0) suppressionReason = "HIDDEN:NO_MATERIAL_DELTA";
-      else if (isImprovement && (undeclaredChanges.length > 0 || missingDeclaredChanges.length > 0)) {
-        suppressionReason = "HIDDEN:POLICY_REJECTED:ONE_FACTOR_DELTA_MISMATCH";
-        publicationBlockers.push(publicationBlocker(
-          "ONE_FACTOR_DELTA_MISMATCH",
-          "Improvement projection does not match the one-factor changed_fields contract.",
-        ));
-      } else if (!capability.eligible) suppressionReason = "HIDDEN:HARD_INELIGIBLE:UNSUPPORTED_CAPABILITY";
       const publishFingerprint = await fingerprintDirectProjection(projection);
       const treatmentFingerprint = await sha256(treatmentProjection(projection));
-      const duplicateOf = seenTreatments.get(treatmentFingerprint) ?? null;
-      if (!suppressionReason && duplicateOf) suppressionReason = "HIDDEN:DUPLICATE_OR_OVERLAP";
+      const duplicateOf = seenPublishFingerprints.get(publishFingerprint)
+        ?? seenTreatments.get(treatmentFingerprint)
+        ?? null;
+      if (duplicateOf) suppressionReason = "HIDDEN:DUPLICATE_OR_OVERLAP";
       const visibility = suppressionReason ? "HIDDEN" as const : "VISIBLE" as const;
-      if (visibility === "VISIBLE") seenTreatments.set(treatmentFingerprint, draftId);
+      if (visibility === "VISIBLE") {
+        seenPublishFingerprints.set(publishFingerprint, draftId);
+        seenTreatments.set(treatmentFingerprint, draftId);
+      }
       const projectionCampaign = record(record(projection.direct).campaign);
       const projectionSearch = record(record(record(projectionCampaign.UnifiedCampaign).BiddingStrategy).Search);
       const publishEligibility = publicationBlockers.length === 0 && visibility === "VISIBLE" ? "ELIGIBLE" : publicationBlockers.some((item) => item.code === "DEMAND_EVIDENCE_GAP")
@@ -1093,16 +1116,21 @@ export async function buildCampaignRecommendationSet({
         ...editable,
         draft_id: draftId,
         draft_revision_id: draftRevisionId,
+        campaign_hypothesis_id: hypothesisId,
+        campaign_hypothesis_revision_id: hypothesisRevisionId,
+        future_campaign_id: futureCampaignId,
         strategy_revision_id: strategyRevisionId,
+        material_campaign_key: structuredClone(materialKey),
+        material_campaign_key_fingerprint: bucket.delivery_key_fingerprint,
         capability_profile_id: CORE_DIRECT_CAPABILITY_PROFILE.profile_id,
         capability_profile_version: CORE_DIRECT_CAPABILITY_PROFILE.profile_version,
         direct_capability_snapshot_id: directCapabilitySnapshot?.snapshot_id ?? null,
         playbook_release_id: playbook.release?.release_id ?? null,
         playbook_release_version: playbook.release?.release_version ?? null,
         playbook_release_digest: playbook.release?.content_digest ?? null,
-        playbook_rule_id: rule?.rule_id ?? null,
-        playbook_rule_version: rule?.rule_version ?? null,
-        playbook_rule_digest: rule?.content_digest ?? null,
+        playbook_rule_id: selectedContentRule?.rule_id ?? null,
+        playbook_rule_version: selectedContentRule?.rule_version ?? null,
+        playbook_rule_digest: selectedContentRule?.content_digest ?? null,
         source: FAN_OUT_CONTRACT,
         generation_order: compiled.length + 1,
         delivery_bucket_id: bucketId,
@@ -1110,42 +1138,18 @@ export async function buildCampaignRecommendationSet({
         demand_cluster_ids: clusterIds,
         covered_leaf_ids: leafLedger.filter((leaf) => leaf.delivery_bucket_id === bucketId).map((leaf) => leaf.leaf_id),
         variant: {
-          kind: isImprovement ? "IMPROVEMENT" : "CONTROL",
-          code: family ?? "CONTROL",
-          control_basis: isImprovement ? null : controlBasis,
-          hypothesis: rule ? {
-            hypothesis_id: `${rule.rule_id}@${rule.rule_version}`,
-            source: "ACTIVE_PLAYBOOK",
-            mechanism: rule.mechanism,
-            changed_family: rule.changed_family,
-            changed_fields: actualChangedFields,
-            held_constant_fields: ["/direct/campaign/UnifiedCampaign/BiddingStrategy/Network", "/direct/ad/ResponsiveAd/Href"],
-            comparator_draft_id: comparator?.draft_id ?? null,
-            playbook_release_id: playbook.release?.release_id ?? null,
-            playbook_rule_id: rule.rule_id,
-          } : publicWebHypothesis ? {
-            ...publicWebHypothesis,
-            changed_fields: actualChangedFields,
-            held_constant_fields: ["/direct/campaign/UnifiedCampaign/BiddingStrategy/Network", "/direct/ad/ResponsiveAd/Href"],
-            comparator_draft_id: comparator?.draft_id ?? null,
-            playbook_release_id: null,
-            playbook_rule_id: null,
-          } : null,
-          comparator_draft_id: isImprovement ? comparator?.draft_id ?? null : null,
+          kind: "CONTROL",
+          code: "MATERIAL_CAMPAIGN",
+          pair_role: visibility === "VISIBLE" ? "CURRENT" : "SUPPRESSED",
+          control_basis: controlBasis,
+          hypothesis: { ...currentHypothesis, publish_fingerprint: publishFingerprint },
+          comparator_draft_id: null,
         },
-        treatment_delta: isImprovement ? {
-          comparator_draft_id: comparator?.draft_id ?? null,
-          changed_family: family,
-          changed_fields: actualChangedFields,
-          expected_changed_fields: expectedFields,
-          material: actualChangedFields.length > 0,
-          exactly_one_hypothesis_family: undeclaredChanges.length === 0 && missingDeclaredChanges.length === 0,
-        } : null,
+        treatment_delta: null,
         dimensions: {
-          product: text(advertisedOffer),
+          product: text(materialKey.product),
           audience: text(targetAudience),
-          offer: family === "QUALIFIED_ACTION" ? text(qualifiedResult)
-            : family === "AUDIENCE_SPECIFICITY" ? `${text(coreMessage)}. Для: ${text(targetAudience)}` : text(coreMessage),
+          offer: text(coreMessage),
           keyword_cluster: clusterLabel,
         },
         delivery_key: bucket.delivery_key,
@@ -1164,8 +1168,8 @@ export async function buildCampaignRecommendationSet({
         capability_selection: capability,
         protocol_budget_readiness: {
           status: "PREREGISTERED",
-          comparator_draft_id: isImprovement ? comparator?.draft_id ?? null : draftId,
-          one_factor_attribution: isImprovement ? actualChangedFields.length > 0 && undeclaredChanges.length === 0 && missingDeclaredChanges.length === 0 : false,
+          comparator_draft_id: draftId,
+          one_factor_attribution: false,
           weekly_budget_micro_rub: record(projectionSearch.WbMaximumClicks).WeeklySpendLimit ?? null,
           period: {
             start: projectionCampaign.StartDate ?? null,
@@ -1189,8 +1193,6 @@ export async function buildCampaignRecommendationSet({
         registeredAt: generatedAt,
       });
       compiled.push(draft);
-      if (!isImprovement) comparator = draft;
-    }
   }
 
   const recommendationSetId = `recommendation-set-${(await sha256({
@@ -1276,13 +1278,13 @@ export async function buildCampaignRecommendationSet({
       release_id: playbook.release?.release_id ?? null,
       release_version: playbook.release?.release_version ?? null,
       content_digest: playbook.release?.content_digest ?? null,
-      applied_rule_ids: activeRules.map((rule) => rule.rule_id),
-      applied_rule_lineage: activeRules.map((rule) => ({
-        rule_id: rule.rule_id,
-        rule_version: rule.rule_version,
-        content_digest: rule.content_digest,
-        eval_fixture_id: rule.eval_fixture.fixture_id,
-      })),
+      applied_rule_ids: selectedContentRule ? [selectedContentRule.rule_id] : [],
+      applied_rule_lineage: selectedContentRule ? [{
+        rule_id: selectedContentRule.rule_id,
+        rule_version: selectedContentRule.rule_version,
+        content_digest: selectedContentRule.content_digest,
+        eval_fixture_id: selectedContentRule.eval_fixture.fixture_id,
+      }] : [],
       excluded_audit_ids: playbook.audits.map((audit) => audit.audit_id),
       mutable_default_read_at_query_time: false,
     },
@@ -1294,6 +1296,7 @@ export async function buildCampaignRecommendationSet({
       blocked_count: blockedCount,
       candidates_total: candidateAudit.length,
       visible_drafts: scored.filter((draft) => draft.visibility === "VISIBLE").length,
+      current_campaign_pairs: scored.filter((draft) => draft.visibility === "VISIBLE" && record(draft.variant).pair_role === "CURRENT").length,
       hidden_drafts: scored.filter((draft) => draft.visibility === "HIDDEN").length,
       audited_non_draft_candidates: auditedNonDraftCount,
       publishable_drafts: scored.filter((draft) => draft.publish_eligibility === "ELIGIBLE").length,
@@ -1325,6 +1328,7 @@ export async function buildCampaignRecommendationSet({
       comparators_per_bucket: 1,
       maximum_improvements_per_bucket: MAX_IMPROVEMENTS_PER_DELIVERY_BUCKET,
       maximum_drafts_per_bucket: 1 + MAX_IMPROVEMENTS_PER_DELIVERY_BUCKET,
+      current_pair_cardinality: "ONE_HYPOTHESIS_TO_ONE_DRAFT_TO_ONE_FUTURE_CAMPAIGN",
       generated_draft_count: scored.length,
       all_candidates_terminal: candidateAudit.every((candidate) => ["VISIBLE", "HIDDEN", "BLOCKED"].includes(candidate.disposition)),
     },

@@ -112,8 +112,11 @@ export function buildPublishProjection(
     brand_claims_contract: brandClaimsContract,
     lineage: {
       strategy_revision_id: draft.strategy_revision_id,
+      campaign_hypothesis_id: draft.campaign_hypothesis_id,
+      campaign_hypothesis_revision_id: draft.campaign_hypothesis_revision_id,
       draft_id: draft.draft_id,
       draft_revision_id: draft.draft_revision_id,
+      future_campaign_id: draft.future_campaign_id,
       capability_profile_id: draft.capability_profile_id,
       capability_profile_version: draft.capability_profile_version,
       playbook_release_id: draft.playbook_release_id,

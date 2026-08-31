@@ -150,8 +150,11 @@ export async function pipelineInputVersions(view: PipelineHistoricalView): Promi
   const campaignPairs = [];
   for (const [index, value] of list(recommendationSet.drafts).entries()) {
     const draft = record(value);
+    if (draft.visibility === "HIDDEN") continue;
     const hypothesis = record(record(draft.variant).hypothesis);
-    if (!Object.keys(hypothesis).length) continue;
+    if (!Object.keys(hypothesis).length
+      || (hypothesis.draft_revision_id && hypothesis.draft_revision_id !== draft.draft_revision_id)
+      || (hypothesis.future_campaign_id && hypothesis.future_campaign_id !== draft.future_campaign_id)) continue;
     campaignPairs.push({
       hypothesis: await versionReference(
         hypothesis,
