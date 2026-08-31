@@ -6,13 +6,18 @@ from typing import Any, Dict
 
 from mox_adv.analytics_evidence import (
     AdapterRead,
+    CachedEvidenceArtifact,
+    EvidenceAdapterError,
     EvidenceCollectorV1,
     EvidenceContractError,
     EvidenceFreshness,
     EvidenceRequest,
+    EvidenceReusePolicy,
     EvidenceScope,
     EvidenceSnapshotBuilderV1,
+    EvidenceTechnicalError,
     NormalizedFact,
+    TransientEvidenceAdapterError,
 )
 
 OBSERVED_AT = "2026-08-01T10:00:00+00:00"
@@ -26,6 +31,21 @@ class StaticAdapter:
 
     def read(self, request: EvidenceRequest) -> AdapterRead:
         return self.reads[request.request_id]
+
+
+class SequencedAdapter:
+    def __init__(self, source: str, outcomes: list[Any]) -> None:
+        self.source = source
+        self.outcomes = outcomes
+        self.calls = 0
+
+    def read(self, request: EvidenceRequest) -> AdapterRead:
+        del request
+        outcome = self.outcomes[self.calls]
+        self.calls += 1
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
 
 
 class ScalarNormalizer:
@@ -259,6 +279,224 @@ class AnalyticsEvidenceSnapshotTests(unittest.TestCase):
                 requests,
                 observations,
             )
+
+    def test_fresh_digest_matched_artifact_is_reused_in_a_new_trace(self) -> None:
+        evidence_request = request("site-price", "site.example")
+        initial_adapter = StaticAdapter(
+            "site.example",
+            {"site-price": available_read("site-price", "site.example", 1200)},
+        )
+        normalizer = ScalarNormalizer("site.example")
+        initial_observation = EvidenceCollectorV1(
+            {initial_adapter.source: initial_adapter},
+            {normalizer.source: normalizer},
+        ).collect((evidence_request,))[0]
+        cached = CachedEvidenceArtifact(
+            request_id=evidence_request.request_id,
+            input_digest="sha256:input-v1",
+            rule_digest="sha256:rules-v1",
+            observation=initial_observation,
+            dependent_result_ids=("strategy:current",),
+        )
+        unused_adapter = SequencedAdapter("site.example", [])
+        run = EvidenceCollectorV1(
+            {unused_adapter.source: unused_adapter},
+            {normalizer.source: normalizer},
+        ).collect_with_reuse(
+            (evidence_request,),
+            checked_at="2026-08-01T10:02:00+00:00",
+            policies=(
+                EvidenceReusePolicy(
+                    request_id=evidence_request.request_id,
+                    input_digest="sha256:input-v1",
+                    rule_digest="sha256:rules-v1",
+                    maximum_age_seconds=300,
+                ),
+            ),
+            cached_artifacts=(cached,),
+        )
+
+        self.assertEqual(0, unused_adapter.calls)
+        self.assertEqual(initial_observation, run.observations[0])
+        self.assertEqual("REUSED", run.trace[0].action)
+        self.assertEqual("MATCHED_DIGESTS_AND_FRESH", run.trace[0].reason)
+        self.assertEqual("2026-08-01T10:02:00+00:00", run.trace[0].checked_at)
+        self.assertEqual(0, run.trace[0].attempts)
+        self.assertEqual((), run.invalidated_result_ids)
+        self.assertEqual(("strategy:current",), run.artifacts[0].dependent_result_ids)
+
+    def test_changed_or_stale_artifact_recollects_and_invalidates_only_dependents(
+        self,
+    ) -> None:
+        changed_request = request("site-price", "site.example")
+        changed_rule_request = request("feed-price", "feed.example")
+        stale_request = request("catalog-price", "catalog.example")
+        stable_request = request("registry-price", "registry.example")
+        requests = (
+            changed_request,
+            changed_rule_request,
+            stale_request,
+            stable_request,
+        )
+        adapters = {
+            item.source: SequencedAdapter(
+                item.source,
+                [available_read(item.request_id, item.source, 1500)],
+            )
+            for item in requests
+        }
+        normalizers = {
+            item.source: ScalarNormalizer(item.source) for item in requests
+        }
+        seed = EvidenceCollectorV1(adapters, normalizers).collect(requests)
+        cached = tuple(
+            CachedEvidenceArtifact(
+                request_id=item.request_id,
+                input_digest="sha256:input-v1",
+                rule_digest="sha256:rules-v1",
+                observation=observation,
+                dependent_result_ids=("result:" + item.request_id,),
+            )
+            for item, observation in zip(requests, seed)
+        )
+        replacement_adapters = {
+            item.source: SequencedAdapter(
+                item.source,
+                [available_read(item.request_id, item.source, 1600)],
+            )
+            for item in requests
+        }
+        collector = EvidenceCollectorV1(replacement_adapters, normalizers)
+        run = collector.collect_with_reuse(
+            requests,
+            checked_at="2026-08-01T10:03:00+00:00",
+            policies=(
+                EvidenceReusePolicy(
+                    changed_request.request_id,
+                    "sha256:input-v2",
+                    "sha256:rules-v1",
+                    600,
+                ),
+                EvidenceReusePolicy(
+                    changed_rule_request.request_id,
+                    "sha256:input-v1",
+                    "sha256:rules-v2",
+                    600,
+                ),
+                EvidenceReusePolicy(
+                    stale_request.request_id,
+                    "sha256:input-v1",
+                    "sha256:rules-v1",
+                    60,
+                ),
+                EvidenceReusePolicy(
+                    stable_request.request_id,
+                    "sha256:input-v1",
+                    "sha256:rules-v1",
+                    600,
+                ),
+            ),
+            cached_artifacts=cached,
+        )
+
+        self.assertEqual(
+            [
+                "INPUT_DIGEST_CHANGED",
+                "RULE_DIGEST_CHANGED",
+                "STALE_ARTIFACT",
+                "MATCHED_DIGESTS_AND_FRESH",
+            ],
+            [item.reason for item in run.trace],
+        )
+        self.assertEqual(1, replacement_adapters["site.example"].calls)
+        self.assertEqual(1, replacement_adapters["feed.example"].calls)
+        self.assertEqual(1, replacement_adapters["catalog.example"].calls)
+        self.assertEqual(0, replacement_adapters["registry.example"].calls)
+        self.assertEqual(
+            (
+                "result:catalog-price",
+                "result:feed-price",
+                "result:site-price",
+            ),
+            run.invalidated_result_ids,
+        )
+        self.assertEqual((), run.artifacts[0].dependent_result_ids)
+        self.assertEqual((), run.artifacts[1].dependent_result_ids)
+        self.assertEqual((), run.artifacts[2].dependent_result_ids)
+        self.assertEqual(
+            ("result:registry-price",),
+            run.artifacts[3].dependent_result_ids,
+        )
+
+    def test_transient_safe_read_retries_at_most_three_times_with_retry_after(
+        self,
+    ) -> None:
+        evidence_request = request("site-price", "site.example")
+        read = available_read("site-price", "site.example", 1200)
+        sleeps: list[float] = []
+        recovering_adapter = SequencedAdapter(
+            "site.example",
+            [
+                TransientEvidenceAdapterError(
+                    "rate limited", retry_after_seconds=4
+                ),
+                TransientEvidenceAdapterError("timeout"),
+                read,
+            ],
+        )
+        normalizer = ScalarNormalizer("site.example")
+        collector = EvidenceCollectorV1(
+            {recovering_adapter.source: recovering_adapter},
+            {normalizer.source: normalizer},
+            sleeper=sleeps.append,
+        )
+
+        observations = collector.collect((evidence_request,))
+
+        self.assertEqual(1, len(observations))
+        self.assertEqual(3, recovering_adapter.calls)
+        self.assertEqual([4.0, 2.0], sleeps)
+
+        exhausted_adapter = SequencedAdapter(
+            "site.example",
+            [TransientEvidenceAdapterError("temporary")] * 3,
+        )
+        exhausted = EvidenceCollectorV1(
+            {exhausted_adapter.source: exhausted_adapter},
+            {normalizer.source: normalizer},
+            sleeper=lambda _: None,
+        )
+        with self.assertRaises(EvidenceTechnicalError) as caught:
+            exhausted.collect((evidence_request,))
+        self.assertEqual("TRANSIENT_READ_EXHAUSTED", caught.exception.code)
+        self.assertEqual(3, caught.exception.attempts)
+        self.assertTrue(caught.exception.retryable)
+        self.assertEqual(3, exhausted_adapter.calls)
+
+    def test_non_transient_error_is_technical_and_is_not_retried(self) -> None:
+        evidence_request = request("site-price", "site.example")
+        adapter = SequencedAdapter(
+            "site.example",
+            [EvidenceAdapterError("authorization failed")],
+        )
+        sleeps: list[float] = []
+        collector = EvidenceCollectorV1(
+            {adapter.source: adapter},
+            {"site.example": ScalarNormalizer("site.example")},
+            sleeper=sleeps.append,
+        )
+
+        with self.assertRaisesRegex(
+            EvidenceTechnicalError,
+            "must not be converted into a business-data request",
+        ) as caught:
+            collector.collect((evidence_request,))
+
+        self.assertEqual("EVIDENCE_READ_FAILED", caught.exception.code)
+        self.assertEqual(1, caught.exception.attempts)
+        self.assertFalse(caught.exception.retryable)
+        self.assertEqual(1, adapter.calls)
+        self.assertEqual([], sleeps)
 
 
 if __name__ == "__main__":

@@ -11,10 +11,12 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import (
     Any,
+    Callable,
     Dict,
     Iterable,
     Literal,
@@ -37,6 +39,60 @@ AtomicValue = Union[str, int, float, bool]
 
 class EvidenceContractError(ValueError):
     """Evidence cannot be represented without losing its audit semantics."""
+
+
+class EvidenceAdapterError(RuntimeError):
+    """A classified technical adapter failure, never a missing business fact."""
+
+
+class TransientEvidenceAdapterError(EvidenceAdapterError):
+    """A temporary safe-read failure which may be retried within the fixed bound."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        retry_after_seconds: Optional[float] = None,
+    ) -> None:
+        super().__init__(message)
+        if retry_after_seconds is not None and (
+            isinstance(retry_after_seconds, bool)
+            or not isinstance(retry_after_seconds, (int, float))
+            or not math.isfinite(retry_after_seconds)
+            or retry_after_seconds < 0
+        ):
+            raise EvidenceContractError(
+                "Retry-After must be a finite non-negative number of seconds."
+            )
+        self.retry_after_seconds = (
+            None if retry_after_seconds is None else float(retry_after_seconds)
+        )
+
+
+class EvidenceTechnicalError(RuntimeError):
+    """Terminal technical read outcome kept separate from evidence availability."""
+
+    def __init__(
+        self,
+        *,
+        request_id: str,
+        source: str,
+        attempts: int,
+        retryable: bool,
+    ) -> None:
+        self.request_id = request_id
+        self.source = source
+        self.attempts = attempts
+        self.retryable = retryable
+        self.code = (
+            "TRANSIENT_READ_EXHAUSTED" if retryable else "EVIDENCE_READ_FAILED"
+        )
+        super().__init__(
+            self.code
+            + ": technical read failed for "
+            + request_id
+            + "; it must not be converted into a business-data request."
+        )
 
 
 def _required_text(value: str, label: str) -> str:
@@ -465,16 +521,127 @@ class AnalyticsEvidenceSnapshot:
         return self.snapshot_id == _content_id("snapshot", value)
 
 
+ReuseAction = Literal["REUSED", "COLLECTED"]
+
+
+@dataclass(frozen=True)
+class EvidenceReusePolicy:
+    """Current digests and TTL that gate reuse for one atomic input."""
+
+    request_id: str
+    input_digest: str
+    rule_digest: str
+    maximum_age_seconds: int
+
+    def __post_init__(self) -> None:
+        for name in ("request_id", "input_digest", "rule_digest"):
+            object.__setattr__(self, name, _required_text(getattr(self, name), name))
+        if (
+            isinstance(self.maximum_age_seconds, bool)
+            or not isinstance(self.maximum_age_seconds, int)
+            or self.maximum_age_seconds <= 0
+        ):
+            raise EvidenceContractError(
+                "Evidence maximum age must be a positive integer number of seconds."
+            )
+
+
+@dataclass(frozen=True)
+class CachedEvidenceArtifact:
+    """One prior normalized artifact and the exact results that depend on it."""
+
+    request_id: str
+    input_digest: str
+    rule_digest: str
+    observation: EvidenceObservation
+    dependent_result_ids: Tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        for name in ("request_id", "input_digest", "rule_digest"):
+            object.__setattr__(self, name, _required_text(getattr(self, name), name))
+        if self.observation.request_id != self.request_id:
+            raise EvidenceContractError(
+                "Cached evidence artifact does not match its request."
+            )
+        observation_body = self.observation.as_dict()
+        observation_body.pop("observation_id")
+        if self.observation.observation_id != _content_id(
+            "observation", observation_body
+        ):
+            raise EvidenceContractError(
+                "Cached observation fingerprint does not match its evidence."
+            )
+        dependencies = tuple(
+            sorted(
+                {
+                    _required_text(item, "Dependent result identifier")
+                    for item in self.dependent_result_ids
+                }
+            )
+        )
+        object.__setattr__(self, "dependent_result_ids", dependencies)
+
+
+@dataclass(frozen=True)
+class EvidenceCollectionTrace:
+    request_id: str
+    action: ReuseAction
+    reason: str
+    checked_at: str
+    input_digest: str
+    rule_digest: str
+    observation_id: str
+    attempts: int
+    invalidated_result_ids: Tuple[str, ...] = ()
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "request_id": self.request_id,
+            "action": self.action,
+            "reason": self.reason,
+            "checked_at": self.checked_at,
+            "input_digest": self.input_digest,
+            "rule_digest": self.rule_digest,
+            "observation_id": self.observation_id,
+            "attempts": self.attempts,
+            "invalidated_result_ids": list(self.invalidated_result_ids),
+        }
+
+
+@dataclass(frozen=True)
+class EvidenceCollectionRun:
+    run_id: str
+    checked_at: str
+    observations: Tuple[EvidenceObservation, ...]
+    artifacts: Tuple[CachedEvidenceArtifact, ...]
+    trace: Tuple[EvidenceCollectionTrace, ...]
+    invalidated_result_ids: Tuple[str, ...]
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "checked_at": self.checked_at,
+            "observations": [item.as_dict() for item in self.observations],
+            "trace": [item.as_dict() for item in self.trace],
+            "invalidated_result_ids": list(self.invalidated_result_ids),
+        }
+
+
 class EvidenceCollectorV1:
     """Route each request through its typed adapter and normalizer."""
+
+    _MAX_READ_ATTEMPTS = 3
 
     def __init__(
         self,
         adapters: Mapping[str, EvidenceAdapter],
         normalizers: Mapping[str, EvidenceNormalizer],
+        *,
+        sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
         self._adapters = dict(adapters)
         self._normalizers = dict(normalizers)
+        self._sleeper = sleeper
         if set(self._adapters) != set(self._normalizers):
             raise EvidenceContractError(
                 "Every evidence adapter requires one normalizer."
@@ -492,91 +659,261 @@ class EvidenceCollectorV1:
         self,
         requests: Sequence[EvidenceRequest],
     ) -> Tuple[EvidenceObservation, ...]:
+        self._unique_requests(requests)
+        return tuple(self._collect_one(request)[0] for request in requests)
+
+    def collect_with_reuse(
+        self,
+        requests: Sequence[EvidenceRequest],
+        *,
+        checked_at: str,
+        policies: Sequence[EvidenceReusePolicy],
+        cached_artifacts: Sequence[CachedEvidenceArtifact] = (),
+    ) -> EvidenceCollectionRun:
+        """Collect a new run, reusing only digest-matched, policy-fresh inputs."""
+
+        checked_at = _utc_timestamp(checked_at, "Collection freshness check")
+        request_by_id = self._unique_requests(requests)
+        policy_by_id = {item.request_id: item for item in policies}
+        if (
+            len(policy_by_id) != len(policies)
+            or set(policy_by_id) != set(request_by_id)
+        ):
+            raise EvidenceContractError(
+                "Every evidence request requires exactly one reuse policy."
+            )
+        cache_by_id = {item.request_id: item for item in cached_artifacts}
+        if len(cache_by_id) != len(cached_artifacts):
+            raise EvidenceContractError(
+                "Cached evidence request identifiers must be unique."
+            )
+        unexpected_cache = set(cache_by_id).difference(request_by_id)
+        if unexpected_cache:
+            raise EvidenceContractError(
+                "Cached evidence contains an unrequested artifact."
+            )
+
         observations = []
-        seen = set()
+        artifacts = []
+        traces = []
+        invalidated = set()
         for request in requests:
-            if request.request_id in seen:
-                raise EvidenceContractError(
-                    "Evidence request identifiers must be unique."
-                )
-            seen.add(request.request_id)
-            try:
-                adapter = self._adapters[request.source]
-                normalizer = self._normalizers[request.source]
-            except KeyError as error:
-                raise EvidenceContractError(
-                    "No typed evidence adapter is registered for "
-                    + request.source
-                    + "."
-                ) from error
-            collected = adapter.read(request)
-            if (
-                collected.request_id != request.request_id
-                or collected.source != request.source
-            ):
-                raise EvidenceContractError(
-                    "Evidence adapter returned mismatched provenance."
-                )
-            provenance_body = {
-                "request_id": request.request_id,
-                "source": collected.source,
-                "source_locator": collected.source_locator,
-                "adapter_version": collected.adapter_version,
-                "observed_at": collected.observed_at,
-            }
-            provenance = EvidenceProvenance(
-                provenance_id=_content_id("provenance", provenance_body),
-                source=collected.source,
-                source_locator=collected.source_locator,
-                adapter_version=collected.adapter_version,
+            policy = policy_by_id[request.request_id]
+            cached = cache_by_id.get(request.request_id)
+            reason = self._reuse_rejection_reason(
+                request,
+                checked_at,
+                policy,
+                cached,
             )
-            if collected.availability == "UNAVAILABLE":
-                value = None
-                freshness = EvidenceFreshness(
-                    status="UNKNOWN",
-                    checked_at=collected.observed_at,
-                    limitation="Source was unavailable at collection time.",
-                )
-                confidence: ConfidenceLevel = "UNKNOWN"
-                limitations = collected.limitations
+            if reason is None:
+                assert cached is not None
+                observation = cached.observation
+                attempts = 0
+                action: ReuseAction = "REUSED"
+                reason = "MATCHED_DIGESTS_AND_FRESH"
+                artifact_dependencies = cached.dependent_result_ids
+                invalidated_for_request: Tuple[str, ...] = ()
             else:
-                fact = normalizer.normalize(request, collected)
-                value = fact.value
-                freshness = fact.freshness
-                confidence = fact.confidence
-                limitations = tuple(
-                    sorted(set(collected.limitations + fact.limitations))
+                observation, attempts = self._collect_one(request)
+                action = "COLLECTED"
+                invalidated_for_request = (
+                    () if cached is None else cached.dependent_result_ids
                 )
-            body = {
-                "request_id": request.request_id,
-                "subject": request.subject,
-                "predicate": request.predicate,
-                "scope": request.scope.as_dict(),
-                "availability": collected.availability,
-                "value": value,
-                "provenance": provenance.as_dict(),
-                "observed_at": collected.observed_at,
-                "freshness": freshness.as_dict(),
-                "confidence": confidence,
-                "limitations": list(limitations),
-            }
-            observations.append(
-                EvidenceObservation(
-                    observation_id=_content_id("observation", body),
+                invalidated.update(invalidated_for_request)
+                artifact_dependencies = ()
+            artifact = CachedEvidenceArtifact(
+                request_id=request.request_id,
+                input_digest=policy.input_digest,
+                rule_digest=policy.rule_digest,
+                observation=observation,
+                dependent_result_ids=artifact_dependencies,
+            )
+            observations.append(observation)
+            artifacts.append(artifact)
+            traces.append(
+                EvidenceCollectionTrace(
                     request_id=request.request_id,
-                    subject=request.subject,
-                    predicate=request.predicate,
-                    scope=request.scope,
-                    availability=collected.availability,
-                    value=value,
-                    provenance=provenance,
-                    observed_at=collected.observed_at,
-                    freshness=freshness,
-                    confidence=confidence,
-                    limitations=limitations,
+                    action=action,
+                    reason=reason,
+                    checked_at=checked_at,
+                    input_digest=policy.input_digest,
+                    rule_digest=policy.rule_digest,
+                    observation_id=observation.observation_id,
+                    attempts=attempts,
+                    invalidated_result_ids=invalidated_for_request,
                 )
             )
-        return tuple(observations)
+        ordered_invalidated = tuple(sorted(invalidated))
+        run_body = {
+            "checked_at": checked_at,
+            "trace": [item.as_dict() for item in traces],
+            "invalidated_result_ids": list(ordered_invalidated),
+        }
+        return EvidenceCollectionRun(
+            run_id=_content_id("evidence-collection-run", run_body),
+            checked_at=checked_at,
+            observations=tuple(observations),
+            artifacts=tuple(artifacts),
+            trace=tuple(traces),
+            invalidated_result_ids=ordered_invalidated,
+        )
+
+    @staticmethod
+    def _unique_requests(
+        requests: Sequence[EvidenceRequest],
+    ) -> Dict[str, EvidenceRequest]:
+        request_by_id = {item.request_id: item for item in requests}
+        if len(request_by_id) != len(requests):
+            raise EvidenceContractError(
+                "Evidence request identifiers must be unique."
+            )
+        return request_by_id
+
+    @staticmethod
+    def _reuse_rejection_reason(
+        request: EvidenceRequest,
+        checked_at: str,
+        policy: EvidenceReusePolicy,
+        cached: Optional[CachedEvidenceArtifact],
+    ) -> Optional[str]:
+        if cached is None:
+            return "NO_CACHED_ARTIFACT"
+        if (
+            cached.observation.subject != request.subject
+            or cached.observation.predicate != request.predicate
+            or cached.observation.scope != request.scope
+            or cached.observation.provenance.source != request.source
+        ):
+            return "REQUEST_CHANGED"
+        if cached.input_digest != policy.input_digest:
+            return "INPUT_DIGEST_CHANGED"
+        if cached.rule_digest != policy.rule_digest:
+            return "RULE_DIGEST_CHANGED"
+        observed = datetime.fromisoformat(cached.observation.observed_at)
+        checked = datetime.fromisoformat(checked_at)
+        if checked < observed:
+            return "FUTURE_CACHED_OBSERVATION"
+        age = (checked - observed).total_seconds()
+        if (
+            cached.observation.freshness.status != "FRESH"
+            or age > policy.maximum_age_seconds
+        ):
+            return "STALE_ARTIFACT"
+        return None
+
+    def _collect_one(
+        self,
+        request: EvidenceRequest,
+    ) -> Tuple[EvidenceObservation, int]:
+        try:
+            adapter = self._adapters[request.source]
+            normalizer = self._normalizers[request.source]
+        except KeyError as error:
+            raise EvidenceContractError(
+                "No typed evidence adapter is registered for "
+                + request.source
+                + "."
+            ) from error
+        collected, attempts = self._read_with_retries(adapter, request)
+        if (
+            collected.request_id != request.request_id
+            or collected.source != request.source
+        ):
+            raise EvidenceContractError(
+                "Evidence adapter returned mismatched provenance."
+            )
+        provenance_body = {
+            "request_id": request.request_id,
+            "source": collected.source,
+            "source_locator": collected.source_locator,
+            "adapter_version": collected.adapter_version,
+            "observed_at": collected.observed_at,
+        }
+        provenance = EvidenceProvenance(
+            provenance_id=_content_id("provenance", provenance_body),
+            source=collected.source,
+            source_locator=collected.source_locator,
+            adapter_version=collected.adapter_version,
+        )
+        if collected.availability == "UNAVAILABLE":
+            value = None
+            freshness = EvidenceFreshness(
+                status="UNKNOWN",
+                checked_at=collected.observed_at,
+                limitation="Source was unavailable at collection time.",
+            )
+            confidence: ConfidenceLevel = "UNKNOWN"
+            limitations = collected.limitations
+        else:
+            fact = normalizer.normalize(request, collected)
+            value = fact.value
+            freshness = fact.freshness
+            confidence = fact.confidence
+            limitations = tuple(
+                sorted(set(collected.limitations + fact.limitations))
+            )
+        body = {
+            "request_id": request.request_id,
+            "subject": request.subject,
+            "predicate": request.predicate,
+            "scope": request.scope.as_dict(),
+            "availability": collected.availability,
+            "value": value,
+            "provenance": provenance.as_dict(),
+            "observed_at": collected.observed_at,
+            "freshness": freshness.as_dict(),
+            "confidence": confidence,
+            "limitations": list(limitations),
+        }
+        return (
+            EvidenceObservation(
+                observation_id=_content_id("observation", body),
+                request_id=request.request_id,
+                subject=request.subject,
+                predicate=request.predicate,
+                scope=request.scope,
+                availability=collected.availability,
+                value=value,
+                provenance=provenance,
+                observed_at=collected.observed_at,
+                freshness=freshness,
+                confidence=confidence,
+                limitations=limitations,
+            ),
+            attempts,
+        )
+
+    def _read_with_retries(
+        self,
+        adapter: EvidenceAdapter,
+        request: EvidenceRequest,
+    ) -> Tuple[AdapterRead, int]:
+        for attempt in range(1, self._MAX_READ_ATTEMPTS + 1):
+            try:
+                return adapter.read(request), attempt
+            except TransientEvidenceAdapterError as error:
+                if attempt == self._MAX_READ_ATTEMPTS:
+                    raise EvidenceTechnicalError(
+                        request_id=request.request_id,
+                        source=request.source,
+                        attempts=attempt,
+                        retryable=True,
+                    ) from error
+                delay = (
+                    error.retry_after_seconds
+                    if error.retry_after_seconds is not None
+                    else float(2 ** (attempt - 1))
+                )
+                self._sleeper(delay)
+            except Exception as error:
+                raise EvidenceTechnicalError(
+                    request_id=request.request_id,
+                    source=request.source,
+                    attempts=attempt,
+                    retryable=False,
+                ) from error
+        raise AssertionError("Bounded evidence read loop did not terminate.")
 
 
 _FRESHNESS_ORDER = {"FRESH": 0, "AGING": 1, "STALE": 2, "UNKNOWN": 3}
