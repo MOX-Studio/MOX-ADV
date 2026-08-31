@@ -352,17 +352,16 @@ export async function buildP0P1Handoff(source: P0P1HandoffSource): Promise<P0P1H
   const attempts = sourceAttempts(source);
   for (const attempt of attempts) {
     if (!await verifyHumanDecisionGate(attempt.gate, attempt.review)
-      || !await verifyPackageExecution({ execution: attempt.execution, review: attempt.review, gate: attempt.gate, recommendationSet: attempt.recommendationSet })) {
+      || !await verifyPackageExecution({ execution: attempt.execution, gate: attempt.gate, recommendationSet: attempt.recommendationSet })) {
       throw new Error("P0_P1_HANDOFF_EXECUTION_INTEGRITY_INVALID");
     }
-    const authority = attempt.review.authority;
-    if (authority.strategy_revision_id !== undefined
-      && authority.strategy_revision_id !== strategy.strategy_revision_id) {
+    if (attempt.gate.authority.strategy_revision_id !== undefined
+      && attempt.gate.authority.strategy_revision_id !== strategy.strategy_revision_id) {
       throw new Error("P0_P1_HANDOFF_STRATEGY_LINEAGE_INVALID");
     }
-    const authorityStrategy = record(authority.strategy_snapshot);
-    const authorityModel = record(record(authority.business_model_snapshot).owner_contract);
-    const authorityEvidence = record(authority.analytics_evidence_snapshot);
+    const authorityStrategy = record(attempt.gate.authority.strategy_snapshot);
+    const authorityModel = record(record(attempt.gate.authority.business_model_snapshot).owner_contract);
+    const authorityEvidence = record(attempt.gate.authority.analytics_evidence_snapshot);
     if (Object.keys(authorityStrategy).length && JSON.stringify(authorityStrategy) !== JSON.stringify(strategy)
       || Object.keys(authorityModel).length && JSON.stringify(authorityModel) !== JSON.stringify(businessModel)
       || Object.keys(authorityEvidence).length && JSON.stringify(authorityEvidence) !== JSON.stringify(evidence)) {
@@ -378,7 +377,7 @@ export async function buildP0P1Handoff(source: P0P1HandoffSource): Promise<P0P1H
         || !await verifyAuctionProtocol(draft.auction_protocol, draft)) {
         throw new Error("P0_P1_HANDOFF_CAMPAIGN_LINEAGE_INVALID");
       }
-      const frozen = authority.frozen_auction_protocols?.[item.position];
+      const frozen = attempt.gate.authority.frozen_auction_protocols?.[item.position];
       if (frozen && JSON.stringify(frozen) !== JSON.stringify(draft.auction_protocol)) {
         throw new Error("P0_P1_HANDOFF_AUCTION_PROTOCOL_INVALID");
       }

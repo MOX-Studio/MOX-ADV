@@ -962,7 +962,7 @@ async function createPackageItemOutcome({
   selection,
   projection,
   draft,
-  review,
+  gate,
 }: {
   key: string;
   state: P0Document;
@@ -971,7 +971,6 @@ async function createPackageItemOutcome({
   selection: NonNullable<P0Document["shortlist"]>["selections"][number];
   projection: DirectProjection;
   draft: NonNullable<P0Document["recommendation_set"]>["drafts"][number];
-  review: NonNullable<P0Document["package_review"]>;
   gate: NonNullable<P0Document["human_decision_gate"]>;
 }) {
   const config = directWriteConfig();
@@ -1008,7 +1007,7 @@ async function createPackageItemOutcome({
     }
     await beginExecution(key, config.account, projection, itemExecutionId);
   }
-  const packageAuthority = review.authority;
+  const packageAuthority = gate.authority;
   try {
     const result = await executeSafeSingleCampaign({
       execution_id: itemExecutionId,
@@ -1039,7 +1038,7 @@ async function resubmitCorrectedPackageItemOutcome({
   selection,
   projection,
   draft,
-  review,
+  gate,
   source_item: sourceItem,
 }: {
   key: string;
@@ -1049,13 +1048,12 @@ async function resubmitCorrectedPackageItemOutcome({
   selection: NonNullable<P0Document["shortlist"]>["selections"][number];
   projection: DirectProjection;
   draft: NonNullable<P0Document["recommendation_set"]>["drafts"][number];
-  review: NonNullable<P0Document["package_review"]>;
   gate: NonNullable<P0Document["human_decision_gate"]>;
   source_item: NonNullable<P0Document["package_execution"]>["items"][number];
 }) {
   const config = directWriteConfig();
   if (!config.token || !config.account) throw new Error("Direct production credentials не настроены.");
-  if (!state.strategy || !state.context_state || review.authority.direct_account_binding.account !== config.account) {
+  if (!state.strategy || !state.context_state || gate.authority.direct_account_binding.account !== config.account) {
     throw new Error("Corrected package Gate не совпадает с persisted Strategy, Context или Direct account.");
   }
   const campaignId = sourceItem.provider_ids.campaign_id;
@@ -1240,12 +1238,11 @@ async function pollPackageItemOutcome({
   projection: DirectProjection;
   draft: NonNullable<P0Document["recommendation_set"]>["drafts"][number];
   item: NonNullable<P0Document["package_execution"]>["items"][number];
-  review: NonNullable<P0Document["package_review"]>;
   gate: NonNullable<P0Document["human_decision_gate"]>;
 }) {
   const config = directWriteConfig();
   if (!config.token || !config.account) throw new Error("Direct production credentials не настроены.");
-  if (gate.direct_account_binding.account !== config.account) {
+  if (gate.authority.direct_account_binding.account !== config.account) {
     throw new Error("Exact package Gate не совпадает с Direct moderation account.");
   }
   const row = await runtimeEnv()

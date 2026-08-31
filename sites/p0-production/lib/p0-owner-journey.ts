@@ -368,9 +368,7 @@ type ActionKind =
   | "edit-package"
   | "review-package"
   | "authorize-and-create"
-  | "authorize-live-creation"
-  | "authorize-correction"
-  | "authorize-live-correction";
+  | "authorize-correction";
 
 type InternalActionDescriptor = {
   kind: ActionKind;
@@ -935,19 +933,7 @@ export function ownerActionDescriptor(view: InternalView): InternalActionDescrip
       kind: "authorize-correction",
       target: correctionGate.correction_id,
       label: "Подтвердить исправление",
-      description: "Новое решение относится только к показанной исправленной формулировке и пока не выполняет внешнюю запись.",
-      fields: [],
-    };
-  }
-  const liveCorrection = correctionWithStatus(state, "READY_TO_RESUBMIT");
-  if (liveCorrection?.human_decision_gate
-    && !state.live_creation_authorities.some((authority) => authority.gate_id === liveCorrection.human_decision_gate?.gate_id)
-    && allowed(view, "authorize_live_creation")) {
-    return {
-      kind: "authorize-live-correction",
-      target: liveCorrection.correction_id,
-      label: "Разрешить точный повтор без показов",
-      description: "Это отдельное одноразовое разрешение выполнит внешнюю запись только для показанной исправленной редакции. Исходный результат сохранится отдельно; показы, расходы и возобновление запрещены.",
+      description: "Новое решение относится только к показанной исправленной формулировке.",
       fields: [],
     };
   }
@@ -998,20 +984,10 @@ export function ownerActionDescriptor(view: InternalView): InternalActionDescrip
     return {
       kind: "authorize-and-create",
       label: "Подтвердить точный пакет",
-      description: "Это предварительное решение фиксирует только показанный пакет и точные протоколы тестов. Оно не создаёт кампании и не выполняет внешнюю запись.",
+      description: "Одно решение выдаёт одноразовое полномочие только на показанный пакет и точные протоколы тестов. Подтверждение не создаёт кампании и не выполняет внешнюю запись.",
       fields: protocolFields((state.shortlist?.selections ?? []).map((selection) =>
         drafts.find((draft) => draft.draft_id === selection.draft_id) ?? {}
       )),
-    };
-  }
-  if (state.human_decision_gate && !state.package_execution
-    && !state.live_creation_authorities.some((authority) => authority.gate_id === state.human_decision_gate?.gate_id)
-    && allowed(view, "authorize_live_creation")) {
-    return {
-      kind: "authorize-live-creation",
-      label: "Разрешить создание без показов",
-      description: "Это отдельное одноразовое разрешение выполнит внешнюю запись только для показанного пакета. До каждой дочерней записи остановка будет подтверждена; показы, расходы и возобновление запрещены.",
-      fields: [],
     };
   }
   return null;
@@ -1938,9 +1914,7 @@ function packageSummary(view: InternalView, campaigns: OwnerJourneyProjection["c
     execution: execution
       ? completed ? "Создание завершено" : "Агент продолжает создание и проверку"
       : state.human_decision_gate
-        ? state.live_creation_authorities.some((authority) => authority.gate_id === state.human_decision_gate?.gate_id)
-          ? "Отдельное одноразовое разрешение записано; агент готовит безопасное создание"
-          : "Решение записано без внешней записи; реальное создание требует отдельного следующего разрешения"
+        ? "Решение записано без внешней записи; реальное создание требует отдельного следующего разрешения"
         : "Ожидает решения владельца",
     outcomes: (execution?.items ?? []).map((item, index) => ({
       campaign: campaigns[index]?.name ?? `Кампания ${index + 1}`,
@@ -2024,7 +1998,7 @@ async function packageDecisionProjection(
     history: state.package_owner_decisions.map((decision) => ({
       verdict: decision.verdict === "ACCEPTED" ? "Принято" as const : "Отклонено" as const,
       decidedAt: ownerObservedAt(decision.decided_at),
-      exactVersion: `${decision.exact_review.selected_count} ${decision.exact_review.selected_count === 1 ? "кампания" : "кампании"} · точный состав сохранён`,
+      exactVersion: `${decision.exact_review.authority.ordered_selections.length} ${decision.exact_review.authority.ordered_selections.length === 1 ? "кампания" : "кампании"} · точный состав сохранён`,
     })),
   };
 }
@@ -2081,10 +2055,7 @@ function outcome(view: InternalView, stage: OwnerJourneyStageId, unknowns: strin
     return { status: "blocked", headline: "Часть кампаний безопасно не создана", summary: "Каждый результат сохранён отдельно; подтверждённые остановленные кампании не смешаны с отказами или сбоями." };
   }
   if (state.human_decision_gate && !state.package_execution) {
-    const liveAuthorized = state.live_creation_authorities.some((authority) => authority.gate_id === state.human_decision_gate?.gate_id);
-    return liveAuthorized
-      ? { status: "working", headline: "Точное создание отдельно разрешено", summary: "Агент сохранит намерение каждого элемента, создаст его официальным путём и продолжит только после подтверждённой остановки." }
-      : { status: "complete", headline: "Решение по точному пакету записано", summary: "Внешних записей, показов и расходов не было. Реальное создание требует следующего отдельного разрешения." };
+    return { status: "complete", headline: "Решение по точному пакету записано", summary: "Внешних записей, показов и расходов не было. Реальное создание требует следующего отдельного разрешения." };
   }
   return { status: "ready", headline: "Пакет готов к точному решению", summary: "Проверьте бизнес-состав пакета. Принятие или отклонение только сохранит решение без внешней записи." };
 }
@@ -2104,10 +2075,7 @@ function recommendation(view: InternalView, stage: OwnerJourneyStageId): OwnerJo
     return { headline: "Подтвердить подготовленное исправление", rationale: "Новая формулировка прошла тот же бизнес-редактор и полную проверку, но исходный отказ и новое решение остаются раздельными." };
   }
   if (state.human_decision_gate && !state.package_execution) {
-    const liveAuthorized = state.live_creation_authorities.some((authority) => authority.gate_id === state.human_decision_gate?.gate_id);
-    return liveAuthorized
-      ? { headline: "Создать точный пакет без показов", rationale: "Отдельное одноразовое разрешение связано только с показанными версиями; агент обязан подтвердить остановку до дочерних записей." }
-      : { headline: "Точный пакет принят без внешней записи", rationale: "Предварительное решение связано только с показанными версиями; показы, расходы и возобновление запрещены, а реальное создание требует отдельного следующего разрешения." };
+    return { headline: "Точный пакет принят без внешней записи", rationale: "Одноразовое полномочие связано только с показанными версиями; показы, расходы и возобновление запрещены, а реальное создание требует отдельного следующего разрешения." };
   }
   return { headline: "Принять или отклонить точный пакет", rationale: "Одно явное решение будет записано только для показанного состава. На этом этапе внешней записи, показов и расходов не будет." };
 }
@@ -2165,10 +2133,10 @@ function cards(
   }
   for (const item of unknowns.slice(0, 3)) result.push({ kind: "problem", title: "Существенное неизвестное", body: item });
   const descriptor = ownerActionDescriptor(view);
-  const gateKinds: ActionKind[] = ["confirm-goal", "confirm-business-model", "select-focus", "review-strategy", "authorize-and-create", "authorize-live-creation", "authorize-correction", "authorize-live-correction"];
+  const gateKinds: ActionKind[] = ["confirm-goal", "confirm-business-model", "select-focus", "review-strategy", "authorize-and-create", "authorize-correction"];
   if (descriptor && gateKinds.includes(descriptor.kind)) {
     const current = recommendation(view, stage);
-    const correctionDecision = descriptor.kind === "authorize-correction" || descriptor.kind === "authorize-live-correction";
+    const correctionDecision = descriptor.kind === "authorize-correction";
     const preparedCorrection = correctionDecision
       ? state.package_corrections.find((correction) => correction.correction_id === descriptor.target)
       : null;
@@ -2810,32 +2778,26 @@ export class P0OwnerJourney {
         package_review_id: review.package_review_id,
         package_id: review.package_id,
       });
-    } else if (descriptor.kind === "authorize-live-creation") {
-      const gate = view.state.human_decision_gate!;
-      await command({
-        action: "authorize_live_creation",
-        confirmation: "AUTHORIZE_EXACT_SUSPENDED_CREATION",
-        package_id: gate.package_id,
-        gate_id: gate.gate_id,
-      });
     } else if (descriptor.kind === "authorize-correction") {
-      const correction = view.state.package_corrections.find((item) => item.correction_id === descriptor.target)!;
-      await command({
-        action: "confirm_package_correction",
-        correction_id: correction.correction_id,
-        confirmation: "CONFIRM_EXACT_SHORTLIST_PACKAGE",
-        package_review_id: correction.package_review!.package_review_id,
-        package_id: correction.package_review!.package_id,
-      });
-    } else if (descriptor.kind === "authorize-live-correction") {
-      const correction = view.state.package_corrections.find((item) => item.correction_id === descriptor.target)!;
-      await command({
-        action: "authorize_live_creation",
-        correction_id: correction.correction_id,
-        confirmation: "AUTHORIZE_EXACT_SUSPENDED_CREATION",
-        package_id: correction.human_decision_gate!.package_id,
-        gate_id: correction.human_decision_gate!.gate_id,
-      });
+      let correction = view.state.package_corrections.find((item) => item.correction_id === descriptor.target)!;
+      if (correction.status === "HUMAN_GATE_REQUIRED") {
+        await command({
+          action: "confirm_package_correction",
+          correction_id: correction.correction_id,
+          confirmation: "CONFIRM_EXACT_SHORTLIST_PACKAGE",
+          package_review_id: correction.package_review!.package_review_id,
+          package_id: correction.package_review!.package_id,
+        });
+        correction = view.state.package_corrections.find((item) => item.correction_id === descriptor.target)!;
+      }
+      if (!this.agentProjection) {
+        await command({
+          action: "resubmit_package_correction",
+          correction_id: correction.correction_id,
+          package_id: correction.human_decision_gate!.package_id,
+          gate_id: correction.human_decision_gate!.gate_id,
+        });
+      }
     }
 
     let agent: P0AgentOwnerProjection | null = null;
@@ -2863,19 +2825,6 @@ export class P0OwnerJourney {
           expected_revision: view.revision,
           package_id: gate.package_id,
           gate_id: gate.gate_id,
-        });
-        continue;
-      }
-      const readyCorrection = view.state.package_corrections.find((correction) =>
-        correction.status === "READY_TO_RESUBMIT" && correction.human_decision_gate
-      );
-      if (allowDispatch && readyCorrection && allowed(view, "resubmit_package_correction")) {
-        view = await this.application.command(ownerKey, {
-          action: "resubmit_package_correction",
-          expected_revision: view.revision,
-          correction_id: readyCorrection.correction_id,
-          package_id: readyCorrection.human_decision_gate!.package_id,
-          gate_id: readyCorrection.human_decision_gate!.gate_id,
         });
         continue;
       }

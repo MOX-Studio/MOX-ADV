@@ -2677,32 +2677,24 @@ async function packageFixture(t, { release } = {}) {
   };
 }
 
-async function reviewAndConfirm(application, result, draftIds, { authorizeLive = true } = {}) {
+async function reviewAndConfirm(application, result, draftIds) {
   for (const draftId of draftIds) {
     result = await application.command("owner", { action: "add_to_shortlist", expected_revision: result.revision, draft_id: draftId });
   }
   result = await application.command("owner", { action: "review_package", expected_revision: result.revision });
-  result = await application.command("owner", {
+  return application.command("owner", {
     action: "confirm_package",
     expected_revision: result.revision,
     confirmation: "CONFIRM_EXACT_SHORTLIST_PACKAGE",
     package_review_id: result.state.package_review.package_review_id,
     package_id: result.state.package_review.package_id,
   });
-  if (!authorizeLive) return result;
-  return application.command("owner", {
-    action: "authorize_live_creation",
-    expected_revision: result.revision,
-    confirmation: "AUTHORIZE_EXACT_SUSPENDED_CREATION",
-    package_id: result.state.human_decision_gate.package_id,
-    gate_id: result.state.human_decision_gate.gate_id,
-  });
 }
 
 test("initial accepted package remains no-write across owner refresh and cannot be dispatched by the agent before the separate real stage", async (t) => {
   const value = await packageFixture(t);
   const draft = value.result.state.recommendation_set.drafts.find((item) => item.shortlist_eligible && item.visibility === "VISIBLE");
-  const accepted = await reviewAndConfirm(value.application, value.result, [draft.draft_id], { authorizeLive: false });
+  const accepted = await reviewAndConfirm(value.application, value.result, [draft.draft_id]);
   const journey = new P0OwnerJourney(value.application);
   const projection = await journey.query("owner");
   const refreshed = await journey.diagnostics("owner");
@@ -2727,23 +2719,6 @@ test("initial accepted package remains no-write across owner refresh and cannot 
     (error) => error instanceof P0ApplicationError && error.code === "P0_AGENT_APPROVED_DISPATCH_DENIED",
   );
   assert.equal((await value.application.query("owner")).state.package_execution, null);
-});
-
-test("owner journey accepts the separate live action handle and consumes it into one durable package execution", async (t) => {
-  const value = await packageFixture(t);
-  const draft = value.result.state.recommendation_set.drafts.find((item) => item.shortlist_eligible && item.visibility === "VISIBLE");
-  await reviewAndConfirm(value.application, value.result, [draft.draft_id], { authorizeLive: false });
-  const journey = new P0OwnerJourney(value.application);
-  const projection = await journey.query("owner");
-  assert.equal(projection.primaryAction.label, "Разрешить создание без показов");
-  const next = await journey.submit("owner", { handle: projection.primaryAction.handle, values: {} });
-  const diagnostics = await journey.diagnostics("owner");
-  assert.equal(diagnostics.state.live_creation_authorities.length, 1);
-  assert.equal(diagnostics.state.live_creation_authorities[0].status, "CONSUMED");
-  assert.equal(diagnostics.state.live_creation_authorities[0].package_execution_id, diagnostics.state.package_execution.package_execution_id);
-  assert.equal(diagnostics.state.package_execution.selected_count, 1);
-  assert.equal(value.externalWrites(), 0);
-  assert.equal(next.primaryAction, null);
 });
 
 test("owner can reject the exact reviewed package and retain an immutable zero-write audit decision", async (t) => {
@@ -2860,10 +2835,10 @@ test("every selected Campaign revision freezes a complete honest Auction Protoco
   assert.equal(protocol.p1_lineage.authority_effect, "NONE");
 
   const confirmed = await reviewAndConfirm(value.application, value.result, [improvement.draft_id]);
-  const selection = confirmed.state.package_review.authority.ordered_selections[0];
+  const selection = confirmed.state.human_decision_gate.authority.ordered_selections[0];
   assert.equal(selection.auction_protocol_revision_id, protocol.protocol_revision_id);
   assert.equal(selection.auction_protocol_content_hash, protocol.content_hash);
-  assert.deepEqual(confirmed.state.package_review.authority.frozen_auction_protocols, [protocol]);
+  assert.deepEqual(confirmed.state.human_decision_gate.authority.frozen_auction_protocols, [protocol]);
   assert.equal(value.externalWrites(), 0);
 });
 
@@ -3096,34 +3071,10 @@ test("ordered multi-Draft shortlist supports add/remove/positional restore, exac
   );
   assert.match(result.state.human_decision_gate.gate_id, /^sha256:[a-f0-9]{64}$/u);
   assert.equal(result.state.human_decision_gate.confirmed_at.includes("2026-08-21T10:00:"), true);
-  assert.equal(result.state.human_decision_gate.authority_digest, review.package_id);
-  assert.equal(result.state.human_decision_gate.selected_count, review.authority.ordered_selections.length);
-  assert.deepEqual(result.state.human_decision_gate.direct_account_binding, review.authority.direct_account_binding);
+  assert.deepEqual(result.state.human_decision_gate.authority, review.authority);
   assert.equal(result.state.human_decision_gate.external_transactionality_promised, false);
   assert.equal(result.state.human_decision_gate.external_writes_performed, false);
   assert.equal(result.write_readiness.ready, true);
-  assert.equal(result.workflow.allowed_commands.includes("authorize_live_creation"), true);
-  assert.equal(result.workflow.allowed_commands.includes("dispatch_package"), false);
-  await assert.rejects(
-    restarted.command("owner", {
-      action: "dispatch_package",
-      expected_revision: result.revision,
-      package_id: result.state.human_decision_gate.package_id,
-      gate_id: result.state.human_decision_gate.gate_id,
-    }),
-    (error) => error instanceof P0ApplicationError && error.code === "P0_TRANSITION_INVALID",
-  );
-  const readsBeforeLiveAuthority = value.contextReads();
-  result = await restarted.command("owner", {
-    action: "authorize_live_creation",
-    expected_revision: result.revision,
-    confirmation: "AUTHORIZE_EXACT_SUSPENDED_CREATION",
-    package_id: result.state.human_decision_gate.package_id,
-    gate_id: result.state.human_decision_gate.gate_id,
-  });
-  assert.equal(value.contextReads(), readsBeforeLiveAuthority, "live authority must be persisted before any provider adapter call");
-  assert.equal(result.state.live_creation_authorities.length, 1);
-  assert.equal(result.state.live_creation_authorities[0].status, "ACTIVE_UNCONSUMED");
   assert.equal(result.workflow.allowed_commands.includes("dispatch_package"), true);
   const confirmedGate = JSON.stringify(result.state.human_decision_gate);
   const confirmedReview = JSON.stringify(result.state.package_review);
@@ -4161,19 +4112,7 @@ test("rejected item correction requires a material Draft revision, fresh review 
   correction = result.state.package_corrections[0];
   assert.equal(correction.status, "READY_TO_RESUBMIT");
   assert.notEqual(correction.human_decision_gate.gate_id, initialGateId);
-  assert.equal(result.workflow.allowed_commands.includes("resubmit_package_correction"), false);
-  assert.equal(result.workflow.allowed_commands.includes("authorize_live_creation"), true);
-  result = await value.application.command("owner", {
-    action: "authorize_live_creation",
-    expected_revision: result.revision,
-    correction_id: correctionId,
-    confirmation: "AUTHORIZE_EXACT_SUSPENDED_CREATION",
-    package_id: correction.human_decision_gate.package_id,
-    gate_id: correction.human_decision_gate.gate_id,
-  });
-  correction = result.state.package_corrections[0];
   assert.equal(result.workflow.allowed_commands.includes("resubmit_package_correction"), true);
-  assert.equal(result.state.live_creation_authorities.at(-1).status, "ACTIVE_UNCONSUMED");
   await assert.rejects(
     value.application.command("owner", {
       action: "resubmit_package_correction",
@@ -4307,7 +4246,7 @@ test("agent prepares a rejected Campaign correction through the existing editor 
   assert.equal(correction.human_decision_gate, null);
   assert.equal(JSON.stringify(current.state.package_execution), immutableInitialExecution);
 
-  const journey = new P0OwnerJourney(value.application);
+  const journey = new P0OwnerJourney(value.application, { agentProjection: async () => null });
   const owner = await journey.query("owner");
   assert.equal(owner.primaryAction.label, "Подтвердить исправление");
   assert.equal(owner.primaryAction.fields.length, 0);
@@ -4315,31 +4254,6 @@ test("agent prepares a rejected Campaign correction through the existing editor 
   assert.equal(owner.cards.some((card) => card.kind === "human-decision-gate" && /Оставьте заявку на участие после проверки условий/u.test(JSON.stringify(card.facts))), true);
   assert.equal(owner.campaignOptions.some((campaign) => campaign.publishPreview.texts.includes("Оставьте заявку на участие после проверки условий")), true);
   assert.doesNotMatch(JSON.stringify(owner), /701|702|704|provider_ids|status_clarification|Ads\.get|STATUS_REJECTED|Policy detail/iu);
-
-  const confirmedCorrection = await journey.submit("owner", { handle: owner.primaryAction.handle, values: {} });
-  assert.equal(confirmedCorrection.primaryAction.label, "Разрешить точный повтор без показов");
-  assert.match(confirmedCorrection.primaryAction.description, /отдельное одноразовое разрешение/u);
-  value.adapter.resubmitCorrectedPackageItemOutcome = async ({ item_execution_id }) => moderationOutcome(item_execution_id, {
-    campaignId: "701",
-    adGroupIds: ["702"],
-    ads: [{ adId: "704", adGroupId: "702", status: "ACCEPTED", statusClarification: null }],
-  });
-  const resubmitted = await journey.submit("owner", { handle: confirmedCorrection.primaryAction.handle, values: {} });
-  const completed = await journey.diagnostics("owner");
-  assert.equal(
-    completed.state.package_corrections[0].terminal_outcome,
-    "PASS_AFTER_CORRECTION",
-    JSON.stringify({
-      status: completed.state.package_corrections[0].status,
-      execution: completed.state.package_corrections[0].execution,
-      liveAuthorities: completed.state.live_creation_authorities,
-      allowedCommands: completed.workflow.allowed_commands,
-      resubmittedPrimaryAction: resubmitted.primaryAction,
-    }),
-  );
-  assert.equal(completed.state.live_creation_authorities.length, 2);
-  assert.equal(completed.state.live_creation_authorities.every((authority) => authority.status === "CONSUMED"), true);
-  assert.equal(resubmitted.businessOutcome.headline, "Создание завершено без запуска показов");
 });
 
 test("unknown or reconciliation-required package outcomes never enter content correction", async (t) => {

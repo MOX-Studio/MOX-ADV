@@ -262,20 +262,19 @@ export async function exactPackageDispatchPlans(input: {
   gate: HumanDecisionGate;
   recommendationSet: CampaignRecommendationSet;
 }) {
-  const authority = input.review.authority;
   if (input.gate.package_id !== input.review.package_id
     || input.gate.package_review_id !== input.review.package_review_id
-    || input.gate.selected_count !== authority.ordered_selections.length
-    || authority.strategy_revision_id !== input.recommendationSet.strategy_revision_id
-    || authority.recommendation_set_id !== input.recommendationSet.recommendation_set_id
-    || JSON.stringify(authority.capability_profile) !== JSON.stringify(input.recommendationSet.capability_profile)) {
+    || input.gate.authority.strategy_revision_id !== input.recommendationSet.strategy_revision_id
+    || input.gate.authority.recommendation_set_id !== input.recommendationSet.recommendation_set_id
+    || JSON.stringify(input.gate.authority) !== JSON.stringify(input.review.authority)
+    || JSON.stringify(input.gate.authority.capability_profile) !== JSON.stringify(input.recommendationSet.capability_profile)) {
     throw new Error("Exact package Gate, Strategy, Recommendation Set или capability profile не совпадают.");
   }
-  if (!authority.ordered_selections.length) {
+  if (!input.gate.authority.ordered_selections.length) {
     throw new Error("Exact package Gate не содержит selected Drafts.");
   }
   const plans: PackageDispatchPlan[] = [];
-  for (const [position, selection] of authority.ordered_selections.entries()) {
+  for (const [position, selection] of input.gate.authority.ordered_selections.entries()) {
     const draft = input.recommendationSet.drafts.find((item) => item.draft_id === selection.draft_id);
     if (!draft || !selectionMatchesDraft(selection, draft, input.recommendationSet)) {
       throw new Error(`Selected Draft ${selection.draft_id} revision или fingerprint не совпадает с exact Gate.`);
@@ -283,7 +282,7 @@ export async function exactPackageDispatchPlans(input: {
     const blockers = campaignDraftPublishBlockers(draft);
     if (blockers.length) throw new Error(`Selected Draft ${selection.draft_id} blocked: ${blockers[0]}`);
     const projection = draft.publish_projection as DirectProjection;
-    const frozenProtocol = authority.frozen_auction_protocols[position];
+    const frozenProtocol = input.gate.authority.frozen_auction_protocols[position];
     if (!frozenProtocol
       || JSON.stringify(frozenProtocol) !== JSON.stringify(draft.auction_protocol)
       || !await verifyAuctionProtocol(frozenProtocol, draft)) {
@@ -1094,12 +1093,10 @@ function validItemState(item: PackageItemExecution) {
 
 export async function verifyPackageExecution(input: {
   execution: PackageExecution | unknown;
-  review: PackageReview;
   gate: HumanDecisionGate;
   recommendationSet: CampaignRecommendationSet;
 }) {
   const candidate = record(input.execution) as PackageExecution;
-  const authority = input.review.authority;
   if (candidate.schema_version !== PACKAGE_EXECUTION_SCHEMA
     || candidate.contract_version !== "2.0.0"
     || candidate.package_id !== input.gate.package_id
@@ -1107,7 +1104,7 @@ export async function verifyPackageExecution(input: {
     || candidate.gate_id !== input.gate.gate_id
     || candidate.atomic_transaction !== false
     || !Array.isArray(candidate.items)
-    || candidate.items.length !== authority.ordered_selections.length
+    || candidate.items.length !== input.gate.authority.ordered_selections.length
     || candidate.selected_count !== candidate.items.length
     || candidate.dispatched_count !== candidate.items.filter((item) => !["QUEUED", "DISPATCHING"].includes(item.status)).length
     || candidate.verdict !== packageVerdict(candidate.items)
@@ -1116,7 +1113,7 @@ export async function verifyPackageExecution(input: {
   delete unsigned.content_hash;
   if (candidate.content_hash !== await sha256(unsigned)) return false;
   for (const [position, item] of candidate.items.entries()) {
-    const selection = authority.ordered_selections[position];
+    const selection = input.gate.authority.ordered_selections[position];
     const draft = input.recommendationSet.drafts.find((entry) => entry.draft_id === selection.draft_id);
     if (item.schema_version !== PACKAGE_ITEM_EXECUTION_SCHEMA
       || item.position !== position
