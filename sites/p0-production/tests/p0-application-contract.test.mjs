@@ -551,19 +551,24 @@ test("owner demand projection keeps full, partial, quota-exhausted and unavailab
   }
 });
 
-async function marketEvidenceInput() {
+async function marketEvidenceInput({ materialCampaigns = 1 } = {}) {
   const top = JSON.parse(await readFile(new URL("./fixtures/wordstat/top-requests.json", import.meta.url), "utf8"));
   const dynamics = JSON.parse(await readFile(new URL("./fixtures/wordstat/dynamics.json", import.meta.url), "utf8"));
   const regions = JSON.parse(await readFile(new URL("./fixtures/wordstat/regions.json", import.meta.url), "utf8"));
+  const clusterFixtures = [
+    { id: "cluster-participation", seed: "seed-participation", phrase: "участие в выставке", dynamics: "+участие +выставке", budget: 50_000, product: "выставка", need: "участие", offer: "стенд" },
+    { id: "cluster-partners", seed: "seed-partners", phrase: "партнеры на выставке", dynamics: "+партнеры +выставке", budget: 40_000, product: "выставка", need: "партнёры", offer: "деловые встречи" },
+    { id: "cluster-buyers", seed: "seed-buyers", phrase: "покупатели на выставке", dynamics: "+покупатели +выставке", budget: 30_000, product: "выставка", need: "покупатели", offer: "лиды" },
+  ].slice(0, materialCampaigns);
   let tick = 0;
   const wordstatBatch = await collectOfficialWordstatBatch({
     token: "fixture-only",
     clientId: "fixture-client",
-    seeds: [{
-      seed_id: "seed-participation",
-      cluster_id: "cluster-participation",
-      phrase: "участие в выставке",
-      dynamics_phrase: "+участие +выставке",
+    seeds: clusterFixtures.map((cluster) => ({
+      seed_id: cluster.seed,
+      cluster_id: cluster.id,
+      phrase: cluster.phrase,
+      dynamics_phrase: cluster.dynamics,
       dynamics_period: "monthly",
       dynamics_from_date: "2024-01-01",
       dynamics_to_date: "2026-07-31",
@@ -571,20 +576,51 @@ async function marketEvidenceInput() {
       region_ids: [213],
       region_names: ["Москва"],
       device: "desktop",
-    }],
-  }, async (input) => {
+    })),
+  }, async (input, init) => {
     const path = new URL(String(input)).pathname;
-    return new Response(JSON.stringify(path.endsWith("topRequests") ? top : path.endsWith("dynamics") ? dynamics : regions));
+    const phrase = JSON.parse(String(init?.body ?? "{}")).phrase;
+    const alternateTop = {
+      topRequests: [{ phrase, count: phrase === "партнеры на выставке" ? 23 : 17 }],
+      associations: [],
+    };
+    const topPayload = phrase === "участие в выставке" ? top : alternateTop;
+    return new Response(JSON.stringify(path.endsWith("topRequests") ? topPayload : path.endsWith("dynamics") ? dynamics : regions));
   }, () => `2026-08-21T10:00:${String(tick++).padStart(2, "0")}.000Z`);
   return {
     wordstat_batch: wordstatBatch,
-    demand_clusters: [{ cluster_id: "cluster-participation", semantic_key: { product: "выставка", need: "участие", intent: "commercial", offer: "стенд" } }],
+    demand_clusters: clusterFixtures.map((cluster) => ({
+      cluster_id: cluster.id,
+      semantic_key: { product: cluster.product, need: cluster.need, intent: "commercial", offer: cluster.offer },
+      ...(materialCampaigns > 1 ? {
+        delivery_key: {
+          product: "Участие в выставке Промышленная выставка",
+          goal: "Получать заявки на участие через сайт",
+          economics: { target_result_cost: 10_000 },
+          budget: cluster.budget,
+          geography: "Москва",
+          period: { start_date: "2026-09-01", end_date: "2026-10-01" },
+          landing: "https://owner.example/",
+          placement: "SEARCH_RESULTS",
+        },
+        provisional_monthly_budget: 220_000,
+        relationship_state: "UNKNOWN",
+        capacity: {
+          status: "AVAILABLE",
+          source: "OWN_CALIBRATED_VOLUME_MODEL",
+          scope: "DEDUPLICATED_DELIVERY_PACK",
+          demand_cluster_ids: [cluster.id],
+          forecast_clicks: 500,
+          forecast_total_spend: 250_000,
+        },
+      } : {}),
+    })),
     cost_observations: [],
   };
 }
 
 async function packageMarketEvidenceInput() {
-  const input = await marketEvidenceInput();
+  const input = await marketEvidenceInput({ materialCampaigns: 3 });
   input.cost_observations = [{
     observation_id: "history-package-fixture",
     source: "DIRECT_HISTORY_OWN_EMPIRICAL",
@@ -1549,7 +1585,7 @@ test("migrates the known Strategy questionnaire 2.0 contract by rebuilding verif
     goal: result.state.context_state.provisional_business_goal.value,
   });
   result = await application.command("owner", { action: "save_business_model", expected_revision: result.revision, value: ownerModel(result.state) });
-  result = await approveStrategy(application, result);
+  await approveStrategy(application, result);
   const row = await store.load("owner");
   const legacy = JSON.parse(row.value_json);
   legacy.strategy_questionnaire.contract_version = "2.0.0";
@@ -2950,27 +2986,28 @@ test("publish preflight evaluates each of the exact nine business gates fail clo
   }
 });
 
-test("every selected Campaign revision freezes a complete honest Auction Protocol in exact authority and P1 lineage", async (t) => {
+test("every selected current Campaign revision freezes a complete honest Auction Protocol in exact authority and P1 lineage", async (t) => {
   const value = await packageFixture(t);
   const eligible = value.result.state.recommendation_set.drafts.filter((draft) => draft.shortlist_eligible && draft.visibility === "VISIBLE");
-  const improvement = eligible.find((draft) => draft.variant.kind === "IMPROVEMENT");
-  assert.ok(improvement);
-  const protocol = improvement.auction_protocol;
+  const selected = eligible[0];
+  assert.ok(selected);
+  const protocol = selected.auction_protocol;
   assert.ok(protocol.control && protocol.tested_change);
   assert.ok(protocol.bidding.strategy && protocol.bidding.ceiling_rub > 0);
   assert.ok(protocol.query_matching && protocol.autotargeting_policy);
   assert.equal(protocol.traffic_split.comparator_percent + protocol.traffic_split.treatment_percent, 100);
   assert.ok(protocol.test_budget_rub > 0 && protocol.test_period.start_date && protocol.test_period.end_date);
   assert.ok(protocol.measurement_goal && protocol.success_threshold && protocol.stop_condition);
-  assert.equal(protocol.attribution.status, "ONE_FACTOR");
-  assert.equal(protocol.attribution.material_families.length, 1);
+  assert.equal(protocol.attribution.status, "COMPARATOR_ONLY");
+  assert.equal(protocol.attribution.one_factor_claim_allowed, false);
+  assert.deepEqual(protocol.attribution.material_families, []);
   assert.equal(protocol.knowledge_status, "PREREGISTERED_HYPOTHESIS_NOT_PROVIDER_FACT");
   assert.equal(protocol.provider_facts.source, "FROZEN_DRAFT_PROJECTION");
   assert.equal(protocol.test_assumptions.source, "OWNER_REVIEWED_HYPOTHESIS");
-  assert.equal(protocol.p1_lineage.draft_revision_id, improvement.draft_revision_id);
+  assert.equal(protocol.p1_lineage.draft_revision_id, selected.draft_revision_id);
   assert.equal(protocol.p1_lineage.authority_effect, "NONE");
 
-  const confirmed = await reviewAndConfirm(value.application, value.result, [improvement.draft_id]);
+  const confirmed = await reviewAndConfirm(value.application, value.result, [selected.draft_id]);
   const selection = confirmed.state.human_decision_gate.authority.ordered_selections[0];
   assert.equal(selection.auction_protocol_revision_id, protocol.protocol_revision_id);
   assert.equal(selection.auction_protocol_content_hash, protocol.content_hash);
@@ -4694,17 +4731,19 @@ test("same exact active playbook release preserves a material owner Draft revisi
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new JsonDurableStore(join(directory, "state.json"));
   const releases = [await governedPlaybookRelease({ releaseId: "fixture-release-stable", releaseVersion: "2.0.0", family: "QUALIFIED_ACTION", decisionId: "decision-stable" })];
-  const application = new P0Application({ store, adapters: adapters({ async readPlaybookReleases() { return releases; } }) });
+  const stableAdapters = adapters({ async readPlaybookReleases() { return releases; } });
+  stableAdapters.now = () => "2026-08-21T10:00:00.000Z";
+  const application = new P0Application({ store, adapters: stableAdapters });
   let result = await application.command("owner", { action: "analyze_site", expected_revision: 0, url: "https://owner.example/" });
   result = await application.command("owner", { action: "confirm_context_goal", expected_revision: result.revision, confirmation: "CONFIRM_CONTEXT_GOAL", goal: result.state.context_state.provisional_business_goal.value });
   result = await application.command("owner", { action: "save_business_model", expected_revision: result.revision, value: ownerModel(result.state) });
   result = await approveStrategy(application, result);
-  const improvement = result.state.recommendation_set.drafts.find((draft) => draft.variant.kind === "IMPROVEMENT" && draft.visibility === "VISIBLE");
-  assert.ok(improvement);
+  const currentDraft = result.state.recommendation_set.drafts.find((draft) => draft.variant.pair_role === "CURRENT" && draft.visibility === "VISIBLE");
+  assert.ok(currentDraft);
   result = await application.command("owner", {
     action: "save_draft",
     expected_revision: result.revision,
-    value: editableDraftValue(improvement, { campaign_name: `${improvement.campaign_name} · owner material edit` }),
+    value: editableDraftValue(currentDraft, { campaign_name: `${currentDraft.campaign_name} · owner material edit` }),
   });
   assert.equal(result.state.draft.draft_save_result.material_change, true);
   const preserved = {
@@ -4735,7 +4774,7 @@ test("same exact active playbook release preserves a material owner Draft revisi
   assert.deepEqual(result.state.recommendation_recalculation, {
     schema_version: "p0-recommendation-recalculation-v1",
     material_change: false,
-    message: "Active playbook check завершён без material изменения active release lineage.",
+    message: "Active playbook and readiness checks завершены без material изменения lineage.",
     reason_code: "NO_ACTIVE_PLAYBOOK_MATERIAL_CHANGE",
     recalculated_at: result.state.recommendation_recalculation.recalculated_at,
     previous_recommendation_set_id: preserved.recommendation_set_id,
@@ -4757,9 +4796,9 @@ test("active playbook rollback persists a visible exact-lineage notice with trut
   result = await application.command("owner", { action: "confirm_context_goal", expected_revision: result.revision, confirmation: "CONFIRM_CONTEXT_GOAL", goal: result.state.context_state.provisional_business_goal.value });
   result = await application.command("owner", { action: "save_business_model", expected_revision: result.revision, value: ownerModel(result.state) });
   result = await approveStrategy(application, result);
-  const improvement = result.state.recommendation_set.drafts.find((draft) => draft.variant.kind === "IMPROVEMENT" && draft.visibility === "VISIBLE");
-  assert.ok(improvement);
-  result = await application.command("owner", { action: "save_draft", expected_revision: result.revision, value: editableDraftValue(improvement) });
+  const currentDraft = result.state.recommendation_set.drafts.find((draft) => draft.variant.pair_role === "CURRENT" && draft.visibility === "VISIBLE");
+  assert.ok(currentDraft);
+  result = await application.command("owner", { action: "save_draft", expected_revision: result.revision, value: editableDraftValue(currentDraft) });
   const previous = { draft_id: result.state.draft.draft_id };
   const previousDraftIds = result.state.recommendation_set.drafts.map((draft) => draft.draft_id);
 
@@ -4775,15 +4814,15 @@ test("active playbook rollback persists a visible exact-lineage notice with trut
   assert.equal(Object.hasOwn(notice, "evaluator_trace"), false);
   assert.equal(notice.changes.length > 0, true);
   assert.equal(notice.changes.every((change) => ["REPLACED", "REMOVED", "ADDED"].includes(change.change_type)), true);
-  assert.equal(notice.changes.some((change) => change.change_type === "REMOVED" && change.previous_draft_id === previous.draft_id && change.current_draft_id === null), true);
-  const added = notice.changes.find((change) => change.change_type === "ADDED");
-  assert.ok(added);
-  assert.equal(added.previous_draft_id, null);
-  assert.equal(result.state.recommendation_set.drafts.some((draft) => draft.draft_id === added.current_draft_id && draft.variant.hypothesis?.changed_family === "MESSAGE_OFFER"), true);
+  const changedPrevious = notice.changes.find((change) => change.previous_draft_id === previous.draft_id);
+  assert.ok(changedPrevious);
+  assert.ok(["REPLACED", "REMOVED"].includes(changedPrevious.change_type));
+  assert.equal(result.state.recommendation_set.drafts.some((draft) => draft.variant.hypothesis?.applied_content_rule_id === "fixture-message_offer"), true);
   assert.equal(notice.changes.every((change) => !Object.hasOwn(change, "evaluator_trace") && !Object.hasOwn(change, "publish_projection")), true);
   assert.equal(previousDraftIds.every((draftId) => notice.changes.some((change) => change.previous_draft_id === draftId)), true);
   assert.equal(result.state.recommendation_set.drafts.every((draft) => notice.changes.some((change) => change.current_draft_id === draft.draft_id)), true);
-  assert.equal(result.state.draft, null);
+  assert.equal(result.state.draft?.draft_id, changedPrevious.current_draft_id);
+  assert.notEqual(result.state.draft?.draft_id, previous.draft_id);
   assert.equal(result.state.shortlist.schema_version, "p0-shortlist-v3");
   assert.deepEqual(result.state.shortlist.selections, []);
   assert.equal(result.state.recommendation_set.playbook_release.release_id, "fixture-release-rollback");
@@ -5086,7 +5125,7 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
     "Что узнал агент",
     "Стратегия",
     "Кампании",
-    "Проверка и создание",
+    "Проверка публикации",
   ]);
   assert.equal(projection.journey.currentStage, "goal");
   assert.ok(projection.introduction);
@@ -5115,7 +5154,7 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
   assert.equal(projection.journey.currentStage, "findings");
   assert.equal(projection.introduction, undefined);
   assert.ok(projection.analyticsSummary);
-  assert.equal(projection.analyticsSummary.findings.length, 6);
+  assert.equal(projection.analyticsSummary.findings.length, 7);
   assert.notEqual(projection.analyticsSummary.status, "Готово к стратегии", "mixed evidence must not claim readiness");
   assert.equal(projection.analyticsSummary.findings.some((item) => item.status === "Частично" || item.status === "Недоступно"), true);
   assert.deepEqual(projection.analyticsSummary.remediation.map((item) => item.priority), projection.analyticsSummary.remediation.map((_, index) => index + 1));

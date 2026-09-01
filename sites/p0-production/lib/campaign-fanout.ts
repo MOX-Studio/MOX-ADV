@@ -1001,6 +1001,7 @@ export async function buildCampaignRecommendationSet({
         material_campaign_key: structuredClone(materialKey),
         material_campaign_key_fingerprint: bucket.delivery_key_fingerprint,
         applied_content_rule_id: selectedContentRule?.rule_id ?? null,
+        applied_content_rule_family: selectedContentRule?.changed_family ?? null,
         source: "EVIDENCE_GROUNDED_DESIGN",
         evidence_refs: analyticsEvidence?.snapshot_id ? [String(analyticsEvidence.snapshot_id)] : [],
         mechanism: `Одна управляемая кампания для продукта «${text(materialKey.product)}» и цели «${text(materialKey.goal)}».`,

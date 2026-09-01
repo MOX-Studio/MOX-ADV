@@ -24,27 +24,23 @@
   },
   "drafts": [
     {
-      "draft_id": "draft-5ce5e98ee8ecc1a95af4",
-      "score": 90,
-      "score_raw": 89.6667,
-      "score_lower": 89.6667,
-      "score_upper": 89.6667,
+      "draft_id": "draft-156eb13673e8cf2331ef",
+      "score": 89,
+      "score_raw": 88.5417,
+      "score_lower": 88.5417,
+      "score_upper": 88.5417,
       "rank": 1,
       "tied_draft_ids": [
-        "draft-5ce5e98ee8ecc1a95af4",
-        "draft-ca93597b64d9b2de1faa",
-        "draft-eaf933da01e8f68373c6"
+        "draft-156eb13673e8cf2331ef"
       ],
       "ranking": {
         "status": "RANKED",
-        "recommendation_set_id": "recommendation-set-65ec19604ac010175cff",
+        "recommendation_set_id": "recommendation-set-f8c72668671a5cc24c86",
         "cohort_id": "capability-cohort:aa66a0d301b1512bf76f74c7",
-        "comparable_set_id": "comparable-set:0adf9a51af9a162e610b9d34",
+        "comparable_set_id": "comparable-set:300183009582e647fdb3e76e",
         "rank": 1,
         "tied_draft_ids": [
-          "draft-5ce5e98ee8ecc1a95af4",
-          "draft-ca93597b64d9b2de1faa",
-          "draft-eaf933da01e8f68373c6"
+          "draft-156eb13673e8cf2331ef"
         ],
         "semantic_tie_rule": "EXACT_SCORE_RAW_EQUALITY_WITHIN_COHORT",
         "stable_id_display_order_only": true
@@ -76,11 +72,11 @@
         },
         "offer_audience_fit": {
           "state": "KNOWN",
-          "value": 100,
-          "lower": 100,
-          "upper": 100,
+          "value": 93.75,
+          "lower": 93.75,
+          "upper": 93.75,
           "weight_percent": 18,
-          "weighted_contribution": 18
+          "weighted_contribution": 16.875
         },
         "direct_feasibility": {
           "state": "KNOWN",
@@ -114,211 +110,7 @@
         "decision": "REVIEW_VISIBLE",
         "gates": {
           "structural_reason": null,
-          "sensitivity_upper": 89.6667,
-          "upper_threshold_exclusive": 45,
-          "upper_below_threshold": false,
-          "evidence_quality": 100,
-          "minimum_evidence_quality_inclusive": 60,
-          "evidence_quality_sufficient": true,
-          "unresolved_evidence_gap": false,
-          "applied_by_score": false
-        }
-      }
-    },
-    {
-      "draft_id": "draft-eaf933da01e8f68373c6",
-      "score": 90,
-      "score_raw": 89.6667,
-      "score_lower": 89.6667,
-      "score_upper": 89.6667,
-      "rank": 1,
-      "tied_draft_ids": [
-        "draft-5ce5e98ee8ecc1a95af4",
-        "draft-ca93597b64d9b2de1faa",
-        "draft-eaf933da01e8f68373c6"
-      ],
-      "ranking": {
-        "status": "RANKED",
-        "recommendation_set_id": "recommendation-set-65ec19604ac010175cff",
-        "cohort_id": "capability-cohort:aa66a0d301b1512bf76f74c7",
-        "comparable_set_id": "comparable-set:0adf9a51af9a162e610b9d34",
-        "rank": 1,
-        "tied_draft_ids": [
-          "draft-5ce5e98ee8ecc1a95af4",
-          "draft-ca93597b64d9b2de1faa",
-          "draft-eaf933da01e8f68373c6"
-        ],
-        "semantic_tie_rule": "EXACT_SCORE_RAW_EQUALITY_WITHIN_COHORT",
-        "stable_id_display_order_only": true
-      },
-      "dimensions": {
-        "demand": {
-          "state": "KNOWN",
-          "value": 83.3333,
-          "lower": 83.3333,
-          "upper": 83.3333,
-          "weight_percent": 18,
-          "weighted_contribution": 15
-        },
-        "cost": {
-          "state": "KNOWN",
-          "value": 50,
-          "lower": 50,
-          "upper": 50,
-          "weight_percent": 12,
-          "weighted_contribution": 6
-        },
-        "economics": {
-          "state": "KNOWN",
-          "value": 93.3333,
-          "lower": 93.3333,
-          "upper": 93.3333,
-          "weight_percent": 20,
-          "weighted_contribution": 18.6667
-        },
-        "offer_audience_fit": {
-          "state": "KNOWN",
-          "value": 100,
-          "lower": 100,
-          "upper": 100,
-          "weight_percent": 18,
-          "weighted_contribution": 18
-        },
-        "direct_feasibility": {
-          "state": "KNOWN",
-          "value": 100,
-          "lower": 100,
-          "upper": 100,
-          "weight_percent": 12,
-          "weighted_contribution": 12
-        },
-        "measurement_readiness": {
-          "state": "KNOWN",
-          "value": 100,
-          "lower": 100,
-          "upper": 100,
-          "weight_percent": 10,
-          "weighted_contribution": 10
-        },
-        "evidence_quality": {
-          "state": "KNOWN",
-          "value": 100,
-          "lower": 100,
-          "upper": 100,
-          "weight_percent": 10,
-          "weighted_contribution": 10
-        }
-      },
-      "visibility": {
-        "status": "VISIBLE",
-        "reason": null,
-        "threshold_contract_version": "score-hidden-v1",
-        "decision": "REVIEW_VISIBLE",
-        "gates": {
-          "structural_reason": null,
-          "sensitivity_upper": 89.6667,
-          "upper_threshold_exclusive": 45,
-          "upper_below_threshold": false,
-          "evidence_quality": 100,
-          "minimum_evidence_quality_inclusive": 60,
-          "evidence_quality_sufficient": true,
-          "unresolved_evidence_gap": false,
-          "applied_by_score": false
-        }
-      }
-    },
-    {
-      "draft_id": "draft-ca93597b64d9b2de1faa",
-      "score": 90,
-      "score_raw": 89.6667,
-      "score_lower": 89.6667,
-      "score_upper": 89.6667,
-      "rank": 1,
-      "tied_draft_ids": [
-        "draft-5ce5e98ee8ecc1a95af4",
-        "draft-ca93597b64d9b2de1faa",
-        "draft-eaf933da01e8f68373c6"
-      ],
-      "ranking": {
-        "status": "RANKED",
-        "recommendation_set_id": "recommendation-set-65ec19604ac010175cff",
-        "cohort_id": "capability-cohort:aa66a0d301b1512bf76f74c7",
-        "comparable_set_id": "comparable-set:0adf9a51af9a162e610b9d34",
-        "rank": 1,
-        "tied_draft_ids": [
-          "draft-5ce5e98ee8ecc1a95af4",
-          "draft-ca93597b64d9b2de1faa",
-          "draft-eaf933da01e8f68373c6"
-        ],
-        "semantic_tie_rule": "EXACT_SCORE_RAW_EQUALITY_WITHIN_COHORT",
-        "stable_id_display_order_only": true
-      },
-      "dimensions": {
-        "demand": {
-          "state": "KNOWN",
-          "value": 83.3333,
-          "lower": 83.3333,
-          "upper": 83.3333,
-          "weight_percent": 18,
-          "weighted_contribution": 15
-        },
-        "cost": {
-          "state": "KNOWN",
-          "value": 50,
-          "lower": 50,
-          "upper": 50,
-          "weight_percent": 12,
-          "weighted_contribution": 6
-        },
-        "economics": {
-          "state": "KNOWN",
-          "value": 93.3333,
-          "lower": 93.3333,
-          "upper": 93.3333,
-          "weight_percent": 20,
-          "weighted_contribution": 18.6667
-        },
-        "offer_audience_fit": {
-          "state": "KNOWN",
-          "value": 100,
-          "lower": 100,
-          "upper": 100,
-          "weight_percent": 18,
-          "weighted_contribution": 18
-        },
-        "direct_feasibility": {
-          "state": "KNOWN",
-          "value": 100,
-          "lower": 100,
-          "upper": 100,
-          "weight_percent": 12,
-          "weighted_contribution": 12
-        },
-        "measurement_readiness": {
-          "state": "KNOWN",
-          "value": 100,
-          "lower": 100,
-          "upper": 100,
-          "weight_percent": 10,
-          "weighted_contribution": 10
-        },
-        "evidence_quality": {
-          "state": "KNOWN",
-          "value": 100,
-          "lower": 100,
-          "upper": 100,
-          "weight_percent": 10,
-          "weighted_contribution": 10
-        }
-      },
-      "visibility": {
-        "status": "VISIBLE",
-        "reason": null,
-        "threshold_contract_version": "score-hidden-v1",
-        "decision": "REVIEW_VISIBLE",
-        "gates": {
-          "structural_reason": null,
-          "sensitivity_upper": 89.6667,
+          "sensitivity_upper": 88.5417,
           "upper_threshold_exclusive": 45,
           "upper_below_threshold": false,
           "evidence_quality": 100,

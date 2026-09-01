@@ -528,6 +528,10 @@ export type DemandClusterSpec = {
     required_any_tokens?: string[];
     excluded_tokens?: string[];
   };
+  delivery_key?: DeliveryKeyInput;
+  provisional_monthly_budget?: number;
+  relationship_state?: DemandRelationshipState;
+  capacity?: PackableDemandCluster["capacity"];
 };
 
 type DemandGap = { code: string; detail: string; retry_after_seconds: number | null };
@@ -848,6 +852,10 @@ export async function buildScopedDemandEvidence(batch: WordstatObservationBatch,
       return {
         cluster_id: cluster.cluster_id,
         semantic_key: cluster.semantic_key,
+        delivery_key: cluster.delivery_key ? structuredClone(cluster.delivery_key) : undefined,
+        provisional_monthly_budget: cluster.provisional_monthly_budget,
+        relationship_state: cluster.relationship_state,
+        capacity: cluster.capacity ? structuredClone(cluster.capacity) : undefined,
         classifier_version: normalizedText(cluster.classification?.version) || "demand-relevance-rules-v1",
         status: rows.length ? status : status === "UNAVAILABLE" ? "UNAVAILABLE" : "PARTIAL",
         assigned_row_ids: rows.map((row) => row.row_id).sort(),

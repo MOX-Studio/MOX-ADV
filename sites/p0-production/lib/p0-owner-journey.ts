@@ -969,6 +969,8 @@ export function ownerActionDescriptor(view: InternalView): InternalActionDescrip
     const candidates = orderedShortlistCandidates(view);
     if (candidates.length > 0) {
       const selectedOrder = new Map((state.shortlist?.selections ?? []).map((item, index) => [item.draft_id, index + 1]));
+      const hasOwnerSelectionState = Boolean(state.shortlist
+        && (state.shortlist.selections.length > 0 || state.shortlist.removed_selections.length > 0));
       const drafts = list(record(state.recommendation_set).drafts).map(record);
       return {
         kind: "prepare-package",
@@ -979,7 +981,7 @@ export function ownerActionDescriptor(view: InternalView): InternalActionDescrip
             key: `campaign_${index + 1}`,
             label: ownerText(drafts.find((draft) => draft.draft_id === candidate.draft_id)?.campaign_name, `Кампания ${index + 1}`, 255),
             control: "number" as const,
-            value: selectedOrder.get(candidate.draft_id) ?? (candidate.status === "REMOVED" ? 0 : index + 1),
+            value: selectedOrder.get(candidate.draft_id) ?? (hasOwnerSelectionState || candidate.status === "REMOVED" ? 0 : index + 1),
             required: true,
             help: "0 — исключить; положительное число — место в пакете.",
           })),
@@ -1650,8 +1652,12 @@ async function campaignStrategyProjection(ownerKey: string, view: InternalView):
 function appliedPractice(state: InternalState): OwnerJourneyProjection["appliedPractice"] {
   const draft = list(record(state.recommendation_set).drafts)
     .map(record)
-    .find((candidate) => candidate.visibility === "VISIBLE" && record(candidate.variant).kind === "IMPROVEMENT");
-  const family = String(record(record(draft?.variant).hypothesis).changed_family ?? "");
+    .find((candidate) => {
+      if (candidate.visibility !== "VISIBLE") return false;
+      const family = String(record(record(candidate.variant).hypothesis).applied_content_rule_family ?? "");
+      return ["QUALIFIED_ACTION", "AUDIENCE_SPECIFICITY", "MESSAGE_OFFER"].includes(family);
+    });
+  const family = String(record(record(draft?.variant).hypothesis).applied_content_rule_family ?? "");
   const practices: Record<string, string> = {
     QUALIFIED_ACTION: "Качественный результат прямо назван в формулировке предложения и проверяется как отдельная гипотеза.",
     AUDIENCE_SPECIFICITY: "Предложение сформулировано для выбранной аудитории и сравнивается с базовым вариантом.",
