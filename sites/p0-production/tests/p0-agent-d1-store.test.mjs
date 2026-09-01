@@ -171,6 +171,34 @@ test("D1 application store preserves the complete interview document and rejects
   database.close();
 });
 
+test("D1 application store compresses large documents transparently before persistence", async () => {
+  const database = new DatabaseSync(":memory:");
+  const binding = d1Shim(database);
+  const store = new D1P0ApplicationStore(binding);
+  const largeJson = JSON.stringify({ rows: "wordstat-normalized-row,".repeat(80_000) });
+  const initial = {
+    revision: 0,
+    updated_at: "2026-08-22T16:00:00.000Z",
+    value_json: largeJson,
+  };
+
+  assert.equal(await store.initialize("large-owner", initial), true);
+  const persisted = database.prepare("SELECT value_json FROM p0_state WHERE user_key = ?").get("large-owner").value_json;
+  assert.match(persisted, /^p0:gzip-base64:v1:/u);
+  assert.ok(Buffer.byteLength(persisted) < Buffer.byteLength(largeJson) / 10);
+  assert.deepEqual(await store.load("large-owner"), initial);
+
+  const next = {
+    revision: 1,
+    updated_at: "2026-08-22T16:01:00.000Z",
+    value_json: JSON.stringify({ rows: "wordstat-normalized-row,".repeat(90_000), status: "COMPLETE" }),
+  };
+  assert.equal(await store.compareAndSwap("large-owner", 0, next), true);
+  assert.deepEqual(await store.load("large-owner"), next);
+  assert.deepEqual((await store.history("large-owner")).map((row) => row.revision), [1, 0]);
+  database.close();
+});
+
 test("D1 store durably reloads run, checkpoint, observation, source references, budget and stop reason", async () => {
   const database = new DatabaseSync(":memory:");
   const binding = d1Shim(database);

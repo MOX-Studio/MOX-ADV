@@ -1214,7 +1214,8 @@ test("unavailable destination inspection remains an owner-visible blocker with a
   const projection = await new P0OwnerJourney(application, { agentProjection: async () => null }).query("owner");
   assert.equal(projection.businessReadiness.destination.status, "Недоступно");
   assert.ok(projection.businessReadiness.repairPlan.some((item) => /безопасн|провер/iu.test(item.action)));
-  assert.equal(projection.primaryAction, null);
+  assert.equal(projection.primaryAction?.label, "Повторить безопасные проверки");
+  assert.deepEqual(projection.primaryAction?.fields, []);
 });
 
 test("material Metrika goal ambiguity reaches the owner as a complete prepared decision packet", async (t) => {
@@ -1469,6 +1470,71 @@ test("separate Strategy review records one exact owner confirmation and invalida
     }),
     (error) => error instanceof P0ApplicationError && error.code === "P0_STRATEGY_REVIEW_STALE",
   );
+});
+
+test("an interrupted exact Strategy recomputation can resume from the same owner-reviewed version", async (t) => {
+  const { directory, store, application } = await fixture();
+  t.after(() => rm(directory, { recursive: true, force: true }));
+
+  let result = await application.command("owner", { action: "analyze_site", expected_revision: 0, url: "https://owner.example/" });
+  result = await application.command("owner", {
+    action: "confirm_context_goal",
+    expected_revision: result.revision,
+    confirmation: "CONFIRM_CONTEXT_GOAL",
+    goal: result.state.context_state.provisional_business_goal.value,
+  });
+  result = await application.command("owner", {
+    action: "save_business_model",
+    expected_revision: result.revision,
+    value: ownerModel(result.state),
+  });
+  result = await application.command("owner", {
+    action: "review_strategy",
+    expected_revision: result.revision,
+    answers: strategyAnswers(result.state),
+  });
+  const review = structuredClone(result.state.strategy_review);
+  const compareAndSwap = store.compareAndSwap.bind(store);
+  let interruptFinalPersistence = true;
+  store.compareAndSwap = async (key, expectedRevision, row) => {
+    const nextState = JSON.parse(row.value_json);
+    if (interruptFinalPersistence
+      && nextState.strategy
+      && nextState.last_cascade?.recomputation_status === "COMPLETE") {
+      interruptFinalPersistence = false;
+      return false;
+    }
+    return compareAndSwap(key, expectedRevision, row);
+  };
+
+  await assert.rejects(
+    application.command("owner", {
+      action: "confirm_strategy_review",
+      expected_revision: result.revision,
+      confirmation: "CONFIRM_EXACT_CAMPAIGN_STRATEGY",
+      review_id: review.review_id,
+      strategy_revision_id: review.candidate.strategy_revision_id,
+    }),
+    (error) => error instanceof P0ApplicationError && error.code === "P0_REVISION_CONFLICT",
+  );
+  store.compareAndSwap = compareAndSwap;
+
+  const pending = await application.query("owner");
+  assert.equal(pending.state.last_cascade.recomputation_status, "PENDING");
+  assert.equal(pending.state.strategy, null);
+  assert.equal(pending.state.strategy_review.review_id, review.review_id);
+  assert.deepEqual(pending.workflow.allowed_commands, ["confirm_strategy_review", "reject_strategy_review"]);
+
+  result = await application.command("owner", {
+    action: "confirm_strategy_review",
+    expected_revision: pending.revision,
+    confirmation: "CONFIRM_EXACT_CAMPAIGN_STRATEGY",
+    review_id: review.review_id,
+    strategy_revision_id: review.candidate.strategy_revision_id,
+  });
+  assert.equal(result.state.strategy.strategy_revision_id, review.candidate.strategy_revision_id);
+  assert.equal(result.state.strategy_review, null);
+  assert.equal(result.state.last_cascade.recomputation_status, "COMPLETE");
 });
 
 test("migrates the known Strategy questionnaire 2.0 contract by rebuilding verified upstream and invalidating downstream", async (t) => {
@@ -2497,6 +2563,32 @@ test("restart rejects every same-schema persisted field registry mutation before
   const migrated = await new P0Application({ store, adapters: adapters() }).query("owner");
   assert.deepEqual(migrated.state.recommendation_set.field_registry, result.state.recommendation_set.field_registry);
   assert.equal(migrated.revision, row.revision + 1);
+});
+
+test("owner-confirmed recovery archives an invalid local document and starts fresh without external writes", async (t) => {
+  const { store } = await approvedDraftFixture(t);
+  const row = await store.load("owner");
+  const corrupted = JSON.parse(row.value_json);
+  corrupted.recommendation_set.field_registry.fields[0].pointer = "/direct/campaign/Unsupported";
+  await store.seed("owner", { ...row, value_json: JSON.stringify(corrupted) });
+  const restarted = new P0Application({ store, adapters: adapters() });
+
+  await assert.rejects(
+    restarted.query("owner"),
+    (error) => error instanceof P0ApplicationError && error.code === "P0_MIGRATION_LINEAGE_INVALID",
+  );
+  await assert.rejects(
+    restarted.recoverInvalidDocument("owner", "wrong confirmation"),
+    (error) => error instanceof P0ApplicationError && error.code === "P0_CONFIRMATION_REQUIRED",
+  );
+
+  const recovered = await restarted.recoverInvalidDocument("owner", "RESET_INVALID_LOCAL_P0_STATE");
+  assert.equal(recovered.revision, row.revision + 1);
+  assert.equal(recovered.state.site_analysis, null);
+  assert.equal(recovered.state.strategy, null);
+  assert.equal(recovered.state.recommendation_set, null);
+  const history = await store.history("owner");
+  assert.equal(history.some((item) => item.value_json === JSON.stringify(corrupted)), true);
 });
 
 test("a material Draft edit requires explicit revalidation while preserving unrelated immutable Draft revisions", async (t) => {

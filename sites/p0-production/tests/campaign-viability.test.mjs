@@ -679,13 +679,15 @@ test("deterministically distinguishes all four owner-facing viability statuses",
   const testable = await recommendationSet(optional);
   assert.equal(testable.drafts[0].viability_status, "TESTABLE_WITH_GAPS");
   assert.notEqual(testable.drafts[0].viability_score.score, null);
+  assert.equal(testable.viability_outcome.status, "VIABLE_DRAFTS_AVAILABLE");
+  assert.equal(testable.viability_outcome.viable_count, 1);
 
   const insufficient = await recommendationSet(evidence({ summary: { hard_blockers: ["Current evidence is unresolved"] } }));
   assert.equal(insufficient.drafts[0].viability_status, "INSUFFICIENT_EVIDENCE");
   assert.equal(insufficient.drafts[0].viability_score.score, null);
 
   const duplicate = structuredClone(generated.drafts[0]);
-  duplicate.duplicate_of = generated.drafts[1].draft_id;
+  duplicate.duplicate_of = "another-current-draft";
   duplicate.viability_score = undefined;
   const blocked = await rescore([duplicate]);
   assert.equal(blocked[0].viability_status, "BLOCKED");

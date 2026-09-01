@@ -109,9 +109,12 @@ test("scope drift and wrong-account binding fail closed without widening evidenc
   state = await drifting.activate("owner", state.revision);
   wordstatGranted = false;
   state = await drifting.get("owner", true);
-  assert.equal(state.status, "LIMITED");
+  assert.equal(state.status, "ACTIVE_LIMITED");
   assert.equal(accessProfileForOwner(state).evidence_scope.wordstat, "UNAVAILABLE");
   assert.equal(accessProfileForOwner(state).evidence_scope.direct, "AVAILABLE");
+  wordstatGranted = true;
+  state = await drifting.get("owner", true);
+  assert.equal(state.status, "ACTIVE");
 
   const wrong = service({
     async verifyBinding() {

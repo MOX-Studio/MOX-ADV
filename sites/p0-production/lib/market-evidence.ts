@@ -250,7 +250,7 @@ export async function buildDemandCostResearchPlan(input: {
     })),
     ...input.brandTerms.map((value, index) => ({
       dimension: "BRAND" as const,
-      phrase: boundedPhrase(`${value} ${nonBrandOffer}`),
+      phrase: boundedPhrase(value),
       provenance: { dimension: "BRAND" as const, input_index: index, source_phrase: normalizedText(value) },
     })),
     {
@@ -482,7 +482,7 @@ export async function collectOfficialWordstatBatch(
         // Wordstat ClientId is an approved application registration prerequisite; the official API authenticates requests only with the OAuth Bearer header.
         const response = await fetchImpl(endpoint, {
           method: "POST",
-          redirect: "error",
+          redirect: "manual",
           headers: {
             Authorization: `Bearer ${input.token}`,
             Accept: "application/json",
@@ -1570,7 +1570,7 @@ export async function collectCurrentAuctionCostObservation(input: {
   try {
     const keywordResponse = await fetchImpl(DIRECT_COST_ENDPOINTS.keywords, {
       method: "POST",
-      redirect: "error",
+      redirect: "manual",
       headers,
       body: JSONbig.stringify({
         method: "get",
@@ -1592,7 +1592,7 @@ export async function collectCurrentAuctionCostObservation(input: {
     }
     const bidsResponse = await fetchImpl(DIRECT_COST_ENDPOINTS.keyword_bids, {
       method: "POST",
-      redirect: "error",
+      redirect: "manual",
       headers,
       body: JSONbig.stringify({
         method: "get",

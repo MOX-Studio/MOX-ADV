@@ -3,6 +3,7 @@ import {
   operatorDiagnostics as productionOperatorDiagnostics,
   ownerOverview as productionOwnerOverview,
   ownerSnapshot as productionOwnerSnapshot,
+  recoverOwnerState as productionRecoverOwnerState,
   submitOwnerAction as productionSubmitOwnerAction,
   userKey,
 } from "../../../lib/p0";
@@ -25,6 +26,22 @@ import {
 function failure() {
   return {
     message: "Действие не выполнено. Обновите страницу и повторите текущее бизнес-решение.",
+  };
+}
+
+function invalidLocalState(error: unknown) {
+  return error && typeof error === "object" && "code" in error
+    && ["P0_MIGRATION_LINEAGE_INVALID", "P0_STATE_INVALID"].includes(String(error.code));
+}
+
+function recoveryRequired() {
+  return {
+    message: "Сохранённая локальная подготовка несовместима с текущей версией. Внешние рекламные системы не затронуты.",
+    recovery: {
+      action: "RESET_INVALID_LOCAL_P0_STATE",
+      label: "Начать безопасную подготовку заново",
+      description: "Старая локальная версия останется в истории. Директ, Метрика, публикация, показы и расходы не изменятся.",
+    },
   };
 }
 
@@ -52,8 +69,10 @@ export async function GET(request: Request) {
       ? await currentBackend.snapshot()
       : await currentBackend.overview();
     return Response.json(projectPublicationReviewBoundary(value, pipeline));
-  } catch {
-    return Response.json(failure(), { status: 503 });
+  } catch (error) {
+    return invalidLocalState(error)
+      ? Response.json(recoveryRequired(), { status: 409 })
+      : Response.json(failure(), { status: 503 });
   }
 }
 
@@ -63,6 +82,16 @@ export async function POST(request: Request) {
     const key = userKey(request);
     const currentBackend = productionBackend(key);
     const controller = pipelineController();
+    if (payload.recovery_action !== undefined) {
+      if (payload.recovery_action !== "RESET_INVALID_LOCAL_P0_STATE"
+        || payload.confirmation !== "RESET_INVALID_LOCAL_P0_STATE") {
+        throw new Error("Local recovery requires exact confirmation.");
+      }
+      const current = await controller.current(key);
+      if (current.active) throw new Error("Local preparation cannot be reset during an active pipeline run.");
+      const value = await productionRecoverOwnerState(key, payload.confirmation);
+      return Response.json(projectPublicationReviewBoundary(value, await controller.current(key)), { status: 201 });
+    }
     if (payload.pipeline_action !== undefined) {
       const pipelineAction = assertCurrentPipelineAction(payload);
       if (pipelineAction === "EXPLAIN") {

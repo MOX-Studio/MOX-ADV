@@ -12,11 +12,27 @@ import type {
 import type { OwnerResultExplanation } from "../lib/pipeline-result-explanation";
 
 type JsonRecord = Record<string, unknown>;
+type LocalRecovery = { action: "RESET_INVALID_LOCAL_P0_STATE"; label: string; description: string };
+
+class DashboardRequestError extends Error {
+  readonly recovery: LocalRecovery | null;
+
+  constructor(message: string, recovery: LocalRecovery | null = null) {
+    super(message);
+    this.name = "DashboardRequestError";
+    this.recovery = recovery;
+  }
+}
 
 async function request(path: string, init?: RequestInit) {
   const response = await fetch(path, init);
   const value = await response.json() as JsonRecord;
-  if (!response.ok) throw new Error(String(value.message ?? "Действие не выполнено."));
+  if (!response.ok) {
+    const recovery = value.recovery && typeof value.recovery === "object" && !Array.isArray(value.recovery)
+      ? value.recovery as LocalRecovery
+      : null;
+    throw new DashboardRequestError(String(value.message ?? "Действие не выполнено."), recovery);
+  }
   return value as OwnerJourneyProjection;
 }
 
@@ -43,6 +59,7 @@ export default function P0Client() {
   const [selectedStage, setSelectedStage] = useState<OwnerJourneyStageId | null>(null);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
+  const [recovery, setRecovery] = useState<LocalRecovery | null>(null);
   const interviewHeadingRef = useRef<HTMLHeadingElement>(null);
   const errorRef = useRef<HTMLParagraphElement>(null);
 
@@ -50,12 +67,16 @@ export default function P0Client() {
     request("/api/p0")
       .then((next) => {
         setProjection(next);
+        setRecovery(null);
         const requestedStage = new URL(window.location.href).searchParams.get("stage");
         setSelectedStage(next.journey.stages.some((stage) => stage.id === requestedStage)
           ? requestedStage as OwnerJourneyStageId
           : next.goalInterview?.primaryAction ? "goal" : authoritativeStage(next));
       })
-      .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
+      .catch((reason) => {
+        setError(reason instanceof Error ? reason.message : String(reason));
+        setRecovery(reason instanceof DashboardRequestError ? reason.recovery : null);
+      })
       .finally(() => setBusy(false));
   }, []);
 
@@ -87,6 +108,29 @@ export default function P0Client() {
     }, 3_000);
     return () => window.clearTimeout(timer);
   }, [projection]);
+
+  async function recoverInvalidLocalState() {
+    if (!recovery || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const next = await request("/api/p0", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recovery_action: recovery.action,
+          confirmation: "RESET_INVALID_LOCAL_P0_STATE",
+        }),
+      });
+      setProjection(next);
+      setRecovery(null);
+      setSelectedStage(authoritativeStage(next));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function submitInterview(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -279,7 +323,14 @@ export default function P0Client() {
   if (!projection) {
     return <div className={styles.prototype}>
       <Header />
-      <main className={styles.pageA}><section className="owner-loading" aria-live="polite"><strong>Готовлю путь владельца</strong><p>{error || "Собираю текущий бизнес-вывод…"}</p></section></main>
+      <main className={styles.pageA}><section className="owner-loading" aria-live="polite">
+        <strong>{recovery ? "Нужен безопасный перезапуск подготовки" : "Готовлю путь владельца"}</strong>
+        <p>{error || "Собираю текущий бизнес-вывод…"}</p>
+        {recovery && <div className="owner-recovery-action">
+          <p>{recovery.description}</p>
+          <button type="button" disabled={busy} onClick={recoverInvalidLocalState}>{busy ? "Перезапускаю…" : recovery.label}</button>
+        </div>}
+      </section></main>
     </div>;
   }
 

@@ -77,14 +77,33 @@ function monthLabel(value) {
   return `${RUSSIAN_MONTHS[date.getUTCMonth()][0].toLocaleUpperCase("ru-RU")}${RUSSIAN_MONTHS[date.getUTCMonth()].slice(1)} ${date.getUTCFullYear()}`;
 }
 
-async function stableTableRows(page) {
+async function stableSurfaceState(page) {
+  const explicitEmpty = page.getByText(/Нет подходящих запросов|Нет данных по запросу|Данных не найдено/u).first();
+  if (await explicitEmpty.count() && await explicitEmpty.isVisible().catch(() => false)) {
+    const first = cleanText(await explicitEmpty.innerText());
+    await page.waitForTimeout(900);
+    const second = cleanText(await explicitEmpty.innerText());
+    if (!first || first !== second || !await explicitEmpty.isVisible().catch(() => false)) {
+      throw Object.assign(new Error("Wordstat empty state did not stabilize."), { code: "TABLE_INCOMPLETE" });
+    }
+    return { rowCount: 0, explicitEmptyState: true };
+  }
   const rows = page.locator("table tbody tr");
   await page.locator("table thead").waitFor({ state: "visible", timeout: 30_000 });
   const first = await rows.count();
   await page.waitForTimeout(900);
   const second = await rows.count();
   if (first !== second) throw Object.assign(new Error("Wordstat table did not stabilize."), { code: "TABLE_INCOMPLETE" });
-  return second;
+  return { rowCount: second, explicitEmptyState: false };
+}
+
+async function declaredWindowFromPage(page, plan, surface) {
+  const text = cleanText(await page.locator("body").innerText());
+  const match = /за(?:\s+период)?\s+(\d{2}\.\d{2}\.\d{4})\s*[–—-]\s*(\d{2}\.\d{2}\.\d{4})/u.exec(text);
+  if (match) return `${match[1]} — ${match[2]}`;
+  if (surface === "DYNAMICS") return `${plan.scope.dynamics.from_date}/${plan.scope.dynamics.to_date}`;
+  if (surface === "REGIONS") return "Последние 30 дней";
+  throw Object.assign(new Error("Wordstat declared window is unavailable."), { code: "TABLE_INCOMPLETE" });
 }
 
 async function closeTour(page) {
@@ -121,8 +140,16 @@ async function configureDevice(page, device) {
 }
 
 async function selectSurface(page, surface) {
-  if (surface === "TOP_SIMILAR") {
-    await page.locator("label.RadioButton-Radio").filter({ hasText: "Похожие" }).click();
+  if (surface === "TOP_SIMILAR" || surface === "TOP_POPULAR") {
+    let option = page.locator("label.RadioButton-Radio").filter({ hasText: surface === "TOP_SIMILAR" ? "Похожие" : "Популярные" });
+    if (await option.count() !== 1) {
+      const tops = page.locator("label.control").filter({ hasText: "Топы запросов" });
+      if (await tops.count() !== 1) throw Object.assign(new Error("Wordstat tops navigation changed."), { code: "DOM_CHANGED" });
+      await tops.click();
+      await page.waitForTimeout(1_200);
+      option = page.locator("label.RadioButton-Radio").filter({ hasText: surface === "TOP_SIMILAR" ? "Похожие" : "Популярные" });
+    }
+    await option.click();
   } else if (surface === "DYNAMICS") {
     await page.locator("label.control").filter({ hasText: "Динамика" }).click();
   } else if (surface === "REGIONS") {
@@ -208,37 +235,59 @@ async function createDriver({ context, browser, plan }) {
   if (plan.scope.regions.length !== 1) throw Object.assign(new Error("The production Wordstat UI driver currently requires one exact provider region."), { code: "DOM_CHANGED" });
   const region = plan.scope.regions[0];
   let cleaned = false;
+  let page = null;
+  let currentSeedId = null;
   return {
     async readSurface({ seed, surface, signal }) {
       if (signal?.aborted) return { state: "UNAVAILABLE", failure_code: "STOPPED" };
-      const page = await context.newPage();
+      if (process.env.WORDSTAT_DEBUG === "1") console.error(`[wordstat] start ${seed.seed_id}/${surface}`);
       try {
-        const url = new URL(WORDSTAT_ORIGIN);
-        url.searchParams.set("region", String(region.provider_id));
-        url.searchParams.set("view", "table");
-        await page.goto(url.href, { waitUntil: "networkidle", timeout: 60_000 });
-        await assertAuthenticated(page);
+        if (!page) {
+          page = await context.newPage();
+          const url = new URL(WORDSTAT_ORIGIN);
+          url.searchParams.set("region", String(region.provider_id));
+          url.searchParams.set("view", "table");
+          await page.goto(url.href, { waitUntil: "domcontentloaded", timeout: 60_000 });
+          await page.locator("input.textinput__control").first().waitFor({ state: "visible", timeout: 30_000 });
+          await assertAuthenticated(page);
+          await closeTour(page);
+        }
         const query = page.locator("input.textinput__control").first();
-        await query.fill(seed.exact_query);
-        await query.press("Enter");
-        await page.waitForTimeout(1_500);
-        await closeTour(page);
-        await assertAuthenticated(page);
-        await configureDevice(page, plan.scope.device);
+        if (currentSeedId !== seed.seed_id) {
+          await query.fill(seed.exact_query);
+          await query.press("Enter");
+          await page.waitForTimeout(1_500);
+          await closeTour(page);
+          await assertAuthenticated(page);
+          await configureDevice(page, plan.scope.device);
+          currentSeedId = seed.seed_id;
+        }
         await selectSurface(page, surface);
         await assertAuthenticated(page);
-        await stableTableRows(page);
+        const surfaceState = await stableSurfaceState(page);
         await assertScope(page, plan, surface);
         if (await query.inputValue() !== seed.exact_query) {
           throw Object.assign(new Error("Wordstat query changed after submission."), { code: "TABLE_INCOMPLETE" });
         }
-        const official = await captureOfficialCsv(page);
-        const domRows = await readDomRows(page, surface, region);
-        const csvRows = officialRows(surface, official.payload, region);
-        const metadataOnly = (surface === "TOP_POPULAR" || surface === "TOP_SIMILAR") && csvRows.length === 0;
+        const saveButtonAvailable = await page.locator("button.save-button").count() === 1;
+        const official = saveButtonAvailable
+          ? await captureOfficialCsv(page)
+          : { content_type: null, payload: null, size: 0 };
+        if (!surfaceState.explicitEmptyState && !saveButtonAvailable) {
+          throw Object.assign(new Error("Wordstat CSV control changed."), { code: "DOM_CHANGED" });
+        }
+        const domRows = surfaceState.explicitEmptyState ? [] : await readDomRows(page, surface, region);
+        const csvRows = official.payload ? officialRows(surface, official.payload, region) : [];
+        const metadataOnly = !surfaceState.explicitEmptyState
+          && (surface === "TOP_POPULAR" || surface === "TOP_SIMILAR") && csvRows.length === 0;
         const rows = metadataOnly ? domRows : csvRows;
-        const declaredWindow = cleanText(csvLines(official.payload)[0]);
-        if (!rows.length) throw Object.assign(new Error("Wordstat returned no confirmed rows for the exact scope."), { code: "TABLE_INCOMPLETE" });
+        const declaredWindow = official.payload
+          ? cleanText(csvLines(official.payload)[0])
+          : await declaredWindowFromPage(page, plan, surface);
+        if (!surfaceState.explicitEmptyState && !rows.length) {
+          throw Object.assign(new Error("Wordstat returned no confirmed rows for the exact scope."), { code: "TABLE_INCOMPLETE" });
+        }
+        if (process.env.WORDSTAT_DEBUG === "1") console.error(`[wordstat] complete ${seed.seed_id}/${surface} rows=${rows.length}`);
         return {
           state: "COMPLETE",
           observed_at: new Date().toISOString(),
@@ -264,7 +313,7 @@ async function createDriver({ context, browser, plan }) {
             headers: headersFor(surface),
             rows: domRows,
             displayed_row_count: domRows.length,
-            explicit_empty_state: false,
+            explicit_empty_state: surfaceState.explicitEmptyState,
             stable: true,
           },
         };
@@ -272,14 +321,20 @@ async function createDriver({ context, browser, plan }) {
         const code = ["AUTH_REQUIRED", "CAPTCHA_OR_CHALLENGE", "DOM_CHANGED", "TABLE_INCOMPLETE", "CSV_SCHEMA_CHANGED", "STOPPED"].includes(error?.code)
           ? error.code
           : error?.name === "TimeoutError" ? "LOAD_TIMEOUT" : "TRANSIENT_NETWORK";
+        if (process.env.WORDSTAT_DEBUG === "1") {
+          console.error(`[wordstat] fail ${seed.seed_id}/${surface} ${code}: ${error instanceof Error ? error.message : String(error)}`);
+          console.error(`[wordstat] page ${page?.url() ?? "unavailable"}: ${cleanText(await page?.locator("body").innerText().catch(() => ""))?.slice(0, 800)}`);
+        }
+        await page?.close().catch(() => {});
+        page = null;
+        currentSeedId = null;
         return { state: ["AUTH_REQUIRED", "CAPTCHA_OR_CHALLENGE", "DOM_CHANGED"].includes(code) ? code : "UNAVAILABLE", failure_code: code };
-      } finally {
-        await page.close().catch(() => {});
       }
     },
     async cleanup() {
       if (cleaned) return { cleanup_status: "COMPLETE" };
       cleaned = true;
+      await page?.close().catch(() => {});
       await context.close().catch(() => {});
       await browser.close().catch(() => {});
       return { cleanup_status: "COMPLETE" };
@@ -306,7 +361,7 @@ export async function collectHeadlessWordstatPlan({
     });
     session.registerCloneProcess(processHandle(profileContext.browser()));
     const profilePage = profileContext.pages()[0] ?? await profileContext.newPage();
-    await profilePage.goto(WORDSTAT_ORIGIN, { waitUntil: "networkidle", timeout: 60_000 }).catch(() => {});
+    await profilePage.goto(WORDSTAT_ORIGIN, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
 
     const browser = await chromium.launch({ executablePath: chromeExecutable, headless: true });
     const context = await browser.newContext({ acceptDownloads: true, viewport: { width: 1280, height: 720 } });

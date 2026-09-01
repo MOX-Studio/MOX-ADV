@@ -6,6 +6,7 @@ import {
   buildScopedDemandEvidence,
 } from "../lib/market-evidence.ts";
 import { adaptCompleteWordstatUiBatch } from "../lib/wordstat-ui-market-adapter.ts";
+import { projectWordstatForPresentation } from "../lib/wordstat-presentation.ts";
 
 async function researchPlan() {
   return buildDemandCostResearchPlan({
@@ -38,6 +39,7 @@ function observation(seed, surface, rows) {
       declared_window: "Россия · все устройства",
     },
     rows,
+    ...(rows.length === 0 ? { result_state: "NO_ROWS_RETURNED", explicit_empty_state: true } : {}),
   };
 }
 
@@ -76,6 +78,73 @@ test("adapts only a complete cleaned headless Wordstat UI batch without relabell
   assert.equal(frequency.method, "WORDSTAT_UI_TOP_POPULAR");
   assert.equal(frequency.status, "AVAILABLE");
   assert.ok(frequency.canonical_observations.every((item) => item.provider_provenance.source === "YANDEX_WORDSTAT_UI"));
+  const presentation = projectWordstatForPresentation(frequency, plan);
+  assert.equal(presentation.method_label, "Популярные запросы Wordstat · headless Playwright UI");
+  assert.ok(presentation.formulations.every((item) => item.source === "YANDEX_WORDSTAT_UI"));
+  assert.ok(presentation.formulations.every((item) => item.source_label === "Яндекс Wordstat · авторизованный интерфейс"));
+  assert.doesNotMatch(JSON.stringify(presentation), /официальное API/iu);
+});
+
+test("bounds normalized top rows while retaining explicit protected-artifact provenance", async () => {
+  const plan = await researchPlan();
+  const observations = plan.seeds.flatMap((seed) => [
+    observation(seed, "TOP_POPULAR", Array.from({ length: 75 }, (_, index) => ({
+      rank: index + 1,
+      phrase: `${seed.phrase} ${index + 1}`,
+      count: 1_000 - index,
+    }))),
+    observation(seed, "TOP_SIMILAR", [{ rank: 1, phrase: "деловое мероприятие", count: 80 }]),
+    observation(seed, "DYNAMICS", [{ period_start: "2026-07-01", count: 110, share: 0.13 }]),
+    observation(seed, "REGIONS", [{ provider_region_id: 225, region_label: "Россия", count: 120, share: 0.2, affinity_index: 100 }]),
+  ]);
+  const batch = adaptCompleteWordstatUiBatch({
+    schema_version: "wordstat-ui-observation-batch-v1",
+    source: "YANDEX_WORDSTAT_UI",
+    transport: "HEADLESS_PLAYWRIGHT",
+    status: "COMPLETE",
+    cleanup_status: "COMPLETE",
+    batch_id: `sha256:${"d".repeat(64)}`,
+    batch_started_at: "2026-08-31T10:00:00.000Z",
+    batch_finished_at: "2026-08-31T10:06:00.000Z",
+    observations,
+  }, plan);
+
+  const top = batch.calls.find((call) => call.method === "top_requests");
+  assert.equal(top.rows.length, 50);
+  assert.ok(top.gaps.some((gap) => gap.code === "WORDSTAT_SNAPSHOT_ROW_CAP"));
+  assert.match(top.gaps.map((gap) => gap.detail).join(" "), /complete official CSV.*protected artifact/iu);
+});
+
+test("preserves a complete explicit empty UI surface without turning missing rows into zero demand", async () => {
+  const plan = await researchPlan();
+  const observations = plan.seeds.flatMap((seed) => [
+    observation(seed, "TOP_POPULAR", []),
+    observation(seed, "TOP_SIMILAR", []),
+    observation(seed, "DYNAMICS", []),
+    observation(seed, "REGIONS", []),
+  ]);
+  const batch = adaptCompleteWordstatUiBatch({
+    schema_version: "wordstat-ui-observation-batch-v1",
+    source: "YANDEX_WORDSTAT_UI",
+    transport: "HEADLESS_PLAYWRIGHT",
+    status: "COMPLETE",
+    cleanup_status: "COMPLETE",
+    batch_id: `sha256:${"c".repeat(64)}`,
+    batch_started_at: "2026-08-31T10:00:00.000Z",
+    batch_finished_at: "2026-08-31T10:06:00.000Z",
+    observations,
+  }, plan);
+
+  assert.ok(batch.calls.every((call) => call.status === "AVAILABLE" && call.rows.length === 0));
+  assert.ok(batch.calls.every((call) => call.gaps.some((gap) => gap.code === "WORDSTAT_NO_ROWS_RETURNED")));
+  const frequency = await buildScopedDemandEvidence(batch, plan.seeds.map((seed) => ({
+    cluster_id: seed.cluster_id,
+    semantic_key: { product: seed.phrase, need: "", intent: "", offer: seed.phrase },
+  })));
+  assert.equal(frequency.status, "AVAILABLE");
+  assert.equal(frequency.observed_unique_count.value, null);
+  assert.equal(frequency.coverage.returned_rows, 0);
+  assert.ok(frequency.clusters.every((cluster) => cluster.status === "PARTIAL"));
 });
 
 test("rejects partial or non-headless Wordstat batches", async () => {

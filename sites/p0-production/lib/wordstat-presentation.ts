@@ -6,8 +6,8 @@ export type WordstatFormulationPresentation = {
   frequency: number | null;
   frequency_label: string;
   status: "AVAILABLE" | "UNAVAILABLE";
-  source: "YANDEX_WORDSTAT_V1";
-  source_label: "Яндекс Wordstat · официальное API";
+  source: "YANDEX_WORDSTAT_V1" | "YANDEX_WORDSTAT_UI";
+  source_label: string;
   method: string;
   method_label: string;
   operator_profile: string;
@@ -85,6 +85,8 @@ const GAP_LABELS: Record<string, string> = {
   WORDSTAT_ROW_COUNT_CONFLICT: "Получены конфликтующие частоты одной формулировки; значение не используется.",
   INCOMPARABLE_WORDSTAT_SCOPES: "Частоты получены в несопоставимых областях и не складываются.",
   WORDSTAT_SCOPE_INVALID: "Область наблюдения Wordstat не подтверждена.",
+  WORDSTAT_NO_ROWS_RETURNED: "Wordstat вернул штатную пустую выдачу; отсутствующие строки не считаются нулевым спросом.",
+  WORDSTAT_SNAPSHOT_ROW_CAP: "В нормализованный снимок вошли первые 50 строк; полный официальный CSV сохранён в защищённом артефакте.",
 };
 
 function gapLabels(frequency: JsonRecord) {
@@ -101,7 +103,22 @@ function status(value: unknown): WordstatPresentation["status"] {
 function methodLabel(method: string) {
   return method === "/v1/topRequests"
     ? "Популярные запросы Wordstat · /v1/topRequests"
-    : "Метод Wordstat недоступен";
+    : method === "WORDSTAT_UI_TOP_POPULAR"
+      ? "Популярные запросы Wordstat · headless Playwright UI"
+      : "Метод Wordstat недоступен";
+}
+
+function windowLabel(source: string, value: unknown) {
+  const declared = text(value);
+  if (source === "YANDEX_WORDSTAT_UI") {
+    const range = /(\d{2}\.\d{2}\.\d{4}\s*[–—-]\s*\d{2}\.\d{2}\.\d{4})/u.exec(declared)?.[1];
+    return range
+      ? `${range} · подтверждено интерфейсом Wordstat`
+      : "Окно подтверждено отдельно для каждой поверхности интерфейса Wordstat";
+  }
+  return declared === "rolling_last_30_days"
+    ? "Последние 30 дней; точный конец окна API не раскрывает"
+    : "Окно наблюдения недоступно";
 }
 
 export function projectWordstatForPresentation(
@@ -118,7 +135,11 @@ export function projectWordstatForPresentation(
     const item = record(value);
     return [text(item.seed_id), finiteFrequency(item.value)] as const;
   }).filter(([seedId]) => Boolean(seedId)));
-  const method = text(frequency.method) || "/v1/topRequests";
+  const source = frequency.source === "YANDEX_WORDSTAT_UI" ? "YANDEX_WORDSTAT_UI" : "YANDEX_WORDSTAT_V1";
+  const sourceLabel = source === "YANDEX_WORDSTAT_UI"
+    ? "Яндекс Wordstat · авторизованный интерфейс"
+    : "Яндекс Wordstat · официальное API";
+  const method = text(frequency.method) || (source === "YANDEX_WORDSTAT_UI" ? "WORDSTAT_UI_TOP_POPULAR" : "/v1/topRequests");
   const observedAt = text(frequency.batch_finished_at) || text(fallbackObservedAt) || null;
   const formulation = (input: {
     phrase: unknown;
@@ -142,8 +163,8 @@ export function projectWordstatForPresentation(
       frequency: count,
       frequency_label: frequencyLabel(count),
       status: count === null ? "UNAVAILABLE" : "AVAILABLE",
-      source: "YANDEX_WORDSTAT_V1",
-      source_label: "Яндекс Wordstat · официальное API",
+      source,
+      source_label: sourceLabel,
       method,
       method_label: methodLabel(method),
       operator_profile: operatorProfile,
@@ -199,9 +220,7 @@ export function projectWordstatForPresentation(
     status: status(frequency.status),
     method,
     method_label: methodLabel(method),
-    window_label: frequency.declared_window === "rolling_last_30_days"
-      ? "Последние 30 дней; точный конец окна API не раскрывает"
-      : "Окно наблюдения недоступно",
+    window_label: windowLabel(source, frequency.declared_window),
     coverage_label: `${available} из ${formulations.length} формулировок получили подтверждённую частоту`,
     formulations,
     gaps,

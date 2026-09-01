@@ -264,7 +264,7 @@ function compareCsvAndDom(surface, result) {
       displayedRowCount,
       explicitEmptyState,
       protectedCsv: providerPayload ?? sanitizedCsv(surface, csvRows),
-      captureMode: providerPayload ? "OFFICIAL_CSV_ROWS" : "CANONICAL_TEST_ROWS",
+      captureMode: providerPayload ? "OFFICIAL_CSV_ROWS" : "CONFIRMED_UI_EMPTY_STATE",
     };
   }
   if (explicitEmptyState || displayedRowCount !== csvRows.length || domRows.length === 0) {

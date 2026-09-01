@@ -750,7 +750,7 @@ function publicationBlocker(code: string, message: string, fieldPath: string | n
 }
 
 export function recommendationSetViabilityOutcome(drafts: CampaignDraftCandidate[]) {
-  const viableCount = drafts.filter((draft) => draft.viability_status === "VIABLE").length;
+  const viableCount = drafts.filter((draft) => draft.viability_status === "VIABLE" || draft.viability_status === "TESTABLE_WITH_GAPS").length;
   if (viableCount > 0) return {
     status: "VIABLE_DRAFTS_AVAILABLE" as const,
     viable_count: viableCount,

@@ -223,7 +223,7 @@ export class YandexAccessReadinessAdapter implements AccessReadinessAdapter {
     const health = new URL("/health", url);
     const payload = await jsonResponse(await this.fetcher(health, {
       method: "GET",
-      redirect: "error",
+      redirect: "manual",
       headers: {
         Authorization: `Bearer ${this.configuration.wordstatUiBridgeToken}`,
         Accept: "application/json",

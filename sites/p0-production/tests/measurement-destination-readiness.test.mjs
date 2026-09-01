@@ -170,6 +170,34 @@ test("exact measurement and relevant existing landing are ready for every served
   assert.equal(await verifyMeasurementDestinationReadiness(corrupted), false);
 });
 
+test("destination relevance is scoped to the advertised offer while result semantics stay in measurement checks", async () => {
+  const inspection = adapter({
+    async inspect(input) {
+      input.policy.authorizeRequest({ url: input.url, method: "GET", resource_type: "document", headers: {}, body_present: false, resolved_addresses: ADDRESS });
+      return {
+        requested_url: input.url,
+        final_url: input.url,
+        redirect_chain: [input.url],
+        network_requests: [{ url: input.url, method: "GET", resource_type: "document", headers: {}, body_present: false, resolved_addresses: ADDRESS }],
+        response_bytes: 1024,
+        page: {
+          title: "Промышленная выставка",
+          headings: ["Участие в промышленной выставке"],
+          text_excerpt: "Условия участия и регистрация.",
+          ctas: [{ label: "Условия участия", kind: "link" }],
+          forms: [],
+          metrika_tag_detected: true,
+          http_status: 200,
+          content_type: "text/html",
+        },
+      };
+    },
+  });
+  const result = await build({ inspection });
+  assert.equal(result.destination.status, "READY");
+  assert.ok(result.destination.device_scopes.every((scope) => scope.classification === "EXISTING_LANDING"));
+});
+
 test("measurement report states distinguish rare, stale, erroneous and unavailable observations", async (t) => {
   await t.test("rare", async () => {
     const rare = context();

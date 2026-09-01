@@ -6,6 +6,7 @@ import {
 } from "./market-evidence.ts";
 
 const UI_ENDPOINT = "https://wordstat.yandex.com/";
+const MAXIMUM_NORMALIZED_TOP_ROWS = 50;
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -60,6 +61,11 @@ function baseCall(
   method: WordstatCall["method"],
 ): Omit<WordstatCall, "rows"> {
   const scope = exactScope(observation, seed);
+  const observedRows = list(observation.rows);
+  const explicitEmpty = observation.result_state === "NO_ROWS_RETURNED"
+    && observation.explicit_empty_state === true
+    && observedRows.length === 0;
+  const snapshotRowsCapped = method === "top_requests" && observedRows.length > MAXIMUM_NORMALIZED_TOP_ROWS;
   return {
     call_id: `${text(batch.batch_id)}:${seed.seed_id}:${method}:ui`,
     batch_id: text(batch.batch_id),
@@ -79,7 +85,18 @@ function baseCall(
       region_filter_applied: method !== "regions",
     },
     request_fingerprint: text(observation.request_fingerprint),
-    gaps: [],
+    gaps: [
+      ...(explicitEmpty ? [{
+        code: "WORDSTAT_NO_ROWS_RETURNED",
+        detail: "Wordstat UI returned a confirmed empty surface; absent rows remain unknown and are not zero demand.",
+        retry_after_seconds: null,
+      }] : []),
+      ...(snapshotRowsCapped ? [{
+        code: "WORDSTAT_SNAPSHOT_ROW_CAP",
+        detail: `The normalized snapshot retains the first ${MAXIMUM_NORMALIZED_TOP_ROWS} ranked rows; the complete official CSV remains in the protected artifact.`,
+        retry_after_seconds: null,
+      }] : []),
+    ],
   };
 }
 
@@ -87,7 +104,7 @@ function topRows(observation: UnknownRecord) {
   return list(observation.rows).map(record).map((row) => ({
     phrase: text(row.phrase),
     count: finite(row.count),
-  })).filter((row) => row.phrase);
+  })).filter((row) => row.phrase).slice(0, MAXIMUM_NORMALIZED_TOP_ROWS);
 }
 
 function dynamicsRows(observation: UnknownRecord) {
@@ -106,6 +123,14 @@ function regionRows(observation: UnknownRecord) {
     share: finite(row.share),
     affinity_index: finite(row.affinity_index),
   })).filter((row) => row.region_name);
+}
+
+function confirmedRows(observation: UnknownRecord, rows: unknown[]) {
+  if (rows.length) return rows;
+  if (observation.result_state === "NO_ROWS_RETURNED"
+    && observation.explicit_empty_state === true
+    && list(observation.rows).length === 0) return rows;
+  throw new Error("Complete Wordstat UI evidence must contain canonical rows or a confirmed explicit empty state.");
 }
 
 export function adaptCompleteWordstatUiBatch(
@@ -131,12 +156,9 @@ export function adaptCompleteWordstatUiBatch(
       const declared = text(record(observation.scope).declared_window);
       if (declared) declaredWindows.add(declared);
     }
-    const top = topRows(popular);
-    const dynamic = dynamicsRows(dynamics);
-    const regional = regionRows(regions);
-    if (!top.length || !dynamic.length || !regional.length) {
-      throw new Error("Complete Wordstat UI evidence must contain non-empty canonical rows for every required surface.");
-    }
+    const top = confirmedRows(popular, topRows(popular)) as ReturnType<typeof topRows>;
+    const dynamic = confirmedRows(dynamics, dynamicsRows(dynamics)) as ReturnType<typeof dynamicsRows>;
+    const regional = confirmedRows(regions, regionRows(regions)) as ReturnType<typeof regionRows>;
     calls.push(
       { ...baseCall(batch, seed, popular, "top_requests"), rows: top },
       { ...baseCall(batch, seed, dynamics, "dynamics"), rows: dynamic },

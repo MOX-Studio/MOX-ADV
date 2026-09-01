@@ -63,16 +63,21 @@ test("builds a bounded typed multi-seed demand and comparable-cost research plan
 
   assert.equal(plan.schema_version, "demand-cost-research-plan-v1");
   assert.match(plan.plan_id, /^sha256:[a-f0-9]{64}$/u);
-  assert.ok(plan.seeds.length >= 4);
+  assert.ok(plan.seeds.length >= 5);
   assert.ok(plan.seeds.some((item) => item.dimension === "OFFER_LANGUAGE"));
   assert.ok(plan.seeds.some((item) => item.dimension === "CUSTOMER_PROBLEM"));
   assert.ok(plan.seeds.some((item) => item.dimension === "HIGH_INTENT_ACTION"));
+  assert.ok(plan.seeds.some((item) => item.dimension === "BRAND"));
   assert.ok(plan.seeds.some((item) => item.dimension === "NON_BRAND"));
   assert.equal(new Set(plan.seeds.map((item) => item.phrase.toLocaleLowerCase("ru-RU"))).size, plan.seeds.length);
   const offerSeed = plan.seeds.find((item) => item.dimension === "OFFER_LANGUAGE");
   assert.equal(offerSeed.phrase, "MOX Expo участие со стендом в промышленной выставке");
   assert.deepEqual(offerSeed.formulation_provenance, [
     { dimension: "OFFER_LANGUAGE", input_index: 0, source_phrase: "MOX Expo участие со стендом в промышленной выставке" },
+  ]);
+  const brandSeed = plan.seeds.find((item) => item.dimension === "BRAND");
+  assert.equal(brandSeed.phrase, "MOX Expo");
+  assert.deepEqual(brandSeed.formulation_provenance, [
     { dimension: "BRAND", input_index: 0, source_phrase: "MOX Expo" },
   ]);
   assert.equal(plan.dimensions.find((item) => item.dimension === "BRAND").status, "PLANNED");
@@ -285,7 +290,7 @@ test("official Wordstat adapter preserves method, operator, region, device and o
   }, () => `2026-08-21T10:00:0${tick++}.000Z`);
 
   assert.deepEqual(requests.map((item) => item.url), Object.values(WORDSTAT_ENDPOINTS));
-  assert.ok(requests.every((item) => item.init.method === "POST" && item.init.redirect === "error"));
+  assert.ok(requests.every((item) => item.init.method === "POST" && item.init.redirect === "manual"));
   assert.ok(requests.every((item) => item.init.headers.Authorization === "Bearer fixture-secret"));
   assert.ok(requests.every((item) => !Object.keys(item.init.headers).some((key) => /client.?id/iu.test(key))));
   assert.deepEqual(requests[0].body, { phrase: seed.phrase, regions: [213], devices: ["desktop"] });

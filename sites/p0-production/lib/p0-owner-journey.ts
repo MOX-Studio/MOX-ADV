@@ -373,6 +373,7 @@ type ActionKind =
   | "confirm-business-model"
   | "select-focus"
   | "review-strategy"
+  | "refresh-readiness"
   | "revalidate-draft"
   | "revalidate-auction-protocol"
   | "prepare-package"
@@ -913,6 +914,16 @@ export function ownerActionDescriptor(view: InternalView): InternalActionDescrip
     };
   }
 
+  const viabilityOutcome = record(record(state.recommendation_set).viability_outcome);
+  if (viabilityOutcome.status === "NO_VIABLE_DRAFTS" && state.recommendation_set) {
+    return {
+      kind: "refresh-readiness",
+      label: "Повторить безопасные проверки",
+      description: "Повторно прочитать измерение и проверить публичную посадочную страницу без изменений в Метрике, Директе или на сайте; затем пересобрать черновики.",
+      fields: [],
+    };
+  }
+
   const draftRevalidation = list(record(state.recommendation_set).drafts).map(record).find((draft) =>
     list(draft.publication_blockers).map(record).some((blocker) => blocker.code === "DRAFT_REVALIDATION_REQUIRED")
   );
@@ -1209,6 +1220,9 @@ export function projectDemandCostResearchForOwner(snapshot: unknown): OwnerJourn
   const dimensions = list(plan.dimensions).map(record);
   const seeds = list(plan.seeds).map(record);
   const wordstat = projectWordstatForPresentation(frequency, plan, market.batch_finished_at);
+  const wordstatSourceLabel = frequency.source === "YANDEX_WORDSTAT_UI"
+    ? "Яндекс Wordstat · авторизованный интерфейс"
+    : "Яндекс Wordstat · официальное API";
   const formulations: NonNullable<OwnerJourneyProjection["demandCostResearch"]>["demand"]["formulations"] = wordstat.formulations.map((row, index) => ({
     category: row.formulation_role === "RETURNED_TOP_ROW"
       ? "Популярная формулировка Wordstat"
@@ -1233,7 +1247,7 @@ export function projectDemandCostResearchForOwner(snapshot: unknown): OwnerJourn
       operator: "Профиль формулировки недоступен",
       scope: "Область наблюдения недоступна",
       observedAt: "Дата наблюдения недоступна",
-      provenance: "Яндекс Wordstat · официальное API",
+      provenance: wordstatSourceLabel,
     });
   }
   const demandStatus = frequency.status === "AVAILABLE" ? "Доступно" as const : frequency.status === "PARTIAL" ? "Частично" as const : "Недоступно" as const;
@@ -1254,7 +1268,9 @@ export function projectDemandCostResearchForOwner(snapshot: unknown): OwnerJourn
       conclusion: observed === null || observed === undefined
         ? "Наблюдаемая нижняя граница спроса недоступна; это не нулевой спрос."
         : `Наблюдаемая нижняя граница: ${Number(observed).toLocaleString("ru-RU")} запросов в возвращённых верхних строках.`,
-      source: "Яндекс Wordstat · официальное наблюдение",
+      source: frequency.source === "YANDEX_WORDSTAT_UI"
+        ? "Яндекс Wordstat · авторизованный интерфейс · headless Playwright"
+        : "Яндекс Wordstat · официальное API",
       observedAt: ownerText(market.batch_finished_at, "Дата наблюдения недоступна", 100),
       scope: wordstat.formulations[0]?.scope_label || [...regions, ...devices].join(" · ") || "Область наблюдения недоступна",
       method: wordstat.method_label,
@@ -1913,6 +1929,8 @@ function packageSummary(view: InternalView, campaigns: OwnerJourneyProjection["c
   const businessProjection = record(state.package_review.business_projection);
   const preflight = record(businessProjection.preflight);
   const alignment = record(businessProjection.budget_alignment);
+  const preflightPassed = Number(preflight.passed ?? 0);
+  const preflightTotal = Number(preflight.total ?? 9);
   const alignmentLabels: Record<string, NonNullable<OwnerJourneyProjection["packageSummary"]>["budgetAlignment"]["classification"]> = {
     ALIGNED: "Соответствует",
     LIMITED_TEST: "Ограниченный тест",
@@ -1926,7 +1944,9 @@ function packageSummary(view: InternalView, campaigns: OwnerJourneyProjection["c
     && execution!.items.every((item) => item.status === "DIRECT_ACCEPTED" || correctedItemIds.has(item.item_execution_id));
   return {
     campaignCount: state.shortlist?.selections.length ?? 0,
-    preflight: `${Number(preflight.passed ?? 0)}/${Number(preflight.total ?? 9)} бизнес-проверок ${preflight.status === "PASS" ? "пройдено" : "требуют внимания"}`,
+    preflight: preflight.status === "PASS"
+      ? `${preflightPassed}/${preflightTotal} бизнес-проверок пройдено`
+      : `${preflightPassed}/${preflightTotal} бизнес-проверок пройдено · ${Math.max(0, preflightTotal - preflightPassed)} требуют внимания`,
     preflightGates: list(preflight.gates).map((value) => {
       const item = record(value);
       return {
@@ -2569,8 +2589,9 @@ export class P0OwnerJourney {
       if (submission.handle !== interview.primaryAction.handle) {
         throw new P0ApplicationError("P0_OWNER_ACTION_STALE", "Действие больше не соответствует текущему состоянию. Обновите страницу.");
       }
-      const confirmingBusinessGoal = view.state.owner_goal_interview?.phase === "confirmation"
-        && view.state.owner_goal_interview.current.target?.kind === "BUSINESS_GOAL";
+      const confirmingInterviewAnswer = view.state.owner_goal_interview?.phase === "confirmation";
+      const confirmingBusinessGoal = confirmingInterviewAnswer
+        && view.state.owner_goal_interview?.current.target?.kind === "BUSINESS_GOAL";
       view = await this.application.submitOwnerGoalInterview(ownerKey, {
         expected_revision: view.revision,
         submission,
@@ -2583,7 +2604,7 @@ export class P0OwnerJourney {
           goal: view.state.context_state.business_goal_decision.value,
         });
       }
-      const agent = this.agentProjection ? await this.agentProjection(ownerKey) : null;
+      const agent = confirmingInterviewAnswer && this.agentProjection ? await this.agentProjection(ownerKey) : null;
       if (agent) view = await this.application.query(ownerKey);
       const access = accessState && this.accessReadiness ? this.accessReadiness.project(accessState) : null;
       return project(ownerKey, view, agent, access);
@@ -2779,6 +2800,8 @@ export class P0OwnerJourney {
       } else {
         await command({ action: "review_strategy", answers });
       }
+    } else if (descriptor.kind === "refresh-readiness") {
+      await command({ action: "recalculate_recommendations" });
     } else if (descriptor.kind === "revalidate-draft") {
       await command({ action: "revalidate_draft", draft_id: descriptor.target });
     } else if (descriptor.kind === "revalidate-auction-protocol") {

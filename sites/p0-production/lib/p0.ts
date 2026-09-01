@@ -15,6 +15,7 @@ import {
 import { directExecutionFailureOutcome } from "./campaign-package-execution.ts";
 import { strategyAnswerValue } from "./campaign-strategy.ts";
 import { minimumWeeklyBudgetRub, validateWeeklyBudgetRub } from "./direct-limits.ts";
+import { LoopbackDestinationReadinessAdapter } from "./destination-inspection.ts";
 import {
   correctSuspendedCampaignAndResubmitModeration,
   DirectWriteError,
@@ -508,7 +509,7 @@ async function collectHeadlessWordstatUiBatch(
   const endpoint = new URL("/collect", bridgeUrl);
   const response = await fetch(endpoint, {
     method: "POST",
-    redirect: "error",
+    redirect: "manual",
     headers: {
       Authorization: `Bearer ${bridgeToken}`,
       Accept: "application/json",
@@ -576,8 +577,8 @@ async function readMarketEvidence({
   }
   const configuredDevice = providerScope.device;
   const observedDate = new Date(generatedAt);
-  const dynamicsFrom = new Date(Date.UTC(observedDate.getUTCFullYear(), observedDate.getUTCMonth() - 23, 1));
-  const dynamicsTo = new Date(Date.UTC(observedDate.getUTCFullYear(), observedDate.getUTCMonth() + 1, 0));
+  const dynamicsTo = new Date(Date.UTC(observedDate.getUTCFullYear(), observedDate.getUTCMonth(), 0));
+  const dynamicsFrom = new Date(Date.UTC(dynamicsTo.getUTCFullYear(), dynamicsTo.getUTCMonth() - 23, 1));
   const researchPlan = await buildDemandCostResearchPlan({
     generatedAt,
     offerLanguage: cleanText(String(model.product ?? ""), 500),
@@ -1441,6 +1442,11 @@ const application = new P0Application({
     researchSite,
     readCurrencyLimits: readPlanningCurrencyLimits,
     readMarketEvidence,
+    destinationInspection: new LoopbackDestinationReadinessAdapter({
+      url: runtimeEnv().P0_DESTINATION_BRIDGE_URL,
+      token: runtimeEnv().P0_DESTINATION_BRIDGE_TOKEN,
+      fetcher: fetch,
+    }),
     ...(runtimeEnv().P0_COMPETITOR_RESEARCH_JSON ? { readCompetitorResearch } : {}),
     async readPlaybookReleases() {
       return [readP0CuratedPlaybookV1()];
@@ -1496,6 +1502,11 @@ export async function ownerSnapshot(key: string) {
 
 export async function submitOwnerAction(key: string, payload: Record<string, unknown>) {
   return ownerJourney.submit(key, payload as OwnerActionSubmission);
+}
+
+export async function recoverOwnerState(key: string, confirmation: unknown) {
+  await application.recoverInvalidDocument(key, confirmation);
+  return ownerJourney.query(key);
 }
 
 export async function operatorDiagnostics(key: string) {

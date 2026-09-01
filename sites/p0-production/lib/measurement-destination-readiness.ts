@@ -2,10 +2,15 @@ import {
   PINNED_LANDING_TOOL_VERSIONS,
   createLandingBrowserPolicy,
   type LandingAdvisoryAdapter,
+  type LandingInspectionViewport,
   type LandingPageInspection,
 } from "./landing-advisory.ts";
 import { strategyAnswerValue } from "./campaign-strategy.ts";
 import { redactSensitiveEvidenceText } from "./analytics-evidence.ts";
+import {
+  DESTINATION_INSPECTION_CONTRACT_VERSION,
+  type DestinationReadinessAdapter,
+} from "./destination-inspection.ts";
 
 export const MEASUREMENT_DESTINATION_READINESS_SCHEMA = "p0-measurement-destination-readiness-v1";
 export const MEASUREMENT_DESTINATION_READINESS_VERSION = "1.1.0";
@@ -132,7 +137,7 @@ export type MeasurementDestinationReadiness = {
   external_changes_performed: false;
 };
 
-type ReadinessAdapter = Pick<LandingAdvisoryAdapter, "availability" | "resolveHostname" | "versions"> & {
+type LegacyLandingReadinessAdapter = Pick<LandingAdvisoryAdapter, "availability" | "resolveHostname" | "versions"> & {
   inspect(input: {
     url: string;
     viewport: { form_factor: ServedDeviceScope; width: number; height: number; device_scale_factor: number };
@@ -140,6 +145,12 @@ type ReadinessAdapter = Pick<LandingAdvisoryAdapter, "availability" | "resolveHo
     signal: AbortSignal;
   }): Promise<LandingPageInspection>;
 };
+
+type ReadinessAdapter = DestinationReadinessAdapter | LegacyLandingReadinessAdapter;
+
+function isDestinationReadinessAdapter(adapter: ReadinessAdapter): adapter is DestinationReadinessAdapter {
+  return typeof (adapter as { version?: unknown }).version === "function";
+}
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -447,7 +458,7 @@ async function boundedOperation<T>(operation: (signal: AbortSignal) => Promise<T
   }
 }
 
-function viewport(device: ServedDeviceScope) {
+function viewport(device: ServedDeviceScope): LandingInspectionViewport {
   return device === "desktop"
     ? { form_factor: device, width: 1920, height: 1080, device_scale_factor: 1 }
     : { form_factor: device, width: 390, height: 844, device_scale_factor: 3 };
@@ -493,8 +504,17 @@ async function destinationReadiness(input: {
   };
   if (!input.adapter.availability.available) return { ...base, status: "UNAVAILABLE" as const };
   try {
-    const versions = await boundedOperation((signal) => input.adapter.versions(signal));
-    if (Object.entries(PINNED_LANDING_TOOL_VERSIONS).some(([key, value]) => versions[key as keyof typeof versions] !== value)) {
+    let versionMatches: boolean;
+    const adapter = input.adapter;
+    if (isDestinationReadinessAdapter(adapter)) {
+      versionMatches = await boundedOperation((signal) => adapter.version(signal)) === DESTINATION_INSPECTION_CONTRACT_VERSION;
+    } else {
+      const versions = await boundedOperation((signal) => adapter.versions(signal));
+      versionMatches = Object.entries(PINNED_LANDING_TOOL_VERSIONS).every(
+        ([key, value]) => versions[key as keyof typeof versions] === value,
+      );
+    }
+    if (!versionMatches) {
       return { ...base, status: "UNAVAILABLE" as const, adapter: { ...base.adapter, status: "PINNED_MISMATCH" as const } };
     }
     for (const [index, device] of input.servedDevices.entries()) {
@@ -560,7 +580,7 @@ export async function buildMeasurementDestinationReadiness(input: {
   if (!strategyRevisionId) throw new Error("Measurement/destination readiness requires exact Strategy revision.");
   const requestedUrl = text(strategyAnswerValue(input.strategy, "landing_page"), 2_000);
   const qualifiedResult = text(strategyAnswerValue(input.strategy, "qualified_result"), 1_000);
-  const expected = `${text(strategyAnswerValue(input.strategy, "advertised_offer"), 1_000)} ${text(strategyAnswerValue(input.strategy, "core_message"), 1_000)} ${qualifiedResult}`;
+  const expected = text(strategyAnswerValue(input.strategy, "advertised_offer"), 1_000);
   const servedDevices = [...new Set(input.servedDevices)].filter((item): item is ServedDeviceScope => item === "desktop" || item === "mobile");
   if (!servedDevices.length) throw new Error("At least one served device scope is required.");
   const measurement = measurementChecks(input.context, qualifiedResult, observedAt);

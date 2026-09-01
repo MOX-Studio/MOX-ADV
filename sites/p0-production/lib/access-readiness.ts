@@ -351,7 +351,14 @@ export class AccessReadinessService {
     if (sameScope && (nextStatus === state.status
       || (state.status === "ACTIVE" && nextStatus === "READY")
       || (state.status === "ACTIVE_LIMITED" && nextStatus === "LIMITED"))) return state;
-    return this.applyVerification(key, state, state.binding.account_identity, state.binding.counter_identity, verified);
+    return this.applyVerification(
+      key,
+      state,
+      state.binding.account_identity,
+      state.binding.counter_identity,
+      verified,
+      state.status === "ACTIVE" || state.status === "ACTIVE_LIMITED",
+    );
   }
 
   private verificationStatus(verified: AccessBindingVerification): "READY" | "LIMITED" | "BLOCKED" {
@@ -365,8 +372,12 @@ export class AccessReadinessService {
     accountIdentity: string,
     counterIdentity: string,
     verified: AccessBindingVerification,
+    preserveActivation = false,
   ) {
-    const status = this.verificationStatus(verified);
+    const verificationStatus = this.verificationStatus(verified);
+    const status = preserveActivation && verificationStatus !== "BLOCKED"
+      ? verificationStatus === "READY" ? "ACTIVE" : "ACTIVE_LIMITED"
+      : verificationStatus;
     const timestamp = this.now();
     const limitations = [
       ...(!verified.direct.scope_granted ? ["Разрешение на чтение Директа отсутствует или было отозвано."] : []),

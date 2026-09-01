@@ -187,6 +187,7 @@ import {
   verifyMeasurementDestinationReadiness,
   type MeasurementDestinationReadiness,
 } from "./measurement-destination-readiness.ts";
+import type { DestinationReadinessAdapter } from "./destination-inspection.ts";
 
 export const P0_APPLICATION_CONTRACT = "mox-adv.p0.application";
 export const P0_APPLICATION_CONTRACT_VERSION = "1.31.0";
@@ -426,7 +427,7 @@ export type P0Document = {
     schema_version: "p0-recommendation-recalculation-v1";
     material_change: boolean;
     message: string;
-    reason_code: "ACTIVE_PLAYBOOK_RELEASE_CHANGED_OR_ROLLED_BACK" | "COMPETITOR_GUIDANCE_GENERATED" | "NO_ACTIVE_PLAYBOOK_MATERIAL_CHANGE";
+    reason_code: "ACTIVE_PLAYBOOK_RELEASE_CHANGED_OR_ROLLED_BACK" | "COMPETITOR_GUIDANCE_GENERATED" | "MEASUREMENT_DESTINATION_READINESS_CHANGED" | "NO_ACTIVE_PLAYBOOK_MATERIAL_CHANGE";
     recalculated_at: string;
     previous_recommendation_set_id: string;
     current_recommendation_set_id: string;
@@ -513,6 +514,7 @@ export interface P0ApplicationAdapters {
     generatedAt: string;
   }): Promise<FinancialCompetitorIntelligenceInput>;
   landingAdvisory?: LandingAdvisoryAdapter;
+  destinationInspection?: DestinationReadinessAdapter;
   readPlaybookReleases?(): Promise<CuratedPlaybookRelease[]>;
   externalWriteConfiguration(): P0ExternalWriteConfiguration;
   createExternalOutcome(input: {
@@ -649,7 +651,7 @@ export const P0_COMMAND_TRUTH_TABLE = {
     state.context_state && state.site_analysis && packageNotDispatched(state),
   ),
   save_business_model: (state: P0Document) => Boolean(
-    state.site_analysis && state.business_model && packageNotDispatched(state),
+    state.site_analysis && state.context_state && packageNotDispatched(state),
   ),
   select_focus: (state: P0Document) => Boolean(
     state.site_analysis && state.business_model && state.product_focus && packageNotDispatched(state),
@@ -2890,21 +2892,38 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
       strategy.approved_at = updatedAt;
       changed = true;
     }
+    const readinessLineageMismatch = Boolean(
+      state.measurement_destination_readiness
+      && state.recommendation_set?.measurement_destination_readiness_id !== state.measurement_destination_readiness.readiness_id
+    );
     if (
       !state.recommendation_set
       || state.recommendation_set.strategy_revision_id !== strategy.strategy_revision_id
       || state.recommendation_set.schema_version !== "campaign-recommendation-set-v4"
+      || readinessLineageMismatch
     ) {
       state.recommendation_set = await buildCampaignRecommendationSet({
         model: model as unknown as Record<string, unknown>,
         strategy: strategy as unknown as Record<string, unknown>,
         analyticsEvidence: state.analytics_evidence_snapshot as unknown as Record<string, unknown> | undefined,
-        playbookReleases: [],
+        playbookReleases,
         directCapabilitySnapshot: state.context_state?.facts.direct.capability_snapshot ?? null,
         measurementDestinationReadiness: state.measurement_destination_readiness as unknown as Record<string, unknown> | null,
         metrikaMeasurementPlan: metrikaMeasurementPlan(state),
         generatedAt: updatedAt,
       });
+      if (readinessLineageMismatch) {
+        state.draft = null;
+        state.shortlist = await emptyShortlist({
+          shortlistRevisionId: `p0-shortlist-r${Math.max(1, revision + 1)}`,
+          strategyRevisionId: String(strategy.strategy_revision_id ?? ""),
+          recommendationSetId: state.recommendation_set.recommendation_set_id,
+          updatedAt,
+        });
+        state.package_review = null;
+        state.human_decision_gate = null;
+        state.external_write_intent = null;
+      }
       changed = true;
     }
   }
@@ -3450,7 +3469,10 @@ function currentStep(state: P0Document) {
 }
 
 function allowedCommands(state: P0Document): CommandName[] {
-  if (state.last_cascade?.recomputation_status === "PENDING") return [];
+  if (state.last_cascade?.recomputation_status === "PENDING") {
+    const exactStrategyReviewCanResume = !state.strategy && state.strategy_review?.status === "REVIEW_REQUIRED";
+    return exactStrategyReviewCanResume ? ["confirm_strategy_review", "reject_strategy_review"] : [];
+  }
   return (Object.keys(P0_COMMAND_TRUTH_TABLE) as CommandName[])
     .filter((command) => P0_COMMAND_TRUTH_TABLE[command](state));
 }
@@ -3521,6 +3543,36 @@ export class P0Application {
   constructor({ store, adapters }: { store: P0ApplicationStore; adapters: P0ApplicationAdapters }) {
     this.store = store;
     this.adapters = adapters;
+  }
+
+  async recoverInvalidDocument(key: string, confirmation: unknown) {
+    if (confirmation !== "RESET_INVALID_LOCAL_P0_STATE") {
+      fail("P0_CONFIRMATION_REQUIRED", "Recovery requires the exact local-state reset confirmation.");
+    }
+    const row = await this.store.load(key);
+    if (!row) fail("P0_RECOVERY_NOT_REQUIRED", "There is no persisted P0 document to recover.");
+    try {
+      await migrateDocument(
+        structuredClone(decodeDocument(row)),
+        row.revision,
+        row.updated_at,
+        await this.playbookReleases(),
+      );
+      fail("P0_RECOVERY_NOT_REQUIRED", "The persisted P0 document is valid and cannot be reset through recovery.");
+    } catch (error) {
+      if (!(error instanceof P0ApplicationError)
+        || !["P0_MIGRATION_LINEAGE_INVALID", "P0_STATE_INVALID"].includes(error.code)) throw error;
+    }
+    const timestamp = this.adapters.now();
+    const next: P0StoredRow = {
+      revision: row.revision + 1,
+      updated_at: timestamp,
+      value_json: JSON.stringify(emptyDocument()),
+    };
+    if (!await this.store.compareAndSwap(key, row.revision, next)) {
+      fail("P0_REVISION_CONFLICT", "P0 изменился в другой вкладке. Обновите страницу.");
+    }
+    return this.query(key);
   }
 
   async agentContract(
@@ -4318,7 +4370,7 @@ export class P0Application {
       context: context as unknown as Record<string, unknown>,
       contextSiteUrl: state.context_state.facts.site.url,
       servedDevices: ["desktop", "mobile"],
-      adapter: this.adapters.landingAdvisory ?? unavailableLandingAdvisoryAdapter,
+      adapter: this.adapters.destinationInspection ?? this.adapters.landingAdvisory ?? unavailableLandingAdvisoryAdapter,
       now: () => this.adapters.now(),
     });
   }
@@ -4348,6 +4400,8 @@ export class P0Application {
   private assertResearchContextPreflight(context: P0Context, timestamp: string) {
     if (context.access_profile?.path === "NEW_ADVERTISER"
       && context.access_profile.account_history === "UNAVAILABLE") return;
+    const declaredScope = context.access_profile?.evidence_scope;
+    if (declaredScope && Object.values(declaredScope).includes("UNAVAILABLE")) return;
     this.assertContextPreflight(context, timestamp);
   }
 
@@ -4675,10 +4729,13 @@ export class P0Application {
         });
       }
     } else if (action === "save_business_model") {
-      if (!state.business_model) fail("P0_PREREQUISITE_MISSING", "Сначала исследуйте сайт.");
       if (!state.site_analysis || !state.context_state) {
         fail("P0_EVIDENCE_LINEAGE_INVALID", "Model потеряла persisted Context или first-party site analysis.");
       }
+      const context = sanitizeContext(await this.adapters.readContext({ owner_key: key }));
+      this.assertResearchContextPreflight(context, this.adapters.now());
+      this.assertPersistedBindings(state, context);
+      if (!state.business_model) state.business_model = await inferModel(state.site_analysis, context);
       const value = record(payload.value);
       const fields = ["product", "audience", "value", "qualified_result", "exclusions"] as const;
       const confirmedValues = Object.fromEntries(fields.map((field) => {
@@ -4709,9 +4766,7 @@ export class P0Application {
         ?? state.product_focus?.focus_opportunities.prepared_human_decision_gate?.options[0]?.offer_id
         ?? null;
       const selectedCatalogOffer = state.product_focus?.catalog.offers.find((offer) => offer.offer_id === focusCandidateId) ?? null;
-      const context = sanitizeContext(await this.adapters.readContext({ owner_key: key }));
       this.assertResearchContextPreflight(context, modelApprovedAt);
-      this.assertPersistedBindings(state, context);
       const invalidatedAnalyticsOutputs = materialModelChange ? analyticsEvidenceDependentOutputs(state) : [];
       if (materialModelChange && (state.strategy || state.draft || state.shortlist)) {
         state.last_cascade = cascadeRecord(state, "MODEL", modelApprovedAt, ["campaign_strategy", "recommendation_set", "campaign_drafts", "shortlist", "confirmation"]);
@@ -5169,6 +5224,11 @@ export class P0Application {
       if (existingStrategy?.material_fingerprint !== materialFingerprint) {
         const approvedAt = this.adapters.now();
         const stateBeforeRecomputation = structuredClone(state);
+        if (!stateBeforeRecomputation.strategy
+          && stateBeforeRecomputation.strategy_review?.status === "REVIEW_REQUIRED"
+          && stateBeforeRecomputation.last_cascade?.recomputation_status === "PENDING") {
+          stateBeforeRecomputation.last_cascade.recomputation_status = "REQUIRED";
+        }
         state.last_cascade = {
           ...cascadeRecord(state, "STRATEGY", approvedAt, ["recommendation_set", "campaign_drafts", "shortlist", "confirmation"]),
           recomputation_status: "PENDING",
@@ -5266,6 +5326,7 @@ export class P0Application {
       const recalculatedAt = this.adapters.now();
       const previousSet = state.recommendation_set;
       const competitorGuidanceChanged = competitorCampaignRecommendationRefreshRequired(state);
+      state.measurement_destination_readiness = await this.buildMeasurementDestinationReadiness(key, state);
       const playbookReleases = await this.playbookReleases();
       const currentSet = await buildCampaignRecommendationSet({
         model: state.business_model as unknown as Record<string, unknown>,
@@ -5279,17 +5340,21 @@ export class P0Application {
       });
       const releaseChanged = JSON.stringify(activePlaybookReleaseIdentity(previousSet))
         !== JSON.stringify(activePlaybookReleaseIdentity(currentSet));
-      const recommendationChanged = releaseChanged || competitorGuidanceChanged;
+      const readinessChanged = previousSet.measurement_destination_readiness_id
+        !== currentSet.measurement_destination_readiness_id;
+      const recommendationChanged = releaseChanged || competitorGuidanceChanged || readinessChanged;
       let changes: Array<Record<string, unknown>> = [];
       if (recommendationChanged) {
         changes = recommendationRecalculationChanges(previousSet, currentSet);
         const replacement = correspondingDraft(state.draft, currentSet);
         await invalidateDecisionAuthority(
           state,
-          releaseChanged ? "PLAYBOOK_REGENERATION" : "COMPETITOR_GUIDANCE_REGENERATION",
+          releaseChanged ? "PLAYBOOK_REGENERATION" : competitorGuidanceChanged ? "COMPETITOR_GUIDANCE_REGENERATION" : "EVIDENCE_LINEAGE_CHANGED",
           releaseChanged
             ? "Active governed playbook regeneration changed exact Recommendation Set lineage."
-            : "Bounded public competitor evidence generated a market control and improved hypothesis without provider authority.",
+            : competitorGuidanceChanged
+              ? "Bounded public competitor evidence generated a market control and improved hypothesis without provider authority."
+              : "Read-only measurement or destination evidence changed exact Recommendation Set lineage.",
           recalculatedAt,
         );
         state.recommendation_set = currentSet;
@@ -5309,10 +5374,14 @@ export class P0Application {
           ? "Активный curated playbook изменился или был откачен; Recommendation Set регенерирован по exact release lineage."
           : competitorGuidanceChanged
             ? "Bounded public competitor evidence generated a market control and one improved campaign hypothesis."
-            : "Active playbook check завершён без material изменения active release lineage.",
+            : readinessChanged
+              ? "Read-only measurement/destination evidence changed; Recommendation Set was regenerated without external writes."
+              : "Active playbook and readiness checks завершены без material изменения lineage.",
         reason_code: releaseChanged
           ? "ACTIVE_PLAYBOOK_RELEASE_CHANGED_OR_ROLLED_BACK"
-          : competitorGuidanceChanged ? "COMPETITOR_GUIDANCE_GENERATED" : "NO_ACTIVE_PLAYBOOK_MATERIAL_CHANGE",
+          : competitorGuidanceChanged
+            ? "COMPETITOR_GUIDANCE_GENERATED"
+            : readinessChanged ? "MEASUREMENT_DESTINATION_READINESS_CHANGED" : "NO_ACTIVE_PLAYBOOK_MATERIAL_CHANGE",
         recalculated_at: recalculatedAt,
         previous_recommendation_set_id: previousSet.recommendation_set_id,
         current_recommendation_set_id: state.recommendation_set.recommendation_set_id,

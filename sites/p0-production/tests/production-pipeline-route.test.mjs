@@ -16,6 +16,14 @@ test("production route prepares real owner inputs without fixture or legacy-tabl
   assert.match(routeSource, /controller\.startAndExecute\(key, diagnostics/u);
 });
 
+test("invalid local preparation exposes an explicit owner recovery without touching external systems", () => {
+  assert.match(routeSource, /RESET_INVALID_LOCAL_P0_STATE/u);
+  assert.match(routeSource, /productionRecoverOwnerState/u);
+  assert.match(routeSource, /Начать безопасную подготовку заново/u);
+  assert.match(clientSource, /recoverInvalidLocalState/u);
+  assert.match(clientSource, /recovery\.label/u);
+});
+
 test("production route keeps pipeline actions typed and denies editing while a run is active", () => {
   assert.match(routeSource, /assertCurrentPipelineAction\(payload\)/u);
   assert.match(routeSource, /currentPipeline\.editingLocked/u);
