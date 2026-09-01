@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { buildPublishProjection } from "../lib/campaign-draft.ts";
+import { fingerprintDirectProjection } from "../lib/campaign-fanout.ts";
 import { pipelineAcceptanceHistoricalView } from "../lib/pipeline-acceptance-fixture.ts";
 import { executeProductionPipeline } from "../lib/pipeline-production-executor.ts";
 import { pipelineInputVersions } from "../lib/pipeline-owner-dashboard.ts";
@@ -59,6 +61,16 @@ function fakeStageModel(calls) {
       }
       if (request.agent_id === "campaign-design-agent") {
         const evidenceRef = request.input.allowed_evidence_refs[0];
+        if (!Array.isArray(request.input.exact_drafts)) {
+          return {
+            hypothesis_revision_id: request.input.hypothesis_revision_id,
+            mechanism: request.input.current_mechanism,
+            primary_metric: "Qualified result completion",
+            baseline: "Current evidence-grounded Strategy baseline",
+            evidence_refs: [evidenceRef],
+            rationale: "Campaign Design Agent rebuilt one complete current pair for deterministic compilation.",
+          };
+        }
         return {
           designs: request.input.exact_drafts.map((draft) => ({
             draft_revision_id: draft.draft_revision_id,
@@ -104,6 +116,80 @@ test("production execution invokes every required Wayfinder stage agent and reco
     "CAMPAIGN_DESIGN_AGENT",
   ]);
   assert.equal(audit.slice(1).every((event) => event.actor.actor_type === "AGENT"), true);
+});
+
+test("production execution rebuilds compiled pair lineage for the current Agent-accepted Strategy", async () => {
+  const view = await pipelineAcceptanceHistoricalView();
+  const capability = {
+    schema_version: "direct-account-capability-snapshot-v1",
+    snapshot_id: "direct-capability:owner-account:1",
+    observed_at: "2026-09-01T15:00:00.000Z",
+    source: "YANDEX_DIRECT_API_V501",
+    account: "owner-account",
+    api_version: "v501",
+    currency: "RUB",
+    available_campaign_types: ["UNIFIED_CAMPAIGN"],
+    edit_campaigns_grant: "YES",
+    archived: "NO",
+    restrictions: [
+      { element: "ADGROUPS_TOTAL_PER_CAMPAIGN", value: 100 },
+      { element: "KEYWORDS_TOTAL_PER_ADGROUP", value: 100 },
+      { element: "ADS_TOTAL_PER_ADGROUP", value: 50 },
+    ],
+    conditional_capabilities: [],
+  };
+  view.state.context_state.facts = { direct: { capability_snapshot: capability } };
+  view.state.recommendation_set.direct_capability_snapshot_id = capability.snapshot_id;
+  for (const draft of view.state.recommendation_set.drafts.slice(0, 2)) {
+    draft.advertiser_account = capability.account;
+    draft.currency = capability.currency;
+    draft.capability_snapshot_id = capability.snapshot_id;
+    draft.direct_capability_snapshot_id = capability.snapshot_id;
+    draft.direct_capability_snapshot = capability;
+    draft.capability_selection.capability_snapshot_id = capability.snapshot_id;
+    draft.publish_projection = buildPublishProjection(view.state.business_model, view.state.strategy, draft);
+    draft.publish_fingerprint = await fingerprintDirectProjection(draft.publish_projection);
+  }
+
+  const store = new MemoryPipelineStore();
+  const orchestrator = new PipelineOrchestrator({
+    store,
+    newRunId: () => "stage-agent-compiled-lineage",
+    now: () => "2026-09-01T15:00:00.000Z",
+  });
+  const started = await orchestrator.start("owner", await pipelineInputVersions(view));
+  assert.equal(
+    started.input_versions.campaign_pair_checks.set_disposition,
+    "CURRENT_PAIRS_AVAILABLE",
+    JSON.stringify(started.input_versions.campaign_pair_checks),
+  );
+  const calls = [];
+  const products = [];
+  const completed = await executeProductionPipeline({
+    orchestrator,
+    run: started,
+    view,
+    agents: createProductionStageAgents(fakeStageModel(calls), () => "2026-09-01T15:00:00.000Z"),
+    async onVerifiedProduct({ product }) { products.push(product); },
+  });
+
+  assert.equal(completed.current_stage, "PUBLICATION_REVIEW");
+  assert.equal(calls.filter((agent) => agent === "campaign-design-agent").length, 2);
+  const currentStrategy = products.find((product) => product.stage === "STRATEGY").value.strategy;
+  const currentPairs = products.find((product) => product.stage === "CAMPAIGNS").value;
+  assert.equal(currentPairs.length, 2);
+  for (const pair of currentPairs) {
+    assert.equal(pair.hypothesis.strategy_revision_id, currentStrategy.strategy_revision_id);
+    assert.equal(pair.draft.publish_projection.lineage.strategy_revision_id, currentStrategy.strategy_revision_id);
+    assert.equal(pair.draft.publish_projection.lineage.campaign_hypothesis_revision_id, pair.hypothesis.hypothesis_revision_id);
+    assert.notEqual(pair.draft.publish_projection.lineage.draft_revision_id, pair.draft.publish_projection.lineage.draft_id);
+    assert.equal(pair.edit_context.schema_version, "p0-campaign-pair-edit-context-v1");
+    assert.equal(pair.edit_context.capability_snapshot.snapshot_id, capability.snapshot_id);
+    assert.deepEqual(pair.edit_context.allowed_landing_hosts, ["innoprom.com"]);
+    assert.equal(pair.edit_context.applicability_proofs.length, 6);
+  }
+  const campaignEvent = (await orchestrator.audit(completed.run_id)).find((event) => event.stage === "CAMPAIGNS");
+  assert.equal(campaignEvent.actor.role, "CAMPAIGN_DESIGN_AGENT");
 });
 
 test("production execution fails closed when a required stage agent is unavailable", async () => {

@@ -39,6 +39,12 @@ export type OwnerCampaignPairProvenance = {
   draft: OwnerVersionReference;
 };
 
+export type CurrentCampaignPairReference = {
+  key: string;
+  hypothesis: Pick<PipelineVersionReference, "schema_version" | "revision_id">;
+  draft: Pick<PipelineVersionReference, "schema_version" | "revision_id">;
+};
+
 export type OwnerStageAgent = {
   name: string;
   stage: string;
@@ -112,7 +118,7 @@ function safeReferenceText(value: string) {
 
 function versionKind(schemaVersion: string) {
   if (/hypothesis/iu.test(schemaVersion)) return "Campaign Hypothesis";
-  if (/draft/iu.test(schemaVersion)) return "Campaign Draft";
+  if (/draft|direct-projection/iu.test(schemaVersion)) return "Campaign Draft";
   if (/evidence/iu.test(schemaVersion)) return "Срез доказательств";
   if (/strategy/iu.test(schemaVersion)) return "Campaign Strategy";
   if (/playbook/iu.test(schemaVersion)) return "Campaign Playbook";
@@ -123,7 +129,7 @@ function versionKind(schemaVersion: string) {
   return "Версия объекта";
 }
 
-function ownerReference(reference: PipelineVersionReference): OwnerVersionReference {
+function ownerReference(reference: Pick<PipelineVersionReference, "schema_version" | "revision_id">): OwnerVersionReference {
   return {
     kind: versionKind(reference.schema_version),
     schemaVersion: safeReferenceText(reference.schema_version),
@@ -170,6 +176,7 @@ function projectEvent(event: PipelineAuditEvent): OwnerResultProvenanceEvent {
 export async function projectCurrentResultProvenance(
   run: PipelineRunState,
   audit: PipelineAuditEvent[],
+  currentPairs: CurrentCampaignPairReference[] = [],
 ): Promise<OwnerResultProvenance> {
   await verifyPipelineRunState(run);
   await verifyPipelineAuditTrail(audit, run);
@@ -193,8 +200,12 @@ export async function projectCurrentResultProvenance(
             : "Работа начата.",
       evidenceBasis: event.evidence.map((reference) => `${versionKind(reference.schema_version)} · ${safeReferenceText(reference.revision_id)}`),
     })),
-    pairs: run.input_versions.campaign_pairs.map((pair, index) => ({
+    pairs: (currentPairs.length ? currentPairs : run.input_versions.campaign_pairs.map((pair, index) => ({
       key: `pair-${index + 1}`,
+      hypothesis: pair.hypothesis,
+      draft: pair.draft,
+    }))).map((pair, index) => ({
+      key: pair.key,
       label: `Пара ${index + 1}`,
       hypothesis: ownerReference(pair.hypothesis),
       draft: ownerReference(pair.draft),

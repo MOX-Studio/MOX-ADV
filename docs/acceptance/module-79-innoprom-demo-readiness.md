@@ -6,14 +6,14 @@
 
 **Готово для безопасного демонстрационного прохода до Publication Review.**
 
-Текущий production Dashboard хранит Campaign Draft «Участие со стендом в выставке ИННОПРОМ», редакция 1, и открывается на этапе **5 · Проверка публикации**. Точный пакет сформирован, но намеренно не принят: пройдено 7 из 9 предпубликационных проверок.
+Текущий production run завершил canonical five-stage path. Current material pair содержит Campaign Hypothesis `campaign-hypothesis:5356fed39df57d4fa18eca38a22e481d` и Campaign Draft `campaign-draft:21421a02b0a14b8a960c2d8d837b0136:rfbd7df512423d0e354ee4d01`. Пакет сформирован, но намеренно не принят: пройдено **7/9** предпубликационных проверок, ещё две требуют подтверждённого evidence.
 
 Демо не включает создание объектов в Директе, публикацию, показы или расходы.
 
 ## Что проверено
 
 1. Владелец прошёл через production Dashboard `http://127.0.0.1:19243/` от бизнес-входов до Campaign Draft и Publication Review.
-2. Strategy в точной версии 52 принята Strategy Agent без повторного owner approval:
+2. Historical Strategy 52 переработана Strategy Agent в current immutable revision `campaign-strategy:d095d32ce2c9fa2a98950fa0` без повторного owner approval:
    - период: `2027-01-15` — `2027-06-30`;
    - недельный бюджет: `30 000 ₽`;
    - принятие не даёт authority на публикацию или расходы.
@@ -32,6 +32,8 @@
 6. Direct и Metrika использовались только для чтения. Внешние записи, публикация, показы и расходы отсутствуют.
 7. Dashboard после перезапроса возвращает `GET /api/p0 → 200`, показывает этап Publication Review и не пишет ошибок в browser console.
 8. Целевой production run через Dashboard фактически вызвал Goal Agent, Evidence Analyst, Strategy Agent и Campaign Design Agent. Именованные `AGENT` events сохранены в audit trail; Campaign Design прошёл `CAMPAIGN_DESIGN_AGENT_DIRECT_COMPILER_VERIFIED`; внешняя запись осталась запрещена.
+9. Typed technical correction проверена через Dashboard UI: Campaign Hypothesis revision осталась неизменной, Campaign Draft получила новую immutable revision, exact Direct projection была заново скомпилирована, dossier остался полным, а исходное business-название восстановлено отдельной revision.
+10. Current-product D1 CAS проверен с production-семантикой `meta.changes`, включающей history trigger: history создаётся только после успешной current-row mutation, stale CAS не резервирует revision slot.
 
 ## Подтверждённые границы
 
@@ -90,12 +92,14 @@
 - Production cutover: `e64dd28 feat(p0): reach production publication review safely`.
 - Contract reconciliation: `03e26c9 test(p0): align contracts with material campaign pairs`.
 - Проходят targeted checks:
-  - 27 ранее падавших multi-draft/package/dispatch/playbook/owner-journey cases;
-  - viability golden и typed viability outcome;
-  - material delivery packing;
+  - 41/41 Module #79 completion, stage-agent, current provenance, dossier, executor, route и rendered-Dashboard checks;
+  - 14/14 current-edit, D1-trigger, fixed-field preservation и Yandex access checks;
+  - отдельно повторены и пройдены 2 legacy Draft/correction regressions: owner edit больше не ребейзит неизменённые Strategy/capability-owned Direct fields;
+  - semantic и technical pair edits повторно проходят exact Direct Compiler; protocol-only edit сохраняет canonical publish fingerprint;
   - TypeScript `--noEmit`;
-  - ESLint изменённых файлов;
-  - `git diff --check`.
+  - ESLint всех изменённых TypeScript/TSX/MJS файлов;
+  - `git diff --check` и отсутствие временной диагностики.
+- Playwright `1920×1080` подтвердил: completed five-stage run, `7/9`, два evidence gap, полную current pair, exact Draft revision, ноль browser warnings/errors, отсутствие raw `sha256:`, routine Strategy confirmation и `APPROVED_FOR_PUBLICATION`.
 
 ## Решение для демо
 

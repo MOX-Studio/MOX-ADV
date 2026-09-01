@@ -168,6 +168,41 @@ test("owner Start freezes saved edits and Stop makes the next Start a new run", 
   assert.equal(second.version, 0);
 });
 
+test("an observable active run can be stopped while a stage Agent is still working", async () => {
+  const store = new MemoryPipelineStore();
+  let releaseGoal;
+  const goalMayReturn = new Promise((resolve) => { releaseGoal = resolve; });
+  const controller = new OwnerPipelineController(store, {
+    newRunId: () => "pipeline-observable-stop",
+    stageAgents: {
+      model_id: "deferred-stage-agent",
+      async formGoal() {
+        await goalMayReturn;
+        return { candidate: goalCandidate(), actor: { actor_id: "goal-agent:deferred", actor_type: "AGENT", role: "GOAL_AGENT" } };
+      },
+      async analyzeEvidence() { throw new Error("Evidence stage must not start after Stop."); },
+      async formStrategy() { throw new Error("Strategy stage must not start after Stop."); },
+      async designCampaigns() { throw new Error("Campaign stage must not start after Stop."); },
+    },
+  });
+  const view = historicalView();
+  const started = await controller.start("owner", view);
+  const execution = controller.execute("owner", started.runId, view);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const stopped = await controller.stop("owner", {
+    runId: started.runId,
+    expectedVersion: started.version,
+  });
+  assert.equal(stopped.status, "STOPPED");
+  assert.equal(stopped.canStart, true);
+  releaseGoal();
+  const afterWorker = await execution;
+  assert.equal(afterWorker.status, "STOPPED");
+  assert.equal((await store.loadCurrent("owner")).goal_formation.status, "PENDING");
+  assert.deepEqual((await store.loadAudit(started.runId)).map((event) => event.event_kind), ["RUN_STARTED", "RUN_STOPPED"]);
+});
+
 test("saved owner edits change the exact frozen input digest", async () => {
   const before = await pipelineInputVersions(historicalView());
   const after = await pipelineInputVersions(historicalView("Получать заявки на переговоры"));

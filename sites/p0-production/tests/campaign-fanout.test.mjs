@@ -589,8 +589,10 @@ test("packs compatible keyword clusters before a finite product-audience-offer f
   assert.equal(value.drafts.every((draft) => draft.demand_cluster_ids.length === 2), true);
   assert.equal(value.drafts[0].variant.hypothesis.grouped_demand.semantic_keys.length, 2);
   assert.deepEqual(value.drafts[0].variant.hypothesis.grouped_demand.intents, ["commercial"]);
-  assert.equal(value.viability_outcome.status, "NO_VIABLE_DRAFTS");
-  assert.equal(value.viability_outcome.repair_plan.some((item) => item.code === "AUCTION_PROTOCOL_PREREGISTRATION_PENDING"), false);
+  assert.equal(value.viability_outcome.status, "VIABLE_DRAFTS_AVAILABLE");
+  assert.equal(value.viability_outcome.viable_count, 1);
+  assert.equal(value.drafts.every((draft) => draft.viability_status === "TESTABLE_WITH_GAPS"), true);
+  assert.deepEqual(value.viability_outcome.repair_plan, []);
   assert.equal(value.drafts.every((draft) => draft.auction_protocol?.content_hash.startsWith("sha256:")), true);
   assert.deepEqual(value.recommended_shortlist.draft_ids, value.drafts.filter((draft) => draft.shortlist_eligible).sort((left, right) => left.viability_score.rank - right.viability_score.rank || left.draft_id.localeCompare(right.draft_id)).map((draft) => draft.draft_id));
 });

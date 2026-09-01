@@ -6,6 +6,11 @@ import {
   type CampaignStrategyEvidenceRef,
   type CampaignStrategyAgentProposal,
 } from "./campaign-strategy-agent.ts";
+import type {
+  CampaignStrategyCorrectionAgentRequest,
+  CampaignStrategyCorrectionModel,
+  CampaignStrategyCorrectionModelResult,
+} from "./campaign-strategy-correction.ts";
 import {
   CAMPAIGN_HYPOTHESIS_SCHEMA,
   runCampaignDesignPipeline,
@@ -14,8 +19,10 @@ import {
 import { strategyAnswerValue } from "./campaign-strategy.ts";
 import type { CurrentGoal } from "./goal-revision-lifecycle.ts";
 import { GOAL_CANDIDATE_SCHEMA, type GoalCandidate } from "./goal-revision.ts";
+import { PIPELINE_CAMPAIGN_PAIR_EDIT_CONTEXT_SCHEMA } from "./pipeline-current-products.ts";
 import type { DirectCapabilitySnapshot } from "./campaign-fanout.ts";
 import type { DirectProjection } from "./direct-write.ts";
+import { buildBrandClaimsContract } from "./campaign-creation-profile.ts";
 import { readP0CuratedPlaybookV1 } from "./p0-curated-playbook-v1.ts";
 import type { DirectFieldApplicabilityProof } from "./direct-projection-compiler.ts";
 import {
@@ -37,21 +44,33 @@ export type ProductionHistoricalView = {
   state: Record<string, unknown>;
 };
 
-export type ProductionStageAgentResult = {
+export type ProductionStageAgentResult<Artifact = Record<string, unknown>> = {
   actor: PipelineAuditActor;
   output: PipelineVersionReference;
+  artifact: Artifact;
   evidence: PipelineVersionReference[];
   check_id: string;
   schema: PipelineVersionReference;
   summary: string;
 };
 
-export type ProductionStrategyAgentResult = ProductionStageAgentResult & {
-  autonomous_strategy: Awaited<ReturnType<typeof formAutonomousCampaignStrategy>>;
+export const PRODUCTION_STRATEGY_STAGE_PRODUCT_SCHEMA = "p0-strategy-stage-product-v1";
+
+export type ProductionAutonomousStrategy = Awaited<ReturnType<typeof formAutonomousCampaignStrategy>>;
+
+export type ProductionStrategyArtifact = {
+  schema_version: typeof PRODUCTION_STRATEGY_STAGE_PRODUCT_SCHEMA;
+  strategy: ProductionAutonomousStrategy;
+  inputs: CampaignStrategyAgentInput;
+};
+
+export type ProductionStrategyAgentResult = ProductionStageAgentResult<ProductionStrategyArtifact> & {
+  autonomous_strategy: ProductionAutonomousStrategy;
 };
 
 export interface ProductionStageAgents {
   readonly model_id: string;
+  readonly strategy_correction_model: CampaignStrategyCorrectionModel;
   formGoal(input: {
     run: PipelineRunState;
     view: ProductionHistoricalView;
@@ -62,13 +81,12 @@ export interface ProductionStageAgents {
     view: ProductionHistoricalView;
     goal: PipelineVersionReference;
     evidence: PipelineVersionReference;
-  }): Promise<ProductionStageAgentResult>;
+  }): Promise<ProductionStageAgentResult<Record<string, unknown>>>;
   formStrategy(input: {
     run: PipelineRunState;
     view: ProductionHistoricalView;
     goal: PipelineVersionReference;
     evidence: PipelineVersionReference;
-    strategy: PipelineVersionReference;
   }): Promise<ProductionStrategyAgentResult>;
   designCampaigns(input: {
     run: PipelineRunState;
@@ -77,7 +95,7 @@ export interface ProductionStageAgents {
     strategy: PipelineVersionReference;
     evidence: PipelineVersionReference;
     pairSet: PipelineVersionReference;
-  }): Promise<ProductionStageAgentResult>;
+  }): Promise<ProductionStageAgentResult<Record<string, unknown>[]>>;
 }
 
 const AGENT_AUTHORITY = {
@@ -107,6 +125,50 @@ function jsonValue(value: unknown): never | import("./p0-agent-runtime.ts").Json
 
 function exactReference(value: PipelineVersionReference): PipelineVersionReference {
   return structuredClone(value);
+}
+
+async function rebindCampaignDesignProjection(input: {
+  runId: string;
+  pairSetDigest: string;
+  evidenceRevisionId: string;
+  strategyRevisionId: string;
+  sourceDraftId: string;
+  sourceDraftRevisionId: string;
+  sourceHypothesisId: string;
+  sourceHypothesisRevisionId: string;
+  projection: DirectProjection;
+}) {
+  const revisionSeed = {
+    schema_version: "p0-campaign-design-revision-seed-v1",
+    run_id: input.runId,
+    pair_set_digest: input.pairSetDigest,
+    evidence_revision_id: input.evidenceRevisionId,
+    strategy_revision_id: input.strategyRevisionId,
+    source_draft_id: input.sourceDraftId,
+    source_draft_revision_id: input.sourceDraftRevisionId,
+    source_hypothesis_id: input.sourceHypothesisId,
+    source_hypothesis_revision_id: input.sourceHypothesisRevisionId,
+  };
+  const hypothesisDigest = await pipelineDigest({ ...revisionSeed, artifact: "CAMPAIGN_HYPOTHESIS" });
+  const draftDigest = await pipelineDigest({ ...revisionSeed, artifact: "CAMPAIGN_DRAFT" });
+  const hypothesisRevisionId = `campaign-hypothesis:${hypothesisDigest.slice("sha256:".length, "sha256:".length + 32)}`;
+  const draftRevisionId = `campaign-draft:${draftDigest.slice("sha256:".length, "sha256:".length + 32)}`;
+  const projection = structuredClone(input.projection);
+  projection.lineage = {
+    ...projection.lineage,
+    strategy_revision_id: input.strategyRevisionId,
+    campaign_hypothesis_id: input.sourceHypothesisId || hypothesisRevisionId,
+    campaign_hypothesis_revision_id: hypothesisRevisionId,
+    draft_id: input.sourceDraftId,
+    draft_revision_id: draftRevisionId,
+  };
+  const responsiveAd = record(record(record(projection.direct).ad).ResponsiveAd);
+  projection.brand_claims_contract = buildBrandClaimsContract({
+    strategyRevisionId: input.strategyRevisionId,
+    titles: list(responsiveAd.Titles).map((item) => text(item, 56)).filter(Boolean),
+    texts: list(responsiveAd.Texts).map((item) => text(item, 81)).filter(Boolean),
+  });
+  return { hypothesisRevisionId, draftRevisionId, projection };
 }
 
 function actor(role: "GOAL_AGENT" | "EVIDENCE_ANALYST" | "STRATEGY_AGENT" | "CAMPAIGN_DESIGN_AGENT", modelId: string): PipelineAuditActor {
@@ -238,7 +300,12 @@ async function playbookSnapshot(): Promise<CampaignPlaybookStrategySnapshot> {
   return snapshot;
 }
 
-async function strategyInputs(view: ProductionHistoricalView, goal: PipelineVersionReference, evidence: PipelineVersionReference): Promise<CampaignStrategyAgentInput> {
+async function strategyInputs(
+  view: ProductionHistoricalView,
+  goal: PipelineVersionReference,
+  evidence: PipelineVersionReference,
+  loadPlaybook: () => Promise<CampaignPlaybookStrategySnapshot>,
+): Promise<CampaignStrategyAgentInput> {
   const state = record(view.state);
   const businessInput = {
     owner_goal_interview: state.owner_goal_interview ?? null,
@@ -247,7 +314,7 @@ async function strategyInputs(view: ProductionHistoricalView, goal: PipelineVers
     saved_strategy_input: strategyValues(record(state.strategy)),
   };
   const snapshot = record(state.analytics_evidence_snapshot);
-  const playbook = await playbookSnapshot();
+  const playbook = await loadPlaybook();
   const artifact = async (
     kind: Parameters<typeof sealCampaignStrategyAgentArtifact>[0]["kind"],
     revisionId: string,
@@ -322,6 +389,13 @@ function sameMaterialValue(left: unknown, right: unknown) {
     || text(left) === text(right);
 }
 
+function hasPriorityMaterialValue(value: unknown) {
+  if (value === null || value === undefined || value === "") return false;
+  if (typeof value === "number") return Number.isFinite(value) && value > 0;
+  if (typeof value === "string") return Boolean(text(value));
+  return typeof value === "object" && Object.keys(record(value)).length > 0;
+}
+
 const CORE_APPLICABILITY_PROOFS: DirectFieldApplicabilityProof[] = [
   ["/direct/campaign/UnifiedCampaign/CounterIds", "NOT_APPLICABLE"],
   ["/direct/keyword/AutotargetingSettings", "PROVEN_ABSENCE"],
@@ -336,9 +410,62 @@ const CORE_APPLICABILITY_PROOFS: DirectFieldApplicabilityProof[] = [
   reason: "The exact supported core profile declares this field disposition.",
 }));
 
-export function createProductionStageAgents(model: StageAgentModel, now: () => string = () => new Date().toISOString()): ProductionStageAgents {
+function productionStrategyCorrectionModel(model: StageAgentModel): CampaignStrategyCorrectionModel {
   return {
     model_id: model.model_id,
+    async recheckCampaignStrategy(request: Readonly<CampaignStrategyCorrectionAgentRequest>): Promise<CampaignStrategyCorrectionModelResult> {
+      const inputs = request.strategy_request;
+      const refs = [...evidenceRefMap(inputs).keys()];
+      const raw = await model.generate({
+        agent_id: "strategy-correction-agent",
+        objective: "Recheck the complete Campaign Strategy with exact owner corrections as priority business input.",
+        instructions: "Return all twelve dimensions exactly once. Apply every priority correction or fail closed. Use only the published evidence reference IDs. Do not grant publication or spend authority.",
+        input: jsonValue({ request, canonical_dimensions: CAMPAIGN_STRATEGY_DIMENSIONS, evidence_reference_ids: refs, authority: AGENT_AUTHORITY }) as Record<string, import("./p0-agent-runtime.ts").JsonValue>,
+        tool: {
+          name: "p0_submit_corrected_campaign_strategy",
+          description: "Return one complete Strategy proposal after exact owner correction.",
+          input_schema: {
+            type: "object",
+            properties: {
+              dimensions: {
+                type: "array",
+                minItems: 12,
+                maxItems: 12,
+                items: {
+                  type: "object",
+                  properties: {
+                    dimension_id: { type: "string", enum: [...CAMPAIGN_STRATEGY_DIMENSIONS] },
+                    value_json: { type: "string", minLength: 1, maxLength: 4000 },
+                    rationale: { type: "string", minLength: 1, maxLength: 2000 },
+                    confidence: { type: "string", enum: ["HIGH", "MEDIUM", "LOW"] },
+                    evidence_refs: { type: "array", items: { type: "string", enum: refs }, minItems: 1, maxItems: 8 },
+                  },
+                  required: ["dimension_id", "value_json", "rationale", "confidence", "evidence_refs"],
+                  additionalProperties: false,
+                },
+              },
+              rationale: { type: "string", minLength: 1, maxLength: 4000 },
+              confidence: { type: "string", enum: ["HIGH", "MEDIUM", "LOW"] },
+            },
+            required: ["dimensions", "rationale", "confidence"],
+            additionalProperties: false,
+          },
+        },
+      });
+      return { kind: "CANDIDATE", proposal: parseStrategyProposal(raw, inputs) };
+    },
+  };
+}
+
+export function createProductionStageAgents(
+  model: StageAgentModel,
+  now: () => string = () => new Date().toISOString(),
+  options: { loadPlaybookSnapshot?: () => Promise<CampaignPlaybookStrategySnapshot> } = {},
+): ProductionStageAgents {
+  const loadPlaybook = options.loadPlaybookSnapshot ?? playbookSnapshot;
+  return {
+    model_id: model.model_id,
+    strategy_correction_model: productionStrategyCorrectionModel(model),
 
     async formGoal({ run, view, currentGoal }) {
       const values = currentGoalValues(view, currentGoal);
@@ -418,6 +545,7 @@ export function createProductionStageAgents(model: StageAgentModel, now: () => s
       return {
         actor: actor("EVIDENCE_ANALYST", model.model_id),
         output: exactReference(evidence),
+        artifact: structuredClone(snapshot),
         evidence: [exactReference(goal), exactReference(evidence)],
         check_id: "EVIDENCE_ANALYST_SNAPSHOT_INTERPRETATION_VERIFIED",
         schema: await schemaReference("p0-evidence-analyst-result-v1", "1.0.0"),
@@ -425,8 +553,8 @@ export function createProductionStageAgents(model: StageAgentModel, now: () => s
       };
     },
 
-    async formStrategy({ view, goal, evidence, strategy }) {
-      const inputs = await strategyInputs(view, goal, evidence);
+    async formStrategy({ view, goal, evidence }) {
+      const inputs = await strategyInputs(view, goal, evidence, loadPlaybook);
       const currentValues = strategyValues(record(record(view.state).strategy));
       const refs = [...evidenceRefMap(inputs).keys()];
       const raw = await model.generate({
@@ -474,18 +602,29 @@ export function createProductionStageAgents(model: StageAgentModel, now: () => s
         acceptedAt: now(),
       });
       for (const dimension of autonomous.dimensions) {
-        if (!sameMaterialValue(dimension.value, currentValues[dimension.dimension_id])) {
+        const priorityValue = currentValues[dimension.dimension_id];
+        if (hasPriorityMaterialValue(priorityValue) && !sameMaterialValue(dimension.value, priorityValue)) {
           throw new Error(`Strategy Agent changed priority business input ${dimension.dimension_id} without a typed conflict.`);
         }
       }
+      const strategyOutput: PipelineVersionReference = {
+        schema_version: autonomous.schema_version,
+        revision_id: autonomous.strategy_revision_id,
+        digest: await pipelineDigest(autonomous),
+      };
       return {
         actor: actor("STRATEGY_AGENT", model.model_id),
-        output: exactReference(strategy),
+        output: strategyOutput,
+        artifact: {
+          schema_version: PRODUCTION_STRATEGY_STAGE_PRODUCT_SCHEMA,
+          strategy: structuredClone(autonomous),
+          inputs: structuredClone(inputs),
+        },
         evidence: [exactReference(goal), exactReference(evidence)],
         check_id: "STRATEGY_AGENT_AUTONOMOUS_ACCEPTANCE_VERIFIED",
         schema: await schemaReference("p0-autonomous-campaign-strategy-v1", autonomous.contract.version),
         summary: autonomous.rationale,
-        autonomous_strategy: { ...structuredClone(autonomous), strategy_revision_id: strategy.revision_id },
+        autonomous_strategy: structuredClone(autonomous),
       };
     },
 
@@ -499,10 +638,13 @@ export function createProductionStageAgents(model: StageAgentModel, now: () => s
         return {
           draft_id: text(draft.draft_id, 255),
           draft_revision_id: text(draft.draft_revision_id, 255),
+          hypothesis_id: text(draft.campaign_hypothesis_id || hypothesis.hypothesis_id, 255),
           hypothesis_revision_id: text(draft.campaign_hypothesis_revision_id || hypothesis.hypothesis_revision_id, 255),
           mechanism: text(hypothesis.mechanism, 2_000),
           evidence_refs: list(hypothesis.evidence_refs).map((item) => text(item, 255)).filter(Boolean),
           projection: record(draft.publish_projection) as DirectProjection,
+          hypothesis: structuredClone(hypothesis),
+          source_draft: structuredClone(draft),
         };
       });
       if (!exactDrafts.length || exactDrafts.length !== run.input_versions.campaign_pairs.length
@@ -520,6 +662,7 @@ export function createProductionStageAgents(model: StageAgentModel, now: () => s
           input: jsonValue({
             strategy,
             evidence,
+            pair_set: pairSet,
             exact_drafts: exactDrafts.map((draft) => ({
               draft_id: draft.draft_id,
               draft_revision_id: draft.draft_revision_id,
@@ -569,10 +712,24 @@ export function createProductionStageAgents(model: StageAgentModel, now: () => s
             || item.evidence_refs.some((reference) => !allowedEvidence.includes(String(reference))))) {
           throw new Error("Campaign Design Agent result does not match the exact review-with-gaps pair set.");
         }
+        const reviewPairs = exactDrafts.map((draft) => ({
+          schema_version: "p0-review-campaign-pair-v1",
+          pair_revision_id: `${draft.hypothesis_revision_id}::${draft.draft_revision_id}`,
+          hypothesis: structuredClone(draft.hypothesis),
+          draft: structuredClone(draft.source_draft),
+          capability_status: "UNAVAILABLE",
+          authority: { publication: "NOT_AUTHORIZED", spend: "NOT_AUTHORIZED" },
+        }));
+        const reviewSet = { schema_version: "p0-campaign-pair-review-set-v1", pairs: reviewPairs };
         return {
           actor: actor("CAMPAIGN_DESIGN_AGENT", model.model_id),
-          output: exactReference(pairSet),
-          evidence: [exactReference(strategy), exactReference(evidence)],
+          output: {
+            schema_version: reviewSet.schema_version,
+            revision_id: `campaign-pair-review-set:${(await pipelineDigest(reviewSet)).slice(7, 39)}`,
+            digest: await pipelineDigest(reviewSet),
+          },
+          artifact: reviewPairs,
+          evidence: [exactReference(strategy), exactReference(evidence), exactReference(pairSet)],
           check_id: "CAMPAIGN_DESIGN_AGENT_REVIEW_GAPS_VERIFIED",
           schema: await schemaReference("p0-campaign-design-agent-review-result-v1", "1.0.0"),
           summary: text(result.rationale),
@@ -584,8 +741,20 @@ export function createProductionStageAgents(model: StageAgentModel, now: () => s
       }).filter(Boolean))];
       if (!allowedHosts.length) throw new Error("Campaign Design Agent requires exact allowed landing hosts.");
       const summaries: string[] = [];
+      const compiledPairs: Record<string, unknown>[] = [];
       for (const draft of exactDrafts) {
         const allowedEvidence = [...new Set([evidence.revision_id, ...draft.evidence_refs])];
+        const rebound = await rebindCampaignDesignProjection({
+          runId: run.run_id,
+          pairSetDigest: pairSet.digest,
+          evidenceRevisionId: evidence.revision_id,
+          strategyRevisionId: autonomousStrategy.strategy_revision_id,
+          sourceDraftId: draft.draft_id,
+          sourceDraftRevisionId: draft.draft_revision_id,
+          sourceHypothesisId: draft.hypothesis_id,
+          sourceHypothesisRevisionId: draft.hypothesis_revision_id,
+          projection: draft.projection,
+        });
         const saved: unknown[] = [];
         const result = await runCampaignDesignPipeline({
           strategy: autonomousStrategy,
@@ -600,12 +769,14 @@ export function createProductionStageAgents(model: StageAgentModel, now: () => s
               const raw = await model.generate({
                 agent_id: "campaign-design-agent",
                 objective: "Form one evidence-linked Campaign Hypothesis and complete Campaign Draft candidate for deterministic Direct compilation.",
-                instructions: "Preserve the exact hypothesis revision and frozen Direct projection. Cite only allowed evidence. A compiler rejection permits one consolidated repair. Publication and spend remain unauthorized.",
+                instructions: "Use the exact derived current revision identifiers and preserve every frozen Direct provider field. Cite only allowed evidence. A validation rejection permits one consolidated hypothesis repair. Publication and spend remain unauthorized.",
                 input: jsonValue({
                   strategy,
                   evidence,
-                  draft_revision_id: draft.draft_revision_id,
-                  hypothesis_revision_id: draft.hypothesis_revision_id,
+                  source_draft_revision_id: draft.draft_revision_id,
+                  source_hypothesis_revision_id: draft.hypothesis_revision_id,
+                  draft_revision_id: rebound.draftRevisionId,
+                  hypothesis_revision_id: rebound.hypothesisRevisionId,
                   current_mechanism: draft.mechanism,
                   allowed_evidence_refs: allowedEvidence,
                   compiler_violations: request.violations,
@@ -617,7 +788,7 @@ export function createProductionStageAgents(model: StageAgentModel, now: () => s
                   input_schema: {
                     type: "object",
                     properties: {
-                      hypothesis_revision_id: { type: "string", enum: [draft.hypothesis_revision_id] },
+                      hypothesis_revision_id: { type: "string", enum: [rebound.hypothesisRevisionId] },
                       mechanism: { type: "string", minLength: 1, maxLength: 2000 },
                       primary_metric: { type: "string", minLength: 1, maxLength: 1000 },
                       baseline: { type: "string", minLength: 1, maxLength: 2000 },
@@ -631,7 +802,7 @@ export function createProductionStageAgents(model: StageAgentModel, now: () => s
               });
               const evidenceRefs = Array.isArray(raw.evidence_refs) ? raw.evidence_refs.map(String) : [];
               const rationale = text(raw.rationale, 4_000);
-              if (text(raw.hypothesis_revision_id, 255) !== draft.hypothesis_revision_id
+              if (text(raw.hypothesis_revision_id, 255) !== rebound.hypothesisRevisionId
                 || !text(raw.mechanism) || !text(raw.primary_metric) || !text(raw.baseline)
                 || !evidenceRefs.length || evidenceRefs.some((item) => !allowedEvidence.includes(item)) || !rationale) {
                 throw new Error("Campaign Design Agent returned a candidate outside the exact pair contract.");
@@ -642,7 +813,7 @@ export function createProductionStageAgents(model: StageAgentModel, now: () => s
                 candidate: {
                   hypothesis: {
                     schema_version: CAMPAIGN_HYPOTHESIS_SCHEMA,
-                    hypothesis_revision_id: draft.hypothesis_revision_id,
+                    hypothesis_revision_id: rebound.hypothesisRevisionId,
                     strategy_revision_id: autonomousStrategy.strategy_revision_id,
                     analytics_evidence_snapshot_id: evidence.revision_id,
                     mechanism: text(raw.mechanism),
@@ -651,21 +822,40 @@ export function createProductionStageAgents(model: StageAgentModel, now: () => s
                     evidence_refs: evidenceRefs,
                     authority: { publication: "NOT_AUTHORIZED", spend: "NOT_AUTHORIZED", performance_promise: false },
                   },
-                  projection: structuredClone(draft.projection),
+                  projection: structuredClone(rebound.projection),
                 },
               };
             },
           },
-          store: { async saveCurrentCampaignPair(pair) { saved.push(structuredClone(pair)); } },
+          store: { async saveCurrentCampaignPair(pair) {
+            const current = {
+              ...structuredClone(pair),
+              edit_context: {
+                schema_version: PIPELINE_CAMPAIGN_PAIR_EDIT_CONTEXT_SCHEMA,
+                capability_snapshot: structuredClone(capabilitySnapshot),
+                allowed_landing_hosts: [...allowedHosts],
+                applicability_proofs: structuredClone(CORE_APPLICABILITY_PROOFS),
+              },
+            } as unknown as Record<string, unknown>;
+            saved.push(current);
+            compiledPairs.push(current);
+          } },
         });
         if (result.status !== "COMPLETED" || saved.length !== 1) {
           throw new Error(`Campaign Design Agent failed closed before a complete compiled pair: ${result.status}.`);
         }
       }
+      const compiledPairSet = { schema_version: "p0-compiled-campaign-pair-set-v1", pairs: compiledPairs };
+      const compiledPairSetDigest = await pipelineDigest(compiledPairSet);
       return {
         actor: actor("CAMPAIGN_DESIGN_AGENT", model.model_id),
-        output: exactReference(pairSet),
-        evidence: [exactReference(strategy), exactReference(evidence)],
+        output: {
+          schema_version: compiledPairSet.schema_version,
+          revision_id: `compiled-campaign-pair-set:${compiledPairSetDigest.slice(7, 39)}`,
+          digest: compiledPairSetDigest,
+        },
+        artifact: compiledPairs,
+        evidence: [exactReference(strategy), exactReference(evidence), exactReference(pairSet)],
         check_id: "CAMPAIGN_DESIGN_AGENT_DIRECT_COMPILER_VERIFIED",
         schema: await schemaReference("p0-compiled-campaign-pair-v1", "1.0.0"),
         summary: summaries.join(" ").slice(0, 2_000),

@@ -17,6 +17,8 @@ declare namespace Cloudflare {
     P0_WORDSTAT_BRIDGE_TOKEN?: string;
     P0_DESTINATION_BRIDGE_URL?: string;
     P0_DESTINATION_BRIDGE_TOKEN?: string;
+    P0_FINANCIAL_INTELLIGENCE_BRIDGE_URL?: string;
+    P0_FINANCIAL_INTELLIGENCE_BRIDGE_TOKEN?: string;
     P0_E2E_FIXTURE_SCENARIO?: string;
     OPENAI_API_KEY?: string;
     P0_AGENT_MODEL?: string;

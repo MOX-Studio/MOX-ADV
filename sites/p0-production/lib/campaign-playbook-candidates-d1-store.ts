@@ -1,3 +1,5 @@
+import type { MethodologyCandidate } from "./methodology-agent.ts";
+import { METHODOLOGY_AGENT_SCHEMA } from "./methodology-agent.ts";
 import {
   assertKnowledgeCandidate,
   assertPromotionAssessment,
@@ -20,8 +22,12 @@ export async function ensureCampaignPlaybookKnowledgeTables(db: D1Database) {
   await db.prepare(
     "CREATE TABLE IF NOT EXISTS p0_playbook_promotion_assessments (assessment_id TEXT PRIMARY KEY, content_digest TEXT NOT NULL UNIQUE, candidate_digest TEXT NOT NULL, policy_digest TEXT NOT NULL, disposition TEXT NOT NULL, value_json TEXT NOT NULL, evaluated_at TEXT NOT NULL)",
   ).run();
+  await db.prepare(
+    "CREATE TABLE IF NOT EXISTS p0_playbook_methodology_candidates (candidate_id TEXT PRIMARY KEY, value_json TEXT NOT NULL, proposed_at TEXT NOT NULL)",
+  ).run();
   for (const table of [
     "p0_playbook_knowledge_candidates",
+    "p0_playbook_methodology_candidates",
     "p0_playbook_promotion_policies",
     "p0_playbook_promotion_assessments",
   ]) {
@@ -111,6 +117,14 @@ export class D1CampaignPlaybookKnowledgeStore {
     return Number(result.meta.changes) === 1;
   }
 
+  async loadPolicies() {
+    await ensureCampaignPlaybookKnowledgeTables(this.db);
+    const rows = await this.db.prepare("SELECT value_json FROM p0_playbook_promotion_policies ORDER BY approved_at, rowid").all<ValueRow>();
+    const values = rows.results.map((row) => JSON.parse(row.value_json) as PromotionPolicy);
+    for (const value of values) await assertPromotionPolicy(value);
+    return values;
+  }
+
   async loadPolicy(policyId: string, policyVersion: string) {
     await ensureCampaignPlaybookKnowledgeTables(this.db);
     const row = await this.db.prepare(
@@ -158,6 +172,14 @@ export class D1CampaignPlaybookKnowledgeStore {
     return Number(result.meta.changes) === 1;
   }
 
+  async loadAssessments() {
+    await ensureCampaignPlaybookKnowledgeTables(this.db);
+    const rows = await this.db.prepare("SELECT value_json FROM p0_playbook_promotion_assessments ORDER BY evaluated_at, rowid").all<ValueRow>();
+    const values = rows.results.map((row) => JSON.parse(row.value_json) as PromotionAssessment);
+    for (const value of values) await assertPromotionAssessment(value);
+    return values;
+  }
+
   async loadAssessment(assessmentId: string) {
     await ensureCampaignPlaybookKnowledgeTables(this.db);
     const row = await this.db.prepare(
@@ -167,5 +189,29 @@ export class D1CampaignPlaybookKnowledgeStore {
     const assessment = JSON.parse(row.value_json) as PromotionAssessment;
     await assertPromotionAssessment(assessment);
     return assessment;
+  }
+
+  async appendMethodologyCandidate(candidate: MethodologyCandidate) {
+    await ensureCampaignPlaybookKnowledgeTables(this.db);
+    const denied = candidate?.authority
+      && candidate.authority.activate_playbook === false
+      && candidate.authority.mutate_policy === false
+      && candidate.authority.mutate_campaign === false
+      && candidate.authority.publish === false
+      && candidate.authority.spend === false;
+    if (candidate?.schema_version !== METHODOLOGY_AGENT_SCHEMA || !candidate.candidate_id || !denied
+      || !Array.isArray(candidate.proposed_rules) || candidate.proposed_rules.length === 0) {
+      throw new CampaignPlaybookKnowledgeError("METHODOLOGY_CANDIDATE_INVALID", "Only an authority-neutral Methodology Agent candidate can enter immutable candidate history.");
+    }
+    const result = await this.db.prepare(
+      "INSERT OR IGNORE INTO p0_playbook_methodology_candidates(candidate_id, value_json, proposed_at) VALUES (?, ?, ?)",
+    ).bind(candidate.candidate_id, JSON.stringify(candidate), candidate.proposed_at).run();
+    return Number(result.meta.changes) === 1;
+  }
+
+  async loadMethodologyCandidates() {
+    await ensureCampaignPlaybookKnowledgeTables(this.db);
+    const rows = await this.db.prepare("SELECT value_json FROM p0_playbook_methodology_candidates ORDER BY proposed_at, rowid").all<ValueRow>();
+    return rows.results.map((row) => JSON.parse(row.value_json) as MethodologyCandidate);
   }
 }

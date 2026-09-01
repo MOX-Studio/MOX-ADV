@@ -37,6 +37,23 @@ export type AppliedPlaybookRuleReference = {
   content_digest: string;
 };
 
+export async function curatedApprovalAssessmentReference(
+  release: CuratedPlaybookRelease,
+  rule: CuratedPlaybookRelease["rules"][number],
+) {
+  if (rule.admission.method !== "CURATED_PROJECT_RELEASE" || !release.approval_attestation) return null;
+  const identity = {
+    admission: rule.admission,
+    approval_attestation: release.approval_attestation,
+    release: { release_id: release.release_id, release_version: release.release_version, content_digest: release.content_digest },
+    rule: { rule_id: rule.rule_id, rule_version: rule.rule_version, content_digest: rule.content_digest },
+  };
+  return {
+    assessment_id: `curated-approval:${release.approval_attestation.decision_id}:${rule.rule_id}`.slice(0, 255),
+    content_digest: await curatedPlaybookContentDigest(identity),
+  };
+}
+
 export type KnowledgeStewardDelegation = {
   contract: {
     name: typeof KNOWLEDGE_STEWARD_DELEGATION_CONTRACT;
@@ -596,27 +613,31 @@ export async function resolveCampaignPlaybookConsumption(input: {
     };
   }
 
-  const approvedAssessments = new Map<string, PromotionAssessment>();
+  const approvedAssessments = new Map<string, { assessment_id: string; content_digest: string }>();
   for (const approval of latest.approved_rules) {
     const releaseRule = release.rules.find((rule) => rule.rule_id === approval.rule.rule_id
       && rule.rule_version === approval.rule.rule_version
       && rule.content_digest === approval.rule.content_digest);
     const assessment = input.promotionAssessments.find((item) => item.assessment_id === approval.assessment.assessment_id
       && item.content_digest === approval.assessment.content_digest);
-    const eligible = assessment
+    const curatedAssessment = releaseRule ? await curatedApprovalAssessmentReference(release, releaseRule) : null;
+    const curatedEligible = curatedAssessment
+      && curatedAssessment.assessment_id === approval.assessment.assessment_id
+      && curatedAssessment.content_digest === approval.assessment.content_digest;
+    const evaluatedEligible = assessment
       && assessment.disposition === "ELIGIBLE_FOR_STEWARD_REVIEW"
       && assessment.hard_checks.every((check) => check.status === "PASS")
       && assessment.policy.policy_id === policy.policy_id
       && assessment.policy.policy_version === policy.policy_version
       && assessment.policy.content_digest === policy.content_digest
       && Number(isoTime(assessment.evaluated_at)) <= decisionTime;
-    if (!releaseRule || !eligible || !assessment) {
+    if (!releaseRule || (!curatedEligible && !evaluatedEligible)) {
       return {
         snapshot: null,
         trace: await finalizeTrace(input.evaluatedAt, "BLOCKED", ["PLAYBOOK_RULE_EVIDENCE_GATE_NOT_PASSED"], releaseRef, policyRef, latest, delegation, []),
       };
     }
-    approvedAssessments.set(releaseRule.rule_id, assessment);
+    approvedAssessments.set(releaseRule.rule_id, curatedEligible ? curatedAssessment : assessment!);
   }
 
   const applicableRules: CampaignPlaybookStrategySnapshot["applicable_rules"] = [];

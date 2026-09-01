@@ -1,11 +1,9 @@
-import { env } from "cloudflare:workers";
+import { env, waitUntil } from "cloudflare:workers";
 import {
   operatorDiagnostics as productionOperatorDiagnostics,
-  ownerOverview as productionOwnerOverview,
-  ownerSnapshot as productionOwnerSnapshot,
+  productionCampaignPlaybookGovernance,
   productionPipelineStageAgents,
   recoverOwnerState as productionRecoverOwnerState,
-  submitOwnerAction as productionSubmitOwnerAction,
   userKey,
 } from "../../../lib/p0";
 import {
@@ -14,19 +12,20 @@ import {
 } from "../../../lib/pipeline-current-contract";
 import { D1PipelineRunStore } from "../../../lib/pipeline-orchestrator-d1-store";
 import { D1CurrentGoalStore } from "../../../lib/goal-revision-d1-store";
+import { D1PipelineCurrentProductStore } from "../../../lib/pipeline-current-products-d1-store";
+import type { CampaignStrategyCorrectionChanges } from "../../../lib/campaign-strategy-correction";
+import type { CampaignPairEditRequest } from "../../../lib/campaign-pair-edit";
 import {
   OwnerPipelineController,
+  type OwnerPipelineProjection,
   type PipelineHistoricalView,
 } from "../../../lib/pipeline-owner-dashboard";
-import {
-  isPublicationReviewHandoff,
-  projectPublicationReviewBoundary,
-  publicationReviewAcceptsDraftEdit,
-} from "../../../lib/publication-review-boundary";
 
-function failure() {
+function failure(error?: unknown) {
   return {
-    message: "Действие не выполнено. Обновите страницу и повторите текущее бизнес-решение.",
+    message: error instanceof Error
+      ? error.message
+      : "Действие не выполнено. Обновите страницу и повторите текущее бизнес-решение.",
   };
 }
 
@@ -50,27 +49,34 @@ function pipelineController() {
   return new OwnerPipelineController(new D1PipelineRunStore(env.DB), {
     goalStore: new D1CurrentGoalStore(env.DB),
     stageAgents: productionPipelineStageAgents(),
+    productStore: new D1PipelineCurrentProductStore(env.DB),
   });
 }
 
-function productionBackend(key: string) {
-  return {
-    overview: () => productionOwnerOverview(key),
-    snapshot: () => productionOwnerSnapshot(key),
-    diagnostics: () => productionOperatorDiagnostics(key),
-    applyAction: (payload: Record<string, unknown>) => productionSubmitOwnerAction(key, payload),
-  };
+async function historicalView(key: string) {
+  return productionOperatorDiagnostics(key) as Promise<PipelineHistoricalView>;
+}
+
+async function canonicalOwnerResult(
+  key: string,
+  controller: OwnerPipelineController,
+  pipeline?: OwnerPipelineProjection,
+) {
+  const [current, historical, playbookGovernance] = await Promise.all([
+    pipeline ? Promise.resolve(pipeline) : controller.current(key),
+    historicalView(key),
+    productionCampaignPlaybookGovernance().projection(),
+  ]);
+  return projectCurrentPipelineContract(current, {
+    historicalState: historical.state,
+    playbookGovernance,
+  });
 }
 
 export async function GET(request: Request) {
   try {
     const key = userKey(request);
-    const currentBackend = productionBackend(key);
-    const pipeline = await pipelineController().current(key);
-    const value = pipeline.active
-      ? await currentBackend.snapshot()
-      : await currentBackend.overview();
-    return Response.json(projectPublicationReviewBoundary(value, pipeline));
+    return Response.json(await canonicalOwnerResult(key, pipelineController()));
   } catch (error) {
     return invalidLocalState(error)
       ? Response.json(recoveryRequired(), { status: 409 })
@@ -82,7 +88,6 @@ export async function POST(request: Request) {
   try {
     const payload = (await request.json()) as Record<string, unknown>;
     const key = userKey(request);
-    const currentBackend = productionBackend(key);
     const controller = pipelineController();
     if (payload.recovery_action !== undefined) {
       if (payload.recovery_action !== "RESET_INVALID_LOCAL_P0_STATE"
@@ -91,54 +96,84 @@ export async function POST(request: Request) {
       }
       const current = await controller.current(key);
       if (current.active) throw new Error("Local preparation cannot be reset during an active pipeline run.");
-      const value = await productionRecoverOwnerState(key, payload.confirmation);
-      return Response.json(projectPublicationReviewBoundary(value, await controller.current(key)), { status: 201 });
+      await productionRecoverOwnerState(key, payload.confirmation);
+      return Response.json(await canonicalOwnerResult(key, controller), { status: 201 });
     }
-    if (payload.pipeline_action !== undefined) {
-      const pipelineAction = assertCurrentPipelineAction(payload);
-      if (pipelineAction === "EXPLAIN") {
-        return Response.json(await controller.explain(key, {
-          question: payload.question,
-          pairKey: payload.pair_key,
-        }));
-      }
-      if (pipelineAction === "START") {
-        const current = await controller.current(key);
-        if (current.active) throw new Error("У владельца уже есть активный запуск.");
-        const [value, diagnostics] = await Promise.all([
-          currentBackend.snapshot(),
-          currentBackend.diagnostics(),
-        ]);
-        const pipeline = await controller.startAndExecute(key, diagnostics as unknown as PipelineHistoricalView);
-        return Response.json(projectPublicationReviewBoundary(value, pipeline), { status: 201 });
-      }
-      if (pipelineAction === "CORRECT_GOAL") {
-        const pipeline = await controller.correctGoal(key, {
-          desiredOutcome: String(payload.desired_outcome ?? ""),
-          qualifiedAction: String(payload.qualified_action ?? ""),
-        });
-        return Response.json(projectCurrentPipelineContract(pipeline), { status: 201 });
-      }
-      const pipeline = await controller.stop(key, {
-        runId: String(payload.run_id ?? ""),
-        expectedVersion: Number(payload.expected_version),
+    if (payload.pipeline_action === undefined) {
+      throw new Error("Legacy handles are disabled; use one typed current Pipeline action.");
+    }
+    const pipelineAction = assertCurrentPipelineAction(payload);
+    if (pipelineAction === "EXPLAIN") {
+      return Response.json(await controller.explain(key, {
+        question: payload.question,
+        pairKey: payload.pair_key,
+      }));
+    }
+    if (pipelineAction === "START") {
+      const current = await controller.current(key);
+      if (current.active) throw new Error("У владельца уже есть активный запуск.");
+      const historical = await historicalView(key);
+      const pipeline = await controller.start(key, historical);
+      if (!pipeline.runId) throw new Error("Новый запуск не получил точный run_id.");
+      waitUntil(controller.execute(key, pipeline.runId, historical).catch(() => undefined));
+      return Response.json(await canonicalOwnerResult(key, controller, pipeline), { status: 201 });
+    }
+    if (pipelineAction === "CORRECT_GOAL") {
+      const pipeline = await controller.correctGoal(key, {
+        desiredOutcome: String(payload.desired_outcome ?? ""),
+        qualifiedAction: String(payload.qualified_action ?? ""),
       });
-      return Response.json(projectCurrentPipelineContract(pipeline), { status: 201 });
+      return Response.json(await canonicalOwnerResult(key, controller, pipeline), { status: 201 });
     }
-
-    const currentPipeline = await controller.current(key);
-    if (currentPipeline.editingLocked) {
-      throw new Error("Редактирование недоступно во время активного запуска.");
+    if (pipelineAction === "CORRECT_STRATEGY") {
+      const corrected = await controller.correctStrategy(key, {
+        expectedStateRevision: Number(payload.expected_state_revision),
+        expectedStrategyRevisionId: String(payload.expected_strategy_revision_id ?? ""),
+        changes: payload.changes as CampaignStrategyCorrectionChanges,
+      });
+      return Response.json({
+        ...await canonicalOwnerResult(key, controller, corrected.pipeline),
+        actionResult: corrected.result,
+      }, { status: 201 });
     }
-    if (isPublicationReviewHandoff(currentPipeline)) {
-      const current = await currentBackend.overview();
-      if (!publicationReviewAcceptsDraftEdit(current, payload)) {
-        throw new Error("На проверке публикации доступны только правки текущих Draft.");
-      }
+    if (pipelineAction === "EDIT_CAMPAIGN_PAIR") {
+      const edited = await controller.editCampaignPair(key, {
+        expectedStateRevision: Number(payload.expected_state_revision),
+        edit: payload.edit as CampaignPairEditRequest,
+      });
+      return Response.json({
+        ...await canonicalOwnerResult(key, controller, edited.pipeline),
+        actionResult: edited.result,
+      }, { status: 201 });
     }
-    const value = await currentBackend.applyAction(payload);
-    return Response.json(projectPublicationReviewBoundary(value, await controller.current(key)), { status: 201 });
-  } catch {
-    return Response.json(failure(), { status: 409 });
+    if (pipelineAction === "PLAYBOOK_STEWARD_DECISION") {
+      const result = await productionCampaignPlaybookGovernance().stewardDecision({
+        action: String(payload.action ?? "") as "ACTIVATE_RELEASE" | "STOP_PLAYBOOK_USE",
+        reason: String(payload.reason ?? ""),
+        expected_release_digest: String(payload.expected_release_digest ?? ""),
+        expected_policy_digest: String(payload.expected_policy_digest ?? ""),
+        expected_delegation_digest: String(payload.expected_delegation_digest ?? ""),
+        expected_latest_decision_digest: String(payload.expected_latest_decision_digest ?? ""),
+      });
+      return Response.json({
+        ...await canonicalOwnerResult(key, controller),
+        actionResult: result.decision,
+      }, { status: 201 });
+    }
+    if (pipelineAction === "PROPOSE_PLAYBOOK_CANDIDATE") {
+      const outcomes = Array.isArray(payload.outcomes) ? payload.outcomes : [];
+      const candidate = await productionCampaignPlaybookGovernance().proposeMethodologyCandidate(outcomes as never);
+      return Response.json({
+        ...await canonicalOwnerResult(key, controller),
+        actionResult: candidate,
+      }, { status: 201 });
+    }
+    const pipeline = await controller.stop(key, {
+      runId: String(payload.run_id ?? ""),
+      expectedVersion: Number(payload.expected_version),
+    });
+    return Response.json(await canonicalOwnerResult(key, controller, pipeline), { status: 201 });
+  } catch (error) {
+    return Response.json(failure(error), { status: 409 });
   }
 }

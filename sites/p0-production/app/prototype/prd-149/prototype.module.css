@@ -96,6 +96,7 @@
 .stageNavhorizontal .stoppedStage > span { border-color: var(--red); color: white; background: var(--red); }
 .stageNavhorizontal .stoppedStage small { color: var(--red); }
 .ownerWorkspace { display: grid; grid-template-columns: 280px minmax(0, 1fr); align-items: start; border: 1px solid var(--line); border-radius: 13px; background: rgba(255,254,250,.72); box-shadow: 0 24px 54px rgba(23,39,29,.08); }
+.ownerWorkspace.ownerWorkspaceFull { grid-template-columns: minmax(0, 1fr); }
 .agentRail { position: sticky; top: 86px; min-height: 520px; padding: 18px; border-right: 1px solid var(--line); border-radius: 13px 0 0 13px; background: rgba(255,255,255,.95); }
 .agentRail > header { display: flex; gap: 10px; align-items: center; padding-bottom: 15px; border-bottom: 1px solid var(--line); }
 .agentRail > header > span { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 50%; color: white; background: var(--green); font-size: 9px; font-weight: 850; }

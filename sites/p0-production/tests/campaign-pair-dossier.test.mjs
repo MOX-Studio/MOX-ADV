@@ -9,7 +9,10 @@ import {
 import { projectCampaignPairDossier } from "../lib/campaign-pair-dossier.ts";
 import { buildPublishProjection } from "../lib/campaign-draft.ts";
 import { projectCurrentPipelineContract } from "../lib/pipeline-current-contract.ts";
-import { projectOwnerPipeline } from "../lib/pipeline-owner-dashboard.ts";
+import {
+  projectCurrentCampaignDossiers,
+  projectOwnerPipeline,
+} from "../lib/pipeline-owner-dashboard.ts";
 
 const strategyValues = {
   business_goal: "Получать квалифицированные заявки",
@@ -173,6 +176,8 @@ test("projects the complete current pair as a business dossier, every creative c
   assert.equal(dossier.state, "Полная текущая пара");
   assert.equal(dossier.profile, "ЕПК / Поиск / WB_MAXIMUM_CLICKS");
   assert.deepEqual(dossier.lineage.map((item) => item.kind), ["Campaign Strategy", "Campaign Hypothesis", "Campaign Draft"]);
+  assert.equal(dossier.lineage[2].versionLabel, result.pair.draft.publish_projection.lineage.draft_revision_id);
+  assert.notEqual(dossier.lineage[2].versionLabel, result.pair.pair_revision_id);
   assert.deepEqual(dossier.clientPreview.titles, projection().direct.ad.ResponsiveAd.Titles);
   assert.deepEqual(dossier.clientPreview.texts, projection().direct.ad.ResponsiveAd.Texts);
   assert.equal(dossier.clientPreview.link, strategyValues.landing_page);
@@ -183,6 +188,20 @@ test("projects the complete current pair as a business dossier, every creative c
   assert.ok(dossier.directProjection.fields.some((field) => field.pointer.endsWith("/WeeklySpendLimit") && field.value === "50000000000"));
   const currentContract = projectCurrentPipelineContract(projectOwnerPipeline(null, null, null, dossier));
   assert.equal(currentContract.pipeline.campaignDossier, dossier);
+  assert.deepEqual(currentContract.pipeline.campaignDossiers, [dossier]);
+  const currentDossiers = await projectCurrentCampaignDossiers({
+    campaign_strategy: { strategy: strategy() },
+    campaign_pairs: [result.pair],
+  });
+  assert.equal(currentDossiers.length, 1);
+  assert.deepEqual(currentDossiers[0].lineage, dossier.lineage);
+  const contentAddressed = structuredClone(result);
+  contentAddressed.pair.hypothesis.evidence_refs = [`sha256:${"f".repeat(64)}`];
+  contentAddressed.pair.hypothesis.baseline = `Основание sha256:${"e".repeat(64)} без выдуманного числового значения.`;
+  const safeDossier = await projectCampaignPairDossier({ strategy: strategy(), result: contentAddressed });
+  assert.deepEqual(safeDossier.hypothesis.evidence, ["Контентно-адресная редакция evidence"]);
+  assert.match(safeDossier.hypothesis.baseline, /контентно-адресную evidence revision/u);
+  assert.equal(JSON.stringify(safeDossier).includes("sha256:"), false);
   assert.doesNotMatch(JSON.stringify(dossier), /comparativeScore|viability_score|rank|readiness/iu);
 });
 
@@ -208,7 +227,7 @@ test("fails closed for compiler failures and for a corrupted persisted Draft", a
 test("Dashboard renders the dossier only through the atomic pipeline property", async () => {
   const client = await readFile(new URL("../app/P0Client.tsx", import.meta.url), "utf8");
 
-  assert.match(client, /projection\.pipeline\?\.campaignDossier/u);
+  assert.match(client, /projection\.pipeline\?\.campaignDossiers/u);
   assert.match(client, /CAMPAIGN HYPOTHESIS \+ ПОЛНЫЙ CAMPAIGN DRAFT/u);
   assert.match(client, /Campaign Strategy → Campaign Hypothesis → Campaign Draft/u);
   assert.match(client, /Решение → evidence → точное поле/u);

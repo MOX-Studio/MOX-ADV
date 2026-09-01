@@ -174,6 +174,36 @@ test("owner disclosure projects actor, task, inputs, evidence, checks, retry, ha
   assert.equal(JSON.stringify(provenance).includes("12345"), false);
 });
 
+test("current verified pair output supersedes the frozen seed pair in provenance and questions", async () => {
+  const { run, audit } = await currentResult();
+  const provenance = await projectCurrentResultProvenance(run, audit, [{
+    key: "current-pair-revision-9",
+    hypothesis: {
+      schema_version: "p0-campaign-hypothesis-v1",
+      revision_id: "current-hypothesis-revision-9",
+    },
+    draft: {
+      schema_version: "direct-projection-compiler-v1",
+      revision_id: "current-draft-revision-9",
+    },
+  }]);
+
+  assert.equal(provenance.pairs.length, 1);
+  assert.equal(provenance.pairs[0].key, "current-pair-revision-9");
+  assert.equal(provenance.pairs[0].hypothesis.revision, "current-hypothesis-revision-9");
+  assert.equal(provenance.pairs[0].draft.kind, "Campaign Draft");
+  assert.equal(provenance.pairs[0].draft.revision, "current-draft-revision-9");
+  assert.equal(JSON.stringify(provenance).includes("draft-revision-7"), false);
+  assert.equal(
+    explainCurrentResultQuestion(provenance, "Какая версия текущая?", "current-pair-revision-9").scope,
+    "Текущий запуск · Пара 1",
+  );
+  assert.throws(
+    () => explainCurrentResultQuestion(provenance, "Какая версия текущая?", "pair-1"),
+    /не относится к текущему результату/u,
+  );
+});
+
 test("free question is answered only from the selected current pair and sanitized trail", async () => {
   const { run, audit } = await currentResult();
   const provenance = await projectCurrentResultProvenance(run, audit);

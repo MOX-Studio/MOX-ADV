@@ -69,6 +69,20 @@ const record = (value: unknown): Record<string, unknown> => value && typeof valu
   : {};
 const list = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
 const text = (value: unknown) => String(value ?? "").normalize("NFKC").replace(/\s+/gu, " ").trim();
+const SHA256_REFERENCE = /^sha256:[0-9a-f]{64}$/iu;
+const SHA256_INLINE = /sha256:[0-9a-f]{64}/giu;
+const SENSITIVE_REFERENCE = /oauth|token|secret|password|cookie|authorization|client[-_:]?login|counter[-_:]?id|goal[-_:]?id|provider/iu;
+
+function safeBusinessText(value: unknown) {
+  return text(value).replace(SHA256_INLINE, "контентно-адресную evidence revision");
+}
+
+function safeEvidenceReference(value: unknown) {
+  const reference = text(value);
+  if (SHA256_REFERENCE.test(reference)) return "Контентно-адресная редакция evidence";
+  if (SENSITIVE_REFERENCE.test(reference)) return "Скрытая чувствительная evidence revision";
+  return safeBusinessText(reference);
+}
 
 function displayValue(value: unknown) {
   if (typeof value === "string") return text(value);
@@ -88,7 +102,10 @@ function dimension(strategy: AutonomousCampaignStrategy, id: CampaignStrategyDim
 function evidenceLabels(value: ReturnType<typeof dimension>) {
   if (!value) return [];
   return value.evidence_refs.map((reference) =>
-    `${reference.input_kind} · ${reference.revision_id} · ${reference.evidence_id}`,
+    [reference.input_kind, reference.revision_id, reference.evidence_id]
+      .map(safeEvidenceReference)
+      .filter(Boolean)
+      .join(" · "),
   );
 }
 
@@ -108,6 +125,8 @@ function projectionParts(pair: CompiledCampaignPair) {
 function hasCompleteShape(strategy: AutonomousCampaignStrategy, pair: CompiledCampaignPair) {
   const parts = projectionParts(pair);
   const lineage = record(parts.projection.lineage);
+  const explicitDraftRevision = text(record(pair.draft).draft_revision_id);
+  const draftRevision = explicitDraftRevision || text(lineage.draft_revision_id);
   const graph = record(pair.draft.local_graph);
   const applicabilityPointers = pair.draft.applicability.map((item) => item.pointer).sort();
   const requiredPointers = DIRECT_PROFILE_APPLICABILITY_REGISTRY.fields.map((item) => item.pointer).sort();
@@ -124,6 +143,8 @@ function hasCompleteShape(strategy: AutonomousCampaignStrategy, pair: CompiledCa
     && pair.analytics_evidence_snapshot_id === pair.hypothesis.analytics_evidence_snapshot_id
     && lineage.strategy_revision_id === strategy.strategy_revision_id
     && lineage.campaign_hypothesis_revision_id === pair.hypothesis.hypothesis_revision_id
+    && Boolean(draftRevision)
+    && (!explicitDraftRevision || explicitDraftRevision === lineage.draft_revision_id)
     && pair.draft.schema_version === DIRECT_PROJECTION_COMPILER_VERSION
     && pair.draft.validation.status === "VALID"
     && pair.draft.validation.external_write_sent === false
@@ -173,8 +194,8 @@ function mapping(strategy: AutonomousCampaignStrategy, pair: CompiledCampaignPai
     : `Целевая стоимость результата: ${rubles(targetCost.value)}; прогноз эффективности не строится.`;
   return [{
     dimension: "Предложение",
-    decision: text(offer.value),
-    rationale: offer.rationale,
+    decision: safeBusinessText(offer.value),
+    rationale: safeBusinessText(offer.rationale),
     evidence: evidenceLabels(offer),
     exactDraftFields: [
       exactField("/direct/ad/ResponsiveAd/Titles", responsiveAd.Titles),
@@ -182,8 +203,8 @@ function mapping(strategy: AutonomousCampaignStrategy, pair: CompiledCampaignPai
     ],
   }, {
     dimension: "Аудитория",
-    decision: text(audience.value),
-    rationale: audience.rationale,
+    decision: safeBusinessText(audience.value),
+    rationale: safeBusinessText(audience.rationale),
     evidence: evidenceLabels(audience),
     exactDraftFields: [
       exactField("/direct/ad_group/RegionIds", adGroup.RegionIds),
@@ -192,8 +213,8 @@ function mapping(strategy: AutonomousCampaignStrategy, pair: CompiledCampaignPai
     ],
   }, {
     dimension: "Целевое действие",
-    decision: text(result.value),
-    rationale: result.rationale,
+    decision: safeBusinessText(result.value),
+    rationale: safeBusinessText(result.rationale),
     evidence: evidenceLabels(result),
     exactDraftFields: [
       exactField("/direct/ad/ResponsiveAd/Href", responsiveAd.Href),
@@ -202,7 +223,7 @@ function mapping(strategy: AutonomousCampaignStrategy, pair: CompiledCampaignPai
   }, {
     dimension: "Экономические границы",
     decision: `${rubles(budget.value)} в неделю · ${text(periodValue.start_date)} — ${text(periodValue.end_date)}. ${costText}`,
-    rationale: `${budget.rationale} ${period.rationale}`,
+    rationale: safeBusinessText(`${budget.rationale} ${period.rationale}`),
     evidence: [...new Set([...evidenceLabels(budget), ...evidenceLabels(period), ...evidenceLabels(targetCost)])],
     exactDraftFields: [
       exactField("/direct/campaign/StartDate", campaign.StartDate),
@@ -225,7 +246,7 @@ function directFields(pair: CompiledCampaignPair): ExactDirectField[] {
       pointer: text(value.pointer),
       disposition,
       value: value.disposition === "VALUE" ? displayValue(value.value) : text(value.reason),
-      provenance: text(value.provenance_ref ?? value.evidence_ref),
+      provenance: safeEvidenceReference(value.provenance_ref ?? value.evidence_ref),
     };
   });
 }
@@ -247,6 +268,8 @@ export async function projectCampaignPairDossier(input: {
   const preview = buildOwnerPublishPreview(pair.draft.publish_projection as unknown as Record<string, unknown>);
   const business = record(pair.draft.publish_projection.business);
   const campaign = record(record(pair.draft.publish_projection.direct).campaign);
+  const projectionLineage = record(pair.draft.publish_projection.lineage);
+  const draftRevision = text(record(pair.draft).draft_revision_id ?? projectionLineage.draft_revision_id);
   const fields = directFields(pair);
   if (!fields.length || fields.some((field) => !field.pointer || !field.value || !field.provenance)) return null;
 
@@ -258,21 +281,21 @@ export async function projectCampaignPairDossier(input: {
     lineage: [{
       kind: "Campaign Strategy",
       versionLabel: input.strategy.strategy_revision_id,
-      summary: `${text(business.product)} · ${text(business.audience)} · ${text(business.qualified_result)}`,
+      summary: `${safeBusinessText(business.product)} · ${safeBusinessText(business.audience)} · ${safeBusinessText(business.qualified_result)}`,
     }, {
       kind: "Campaign Hypothesis",
       versionLabel: pair.hypothesis.hypothesis_revision_id,
-      summary: pair.hypothesis.mechanism,
+      summary: safeBusinessText(pair.hypothesis.mechanism),
     }, {
       kind: "Campaign Draft",
-      versionLabel: pair.pair_revision_id,
+      versionLabel: draftRevision,
       summary: `${pair.draft.profile_id} · ${pair.draft.validation.status}`,
     }],
     hypothesis: {
-      mechanism: pair.hypothesis.mechanism,
-      primaryMetric: pair.hypothesis.primary_metric,
-      baseline: pair.hypothesis.baseline,
-      evidence: [...pair.hypothesis.evidence_refs],
+      mechanism: safeBusinessText(pair.hypothesis.mechanism),
+      primaryMetric: safeBusinessText(pair.hypothesis.primary_metric),
+      baseline: safeBusinessText(pair.hypothesis.baseline),
+      evidence: pair.hypothesis.evidence_refs.map(safeEvidenceReference),
     },
     clientPreview: {
       titles: preview.titles,

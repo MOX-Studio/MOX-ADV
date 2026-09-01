@@ -77,7 +77,7 @@ test("discovers understandable account/counter choices through official APIs and
   assert.ok(requests.every((request) => !/direct\.yandex\.(?:ru|com)\/loggedin|metrika\.yandex\.(?:ru|com)|api\.wordstat\.yandex\.net/iu.test(request.url)));
   const wordstatRequest = requests.find((request) => request.url === "http://127.0.0.1:19246/health");
   assert.equal(wordstatRequest.init.method, "GET");
-  assert.equal(wordstatRequest.init.redirect, "error");
+  assert.equal(wordstatRequest.init.redirect, "manual");
   assert.equal(wordstatRequest.init.headers.Authorization, "Bearer server-wordstat-bridge-secret");
   assert.doesNotMatch(JSON.stringify(discovery), /server-(?:direct|metrika|wordstat)-secret|server-wordstat-bridge-secret/u);
 });

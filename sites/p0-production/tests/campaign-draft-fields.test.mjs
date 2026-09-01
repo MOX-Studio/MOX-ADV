@@ -9,6 +9,7 @@ import {
   editableDraftFieldNames,
   nextDraftRevisionId,
   normalizeDraftFieldInput,
+  preserveFixedDraftProjection,
   projectionFieldValue,
 } from "../lib/campaign-draft-fields.ts";
 
@@ -144,6 +145,24 @@ test("registry input normalization is the only accepted editable surface and res
     () => normalizeDraftFieldInput({ draft_id: "draft-1", campaign_name: "A", hidden_field: "drop me" }),
     (error) => error?.code === "P0_DRAFT_FIELD_UNSUPPORTED" && /hidden_field/u.test(error.message),
   );
+});
+
+test("owner Draft edits preserve every Strategy- and capability-owned provider field exactly", () => {
+  const edited = structuredClone(projection);
+  edited.direct.campaign.Name = "Новая кампания";
+  edited.direct.campaign.StartDate = "2030-01-01";
+  edited.direct.campaign.TimeZone = "Other/Zone";
+  edited.direct.campaign.UnifiedCampaign.BiddingStrategy.Search.WbMaximumClicks.WeeklySpendLimit = 99;
+  edited.direct.campaign.UnifiedCampaign.BiddingStrategy.Search.WbMaximumClicks.BidCeiling = 77;
+  edited.direct.ad.ResponsiveAd.Texts = ["Новый текст"];
+
+  const preserved = preserveFixedDraftProjection(projection, edited);
+  assert.equal(projectionFieldValue(preserved, "/direct/campaign/Name"), "Новая кампания");
+  assert.equal(projectionFieldValue(preserved, "/direct/campaign/StartDate"), "2026-09-01");
+  assert.equal(projectionFieldValue(preserved, "/direct/campaign/TimeZone"), undefined);
+  assert.equal(projectionFieldValue(preserved, "/direct/campaign/UnifiedCampaign/BiddingStrategy/Search/WbMaximumClicks/WeeklySpendLimit"), 50_000_000_000);
+  assert.equal(projectionFieldValue(preserved, "/direct/campaign/UnifiedCampaign/BiddingStrategy/Search/WbMaximumClicks/BidCeiling"), 500_000_000);
+  assert.deepEqual(projectionFieldValue(preserved, "/direct/ad/ResponsiveAd/Texts"), ["Новый текст"]);
 });
 
 test("Draft revisions advance by immutable Draft lineage rather than document revision", () => {

@@ -30,9 +30,18 @@ import {
   type DirectExecutionRecord,
 } from "./execution-safety.ts";
 import { readP0CuratedPlaybookV1 } from "./p0-curated-playbook-v1.ts";
+import {
+  buildFinancialCompetitorIntelligence,
+  verifyFinancialCompetitorIntelligence,
+  type FinancialCompetitorIntelligenceInput,
+} from "./financial-competitor-intelligence.ts";
+import { ProductionCampaignPlaybookGovernance } from "./production-playbook-governance.ts";
+import { D1CampaignPlaybookGovernanceStore } from "./campaign-playbook-governance-d1-store.ts";
+import { D1CampaignPlaybookKnowledgeStore } from "./campaign-playbook-candidates-d1-store.ts";
 import { collectProductionCompetitorResearch } from "./production-competitor-research.ts";
 import {
   P0Application,
+  type BusinessModel,
   type P0Context,
   type P0Document,
 } from "./p0-application.ts";
@@ -1422,6 +1431,52 @@ async function createExternalOutcome({
   return { execution_id: executionId, ...result };
 }
 
+export async function productionFinancialCompetitorIntelligence(input: {
+  ownerKey: string;
+  model: BusinessModel;
+  context: P0Context;
+  generatedAt: string;
+}): Promise<FinancialCompetitorIntelligenceInput | null> {
+  const runtime = runtimeEnv();
+  const bridgeUrl = cleanText(runtime.P0_FINANCIAL_INTELLIGENCE_BRIDGE_URL ?? "", 2_000);
+  const bridgeToken = cleanText(runtime.P0_FINANCIAL_INTELLIGENCE_BRIDGE_TOKEN ?? "", 2_000);
+  if (!bridgeUrl && !bridgeToken) return null;
+  if (!bridgeUrl || !bridgeToken) throw new Error("Financial Intelligence bridge URL and token must be configured together.");
+  const parsed = new URL(bridgeUrl);
+  if (parsed.protocol !== "http:" || !["127.0.0.1", "localhost"].includes(parsed.hostname)) {
+    throw new Error("Financial Intelligence production bridge must be an isolated loopback read adapter.");
+  }
+  const response = await fetch(parsed, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${bridgeToken}` },
+    body: JSON.stringify({
+      schema_version: "p0-financial-intelligence-read-request-v1",
+      owner_key: input.ownerKey,
+      generated_at: input.generatedAt,
+      frozen_business_scope: {
+        product: input.model.product,
+        customer_need: input.model.value,
+        customer: input.model.audience,
+        geography: input.model.geography,
+        included_offers: input.model.offer_candidates.map((offer) => offer.label),
+        excluded_offers: input.model.exclusions,
+        qualified_result: input.model.qualified_result,
+      },
+      authority: { source_read: true, external_write: false, advertising_write: false },
+    }),
+    cache: "no-store",
+    signal: AbortSignal.timeout(120_000),
+  });
+  if (!response.ok) throw new Error(`Financial Intelligence read bridge returned HTTP ${response.status}.`);
+  const payload = await response.json() as { input?: FinancialCompetitorIntelligenceInput } | FinancialCompetitorIntelligenceInput;
+  const value = (payload as { input?: FinancialCompetitorIntelligenceInput }).input ?? payload as FinancialCompetitorIntelligenceInput;
+  const dossier = await buildFinancialCompetitorIntelligence(value);
+  if (!await verifyFinancialCompetitorIntelligence(dossier)) {
+    throw new Error("Financial Intelligence bridge returned a dossier that failed immutable verification.");
+  }
+  return structuredClone(value);
+}
+
 export class D1P0ApplicationStore extends D1P0ApplicationStoreBase {
   constructor() {
     super(() => runtimeEnv().DB);
@@ -1451,6 +1506,7 @@ const application = new P0Application({
       fetcher: fetch,
     }),
     ...(runtimeEnv().P0_COMPETITOR_RESEARCH_JSON ? { readCompetitorResearch } : {}),
+    readFinancialCompetitorIntelligence: productionFinancialCompetitorIntelligence,
     async readPlaybookReleases() {
       return [readP0CuratedPlaybookV1()];
     },
@@ -1536,13 +1592,26 @@ function configuredModelAdapter() {
   }, fetch);
 }
 
-export function productionPipelineStageAgents() {
-  return createProductionStageAgents(new BoundedStageAgentModel(configuredModelAdapter()), now);
-}
-
 /** Out-of-band only: produces a governed candidate and has no Playbook activation or owner-run path. */
 export function productionMethodologyAgent() {
   return new ProductionMethodologyAgent(new BoundedStageAgentModel(configuredModelAdapter()), now);
+}
+
+export function productionCampaignPlaybookGovernance() {
+  const runtime = runtimeEnv();
+  return new ProductionCampaignPlaybookGovernance(
+    new D1CampaignPlaybookKnowledgeStore(runtime.DB),
+    new D1CampaignPlaybookGovernanceStore(runtime.DB),
+    productionMethodologyAgent(),
+    now,
+  );
+}
+
+export function productionPipelineStageAgents() {
+  const playbook = productionCampaignPlaybookGovernance();
+  return createProductionStageAgents(new BoundedStageAgentModel(configuredModelAdapter()), now, {
+    loadPlaybookSnapshot: () => playbook.strategySnapshot(),
+  });
 }
 
 function productionAgentRuntime() {

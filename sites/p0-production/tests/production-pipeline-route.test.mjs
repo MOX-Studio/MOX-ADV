@@ -10,10 +10,12 @@ test("production route prepares real owner inputs without fixture or legacy-tabl
   assert.doesNotMatch(routeSource, /p0-e2e|pipeline-acceptance-fixture|p0-e2e-runtime/iu);
   assert.doesNotMatch(routeSource, /archiveLegacyPipelineDocument/iu);
   assert.match(routeSource, /operatorDiagnostics as productionOperatorDiagnostics/u);
-  assert.match(routeSource, /ownerOverview as productionOwnerOverview/u);
-  assert.match(routeSource, /submitOwnerAction as productionSubmitOwnerAction/u);
-  assert.match(routeSource, /currentBackend\.diagnostics\(\)/u);
-  assert.match(routeSource, /controller\.startAndExecute\(key, diagnostics/u);
+  assert.doesNotMatch(routeSource, /ownerOverview as productionOwnerOverview|submitOwnerAction as productionSubmitOwnerAction/u);
+  assert.match(routeSource, /historicalView\(key\)/u);
+  assert.match(routeSource, /canonicalOwnerResult/u);
+  assert.match(routeSource, /controller\.start\(key, historical\)/u);
+  assert.match(routeSource, /waitUntil\(controller\.execute\(key, pipeline\.runId, historical\)/u);
+  assert.doesNotMatch(routeSource, /controller\.startAndExecute\(key/u);
 });
 
 test("invalid local preparation exposes an explicit owner recovery without touching external systems", () => {
@@ -24,10 +26,11 @@ test("invalid local preparation exposes an explicit owner recovery without touch
   assert.match(clientSource, /recovery\.label/u);
 });
 
-test("production route keeps pipeline actions typed and denies editing while a run is active", () => {
+test("production route keeps only typed current actions and removes legacy handles", () => {
   assert.match(routeSource, /assertCurrentPipelineAction\(payload\)/u);
-  assert.match(routeSource, /currentPipeline\.editingLocked/u);
-  assert.match(routeSource, /Редактирование недоступно во время активного запуска/u);
+  assert.match(routeSource, /Legacy handles are disabled/u);
+  assert.doesNotMatch(routeSource, /currentBackend\.applyAction|productionSubmitOwnerAction/u);
+  assert.match(routeSource, /CORRECT_STRATEGY|EDIT_CAMPAIGN_PAIR/u);
 });
 
 test("production Wordstat evidence uses only the authenticated headless UI bridge", () => {
@@ -51,15 +54,17 @@ test("Dashboard lets the owner revise economics and rebuild dependent evidence w
   assert.match(productionSource, /wordstatUiBridgeUrl: runtime\.P0_WORDSTAT_BRIDGE_URL/u);
 });
 
-test("Dashboard exposes the exact Strategy Review decision instead of a terminal placeholder", () => {
-  assert.match(clientSource, /projection\.campaignStrategy\.ownerReview && <StrategyOwnerReview/u);
-  assert.match(clientSource, /function StrategyOwnerReview\(/u);
-  assert.match(clientSource, /onDecision=\{submitStrategyDecision\}/u);
-  assert.match(clientSource, /Подтвердить точную версию/u);
+test("Dashboard omits routine Strategy confirmation and exposes only typed material correction", () => {
+  assert.doesNotMatch(clientSource, /projection\.campaignStrategy\.ownerReview|function StrategyOwnerReview\(|submitStrategyDecision|Подтвердить точную версию/u);
+  assert.match(clientSource, /pipeline_action: "CORRECT_STRATEGY"/u);
+  assert.match(clientSource, /Материальная правка с полной повторной проверкой/u);
+  assert.match(clientSource, /Сохранить как приоритетный ввод/u);
 });
 
-test("NOT_STARTED pipeline keeps owner-journey actions and exposes Start only for current Drafts at review", () => {
-  assert.match(clientSource, /projection\.pipeline && projection\.pipeline\.status !== "NOT_STARTED"\s*\? projection\.pipeline\.stages\.find/u);
-  assert.match(clientSource, /projection\.journey\.currentStage === "review" && projection\.campaignOptions\.length > 0/u);
+test("canonical Dashboard exposes Start for a fresh run and typed current-product editors", () => {
+  assert.match(clientSource, /const pipelineControl = projection\.pipeline \?\? null/u);
+  assert.match(clientSource, /pipeline_action: "CORRECT_STRATEGY"/u);
+  assert.match(clientSource, /pipeline_action: "EDIT_CAMPAIGN_PAIR"/u);
+  assert.match(clientSource, /name="pair_key"/u);
   assert.doesNotMatch(clientSource, /status: pipeline \? "Ожидает"/u);
 });

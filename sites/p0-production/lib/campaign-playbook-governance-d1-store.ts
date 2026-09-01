@@ -9,6 +9,7 @@ import {
   assertCampaignPlaybookConsumptionTrace,
   assertKnowledgeStewardDelegation,
   assertPlaybookReleaseDecision,
+  curatedApprovalAssessmentReference,
   CampaignPlaybookGovernanceError,
   type CampaignPlaybookConsumptionTrace,
   type KnowledgeStewardDelegation,
@@ -171,15 +172,22 @@ export class D1CampaignPlaybookGovernanceStore {
       throw new CampaignPlaybookGovernanceError("PLAYBOOK_DECISION_LINEAGE_INVALID", "Release decision lineage or delegated scope is invalid.");
     }
     for (const approval of decision.approved_rules) {
-      const assessmentRow = await this.db.prepare("SELECT value_json FROM p0_playbook_promotion_assessments WHERE content_digest = ?")
-        .bind(approval.assessment.content_digest).first<ValueRow>();
-      if (!assessmentRow) throw new CampaignPlaybookGovernanceError("PLAYBOOK_DECISION_LINEAGE_MISSING", "Every approved rule requires its persisted exact assessment.");
-      const assessment = JSON.parse(assessmentRow.value_json) as PromotionAssessment;
-      await assertPromotionAssessment(assessment);
       const rule = release.rules.find((candidate) => candidate.rule_id === approval.rule.rule_id
         && candidate.rule_version === approval.rule.rule_version
         && candidate.content_digest === approval.rule.content_digest);
-      if (!rule || assessment.assessment_id !== approval.assessment.assessment_id
+      if (!rule) {
+        throw new CampaignPlaybookGovernanceError("PLAYBOOK_RULE_EVIDENCE_GATE_NOT_PASSED", "Knowledge Steward cannot bind approval to unknown rule content.");
+      }
+      const curatedAssessment = await curatedApprovalAssessmentReference(release, rule);
+      if (curatedAssessment
+        && curatedAssessment.assessment_id === approval.assessment.assessment_id
+        && curatedAssessment.content_digest === approval.assessment.content_digest) continue;
+      const assessmentRow = await this.db.prepare("SELECT value_json FROM p0_playbook_promotion_assessments WHERE content_digest = ?")
+        .bind(approval.assessment.content_digest).first<ValueRow>();
+      if (!assessmentRow) throw new CampaignPlaybookGovernanceError("PLAYBOOK_DECISION_LINEAGE_MISSING", "Every non-curated approved rule requires its persisted exact assessment.");
+      const assessment = JSON.parse(assessmentRow.value_json) as PromotionAssessment;
+      await assertPromotionAssessment(assessment);
+      if (assessment.assessment_id !== approval.assessment.assessment_id
         || assessment.disposition !== "ELIGIBLE_FOR_STEWARD_REVIEW"
         || assessment.hard_checks.some((check) => check.status !== "PASS")
         || assessment.policy.content_digest !== policy.content_digest

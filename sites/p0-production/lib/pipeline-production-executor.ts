@@ -1,4 +1,5 @@
 import type { CurrentGoal } from "./goal-revision-lifecycle.ts";
+import type { PipelineVerifiedProduct } from "./pipeline-current-products.ts";
 import type { ProductionStageAgents } from "./production-stage-agents.ts";
 import {
   PipelineOrchestrator,
@@ -23,18 +24,6 @@ type ProductionHistoricalView = {
   revision: number;
   state: Record<string, unknown>;
 };
-
-type ProductionPrerequisites = {
-  evidence: PipelineVersionReference;
-  strategy: PipelineVersionReference;
-  pairSet: PipelineVersionReference;
-};
-
-function record(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-}
 
 function exactReference(
   value: PipelineVersionReference | null,
@@ -68,33 +57,15 @@ async function pairSetReference(run: PipelineRunState): Promise<PipelineVersionR
   };
 }
 
-async function productionPrerequisites(
-  run: PipelineRunState,
-  view: ProductionHistoricalView,
-): Promise<ProductionPrerequisites> {
-  const state = record(view.state);
-  if (!Object.keys(record(state.strategy)).length) {
-    throw new ProductionPipelineExecutionError(
-      "PRODUCTION_STRATEGY_MISSING",
-      "Production Pipeline требует одну текущую Campaign Strategy для автономной проверки Strategy Agent.",
-    );
-  }
-  if (state.external_write_intent || state.package_execution || state.campaign) {
-    throw new ProductionPipelineExecutionError(
-      "PRODUCTION_ZERO_WRITE_BOUNDARY_VIOLATED",
-      "Production Pipeline запускается только до внешней записи и не принимает Direct execution state.",
-    );
-  }
-  const evidence = exactReference(
+function evidenceReference(run: PipelineRunState) {
+  return exactReference(
     run.input_versions.analytics_evidence_snapshot,
-    "PRODUCTION_EVIDENCE_MISSING",
-    "Production Pipeline требует текущий Analytics Evidence Snapshot.",
+    "EVIDENCE_COLLECTION_REQUIRED_INPUT_MISSING",
+    "Evidence Analyst не получил Analytics Evidence Snapshot, который можно собрать или безопасно переиспользовать.",
   );
-  const strategy = exactReference(
-    run.input_versions.campaign_strategy_revision,
-    "PRODUCTION_STRATEGY_MISSING",
-    "Production Pipeline требует текущую Campaign Strategy revision.",
-  );
+}
+
+async function campaignSeedReference(run: PipelineRunState) {
   const validation = run.input_versions.campaign_pair_checks;
   if (validation.set_disposition !== "CURRENT_PAIRS_AVAILABLE"
     || validation.required_request_package !== null
@@ -102,11 +73,11 @@ async function productionPrerequisites(
     || validation.pairs.some((pair) => pair.included && pair.violations.length > 0)
     || validation.pairs.filter((pair) => pair.included).length !== run.input_versions.campaign_pairs.length) {
     throw new ProductionPipelineExecutionError(
-      "PRODUCTION_CAMPAIGN_PAIRS_NOT_CURRENT",
-      "Production Pipeline принимает только текущие Campaign Hypothesis + Campaign Draft пары после typed hard checks.",
+      "CAMPAIGN_DESIGN_REQUIRED_INPUT_MISSING",
+      "Campaign Design Agent не получил полный проверенный seed-набор для пересборки текущих пар.",
     );
   }
-  return { evidence, strategy, pairSet: await pairSetReference(run) };
+  return pairSetReference(run);
 }
 
 async function verifiedAttempt(input: {
@@ -151,6 +122,7 @@ export async function executeProductionPipeline(input: {
   view: ProductionHistoricalView;
   currentGoal?: CurrentGoal | null;
   agents: ProductionStageAgents;
+  onVerifiedProduct?: (input: { run: PipelineRunState; product: PipelineVerifiedProduct }) => Promise<void>;
 }) {
   if (input.run.status !== "ACTIVE" || input.run.current_stage !== "CAMPAIGN_GOAL") {
     throw new ProductionPipelineExecutionError(
@@ -158,7 +130,6 @@ export async function executeProductionPipeline(input: {
       "Production executor requires a newly started Campaign Goal stage.",
     );
   }
-  const prerequisites = await productionPrerequisites(input.run, input.view);
   const goalAgent = await input.agents.formGoal({
     run: input.run,
     view: input.view,
@@ -181,12 +152,17 @@ export async function executeProductionPipeline(input: {
     revision_id: run.goal_formation.revision.goal_revision_id,
     digest: run.goal_formation.revision.digest,
   };
+  await input.onVerifiedProduct?.({
+    run,
+    product: { stage: "CAMPAIGN_GOAL", value: structuredClone(run.goal_formation.revision) },
+  });
 
+  const evidenceSeed = evidenceReference(run);
   const evidenceAgent = await input.agents.analyzeEvidence({
     run,
     view: input.view,
     goal: goalReference,
-    evidence: prerequisites.evidence,
+    evidence: evidenceSeed,
   });
   run = await input.orchestrator.advance({
     run_id: run.run_id,
@@ -206,13 +182,16 @@ export async function executeProductionPipeline(input: {
       schema: evidenceAgent.schema,
     }),
   });
+  await input.onVerifiedProduct?.({
+    run,
+    product: { stage: "EVIDENCE_COLLECTION", value: structuredClone(evidenceAgent.artifact) },
+  });
 
   const strategyAgent = await input.agents.formStrategy({
     run,
     view: input.view,
     goal: goalReference,
-    evidence: prerequisites.evidence,
-    strategy: prerequisites.strategy,
+    evidence: evidenceAgent.output,
   });
   run = await input.orchestrator.advance({
     run_id: run.run_id,
@@ -223,7 +202,7 @@ export async function executeProductionPipeline(input: {
     attempt: await verifiedAttempt({
       run,
       stage: "STRATEGY",
-      inputs: [goalReference, prerequisites.evidence],
+      inputs: [goalReference, evidenceAgent.output],
       evidence: strategyAgent.evidence,
       output: strategyAgent.output,
       checkId: strategyAgent.check_id,
@@ -232,14 +211,18 @@ export async function executeProductionPipeline(input: {
       schema: strategyAgent.schema,
     }),
   });
+  await input.onVerifiedProduct?.({
+    run,
+    product: { stage: "STRATEGY", value: structuredClone(strategyAgent.artifact) as Record<string, unknown> },
+  });
 
   const designAgent = await input.agents.designCampaigns({
     run,
     view: input.view,
     autonomousStrategy: strategyAgent.autonomous_strategy,
-    strategy: prerequisites.strategy,
-    evidence: prerequisites.evidence,
-    pairSet: prerequisites.pairSet,
+    strategy: strategyAgent.output,
+    evidence: evidenceAgent.output,
+    pairSet: await campaignSeedReference(run),
   });
   run = await input.orchestrator.advance({
     run_id: run.run_id,
@@ -250,7 +233,7 @@ export async function executeProductionPipeline(input: {
     attempt: await verifiedAttempt({
       run,
       stage: "CAMPAIGNS",
-      inputs: [prerequisites.strategy, prerequisites.evidence],
+      inputs: [strategyAgent.output, evidenceAgent.output],
       evidence: designAgent.evidence,
       output: designAgent.output,
       checkId: designAgent.check_id,
@@ -258,6 +241,10 @@ export async function executeProductionPipeline(input: {
       actor: designAgent.actor,
       schema: designAgent.schema,
     }),
+  });
+  await input.onVerifiedProduct?.({
+    run,
+    product: { stage: "CAMPAIGNS", value: structuredClone(designAgent.artifact) },
   });
 
   return run;

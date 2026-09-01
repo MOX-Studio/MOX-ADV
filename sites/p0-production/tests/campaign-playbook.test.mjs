@@ -3,7 +3,6 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
-  curatedPlaybookContentDigest,
   resolveCuratedPlaybookReleases,
   sealCuratedPlaybookRelease,
 } from "../lib/campaign-playbook.ts";
@@ -132,7 +131,7 @@ test("checked-in curated playbook v1 is exact, official-source governed, and eva
   assert.match(resolved.rules[0].content_digest, /^sha256:[a-f0-9]{64}$/u);
   assert.equal(
     resolved.release.promotion_policy.content_digest,
-    await curatedPlaybookContentDigest(P0_CURATED_PLAYBOOK_PROMOTION_POLICY_V1),
+    P0_CURATED_PLAYBOOK_PROMOTION_POLICY_V1.content_digest,
   );
 });
 

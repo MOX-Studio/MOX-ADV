@@ -9,6 +9,21 @@ import {
   PIPELINE_INPUT_VERSIONS_SCHEMA,
   PipelineOrchestrator,
 } from "../lib/pipeline-orchestrator.ts";
+import { saveVerifiedPipelineProduct } from "../lib/pipeline-current-products.ts";
+
+class MemoryCurrentProductStore {
+  current = null;
+
+  async loadCurrent() {
+    return this.current ? structuredClone(this.current) : null;
+  }
+
+  async compareAndSwap(_ownerKey, expectedStateRevision, current) {
+    if ((this.current?.state_revision ?? null) !== expectedStateRevision) return false;
+    this.current = structuredClone(current);
+    return true;
+  }
+}
 
 class MemoryPipelineStore {
   runs = new Map();
@@ -121,13 +136,16 @@ function stageAgents() {
       };
     },
     async analyzeEvidence({ goal, evidence }) {
-      return { actor: actor("EVIDENCE_ANALYST"), output: evidence, evidence: [goal, evidence], check_id: "EVIDENCE_ANALYST_VERIFIED", schema: schema("p0-evidence-analyst-result-v1", "4"), summary: "Evidence Analyst verified the exact snapshot and explicit gaps." };
+      return { actor: actor("EVIDENCE_ANALYST"), output: evidence, artifact: { schema_version: "analytics-evidence-snapshot-v1", snapshot_id: evidence.revision_id }, evidence: [goal, evidence], check_id: "EVIDENCE_ANALYST_VERIFIED", schema: schema("p0-evidence-analyst-result-v1", "4"), summary: "Evidence Analyst verified the exact snapshot and explicit gaps." };
     },
-    async formStrategy({ goal, evidence, strategy }) {
-      return { actor: actor("STRATEGY_AGENT"), output: strategy, evidence: [goal, evidence], check_id: "STRATEGY_AGENT_VERIFIED", schema: schema("p0-autonomous-campaign-strategy-v1", "5"), summary: "Strategy Agent formed and accepted the current evidence-linked Strategy." };
+    async formStrategy({ goal, evidence }) {
+      const strategy = reference("autonomous-campaign-strategy", "e");
+      const autonomous = { schema_version: "p0-autonomous-campaign-strategy-v1", strategy_revision_id: strategy.revision_id, status: "AGENT_ACCEPTED" };
+      const artifact = { schema_version: "p0-strategy-stage-product-v1", strategy: autonomous, inputs: { schema_version: "p0-campaign-strategy-agent-input-v1" } };
+      return { actor: actor("STRATEGY_AGENT"), output: strategy, artifact, autonomous_strategy: autonomous, evidence: [goal, evidence], check_id: "STRATEGY_AGENT_VERIFIED", schema: schema("p0-autonomous-campaign-strategy-v1", "5"), summary: "Strategy Agent formed and accepted the current evidence-linked Strategy." };
     },
     async designCampaigns({ strategy, evidence, pairSet }) {
-      return { actor: actor("CAMPAIGN_DESIGN_AGENT"), output: pairSet, evidence: [strategy, evidence], check_id: "CAMPAIGN_DESIGN_AGENT_VERIFIED", schema: schema("p0-campaign-design-agent-result-v1", "6"), summary: "Campaign Design Agent formed the exact finite current pair set." };
+      return { actor: actor("CAMPAIGN_DESIGN_AGENT"), output: pairSet, artifact: [{ schema_version: "p0-compiled-campaign-pair-v1", pair_revision_id: "pair-1", publish_fingerprint: digest("3"), draft: { publish_fingerprint: digest("3") } }], evidence: [strategy, evidence], check_id: "CAMPAIGN_DESIGN_AGENT_VERIFIED", schema: schema("p0-campaign-design-agent-result-v1", "6"), summary: "Campaign Design Agent formed the exact finite current pair set." };
     },
   };
 }
@@ -208,9 +226,46 @@ test("production executor seals real current artifacts through Publication Revie
   assert.equal(audit.some((event) => JSON.stringify(event).match(/fixture|synthetic/iu)), false);
   assert.equal(audit.at(-1).output.reference.schema_version, "campaign-pair-set-v1");
   assert.deepEqual(audit.at(-1).evidence.map((item) => item.revision_id), [
-    "campaign-strategy-revision-revision-1",
+    "autonomous-campaign-strategy-revision-1",
     "analytics-evidence-snapshot-revision-1",
   ]);
+});
+
+test("only verified stage products become the canonical current product set", async () => {
+  const store = new MemoryPipelineStore();
+  const products = new MemoryCurrentProductStore();
+  const orchestrator = new PipelineOrchestrator({ store, newRunId: () => "production-pipeline-products" });
+  const started = await orchestrator.start("owner", inputVersions());
+  const completed = await executeProductionPipeline({
+    orchestrator,
+    run: started,
+    view: historicalView(),
+    agents: stageAgents(),
+    onVerifiedProduct: ({ run, product }) => saveVerifiedPipelineProduct({
+      store: products,
+      run,
+      product,
+      recordedAt: "2026-08-31T13:00:00.000Z",
+    }).then(() => undefined),
+  });
+
+  assert.equal(completed.status, "COMPLETED");
+  assert.equal(products.current.current_stage, "CAMPAIGNS");
+  assert.equal(products.current.goal_revision.desired_outcome, "Получать квалифицированные заявки на участие со стендом");
+  assert.equal(products.current.analytics_evidence_snapshot.snapshot_id, "analytics-evidence-snapshot-revision-1");
+  assert.equal(products.current.campaign_strategy.strategy.status, "AGENT_ACCEPTED");
+  assert.equal(products.current.campaign_pairs.length, 1);
+  assert.deepEqual(products.current.publication_review, {
+    schema_version: "p0-publication-review-handoff-v1",
+    status: "REVIEW_ONLY",
+    run_id: "production-pipeline-products",
+    pair_count: 1,
+    publish_fingerprints: [digest("3")],
+    external_write: "DENIED",
+    publication: "NOT_AUTHORIZED",
+    impressions: 0,
+    spend_micros: 0,
+  });
 });
 
 test("Strategy Agent accepts the current exact Strategy without a redundant owner approval", async () => {
@@ -238,6 +293,6 @@ test("production executor refuses runs without a fully current Campaign Pair", a
   await assert.rejects(
     executeProductionPipeline({ orchestrator, run: started, view: historicalView(), agents: stageAgents() }),
     (error) => error instanceof ProductionPipelineExecutionError
-      && error.code === "PRODUCTION_CAMPAIGN_PAIRS_NOT_CURRENT",
+      && error.code === "CAMPAIGN_DESIGN_REQUIRED_INPUT_MISSING",
   );
 });

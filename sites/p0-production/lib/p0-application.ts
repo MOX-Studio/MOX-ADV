@@ -56,6 +56,7 @@ import {
   isCanonicalDirectV501DraftFieldRegistry,
   nextDraftRevisionId,
   normalizeDraftFieldInput,
+  preserveFixedDraftProjection,
 } from "./campaign-draft-fields.ts";
 import {
   buildCampaignRecommendationSet,
@@ -513,7 +514,7 @@ export interface P0ApplicationAdapters {
     model: BusinessModel;
     context: P0Context;
     generatedAt: string;
-  }): Promise<FinancialCompetitorIntelligenceInput>;
+  }): Promise<FinancialCompetitorIntelligenceInput | null>;
   landingAdvisory?: LandingAdvisoryAdapter;
   destinationInspection?: DestinationReadinessAdapter;
   readPlaybookReleases?(): Promise<CuratedPlaybookRelease[]>;
@@ -2064,11 +2065,14 @@ async function buildMaterialDraftCorrection(
     playbook_rule_digest: sourceDraft.playbook_rule_digest,
     ...creationProfileDraftMetadata(sourceDraft),
   };
-  const basicProjection = buildPublishProjection(
-    state.business_model as unknown as Record<string, unknown>,
-    state.strategy,
-    materialLineage,
-  ) as unknown as Record<string, unknown>;
+  const basicProjection = preserveFixedDraftProjection(
+    sourceDraft.publish_projection,
+    buildPublishProjection(
+      state.business_model as unknown as Record<string, unknown>,
+      state.strategy,
+      materialLineage,
+    ) as unknown as Record<string, unknown>,
+  );
   const preservedCapability = preserveSelectedConditionalProjection({
     generatedDraft: sourceDraft,
     editedProjection: basicProjection,
@@ -5620,11 +5624,14 @@ export class P0Application {
         ...creationProfileDraftMetadata(generated),
       };
       const normalized = { ...normalizedFields, ...lineage };
-      const normalizedProjection = buildPublishProjection(
-        state.business_model as unknown as Record<string, unknown>,
-        state.strategy,
-        normalized,
-      ) as unknown as Record<string, unknown>;
+      const normalizedProjection = preserveFixedDraftProjection(
+        generated.publish_projection,
+        buildPublishProjection(
+          state.business_model as unknown as Record<string, unknown>,
+          state.strategy,
+          normalized,
+        ) as unknown as Record<string, unknown>,
+      );
       const normalizedCapability = preserveSelectedConditionalProjection({
         generatedDraft: generated,
         editedProjection: normalizedProjection,
@@ -5655,11 +5662,14 @@ export class P0Application {
       } else {
         const nextDraftRevision = nextDraftRevisionId(draftId, generated.draft_revision_id);
         const materialLineage = { ...normalized, draft_revision_id: nextDraftRevision };
-        const basicProjection = buildPublishProjection(
-          state.business_model as unknown as Record<string, unknown>,
-          state.strategy,
-          materialLineage,
-        ) as unknown as Record<string, unknown>;
+        const basicProjection = preserveFixedDraftProjection(
+          generated.publish_projection,
+          buildPublishProjection(
+            state.business_model as unknown as Record<string, unknown>,
+            state.strategy,
+            materialLineage,
+          ) as unknown as Record<string, unknown>,
+        );
         const preservedCapability = preserveSelectedConditionalProjection({
           generatedDraft: generated,
           editedProjection: basicProjection,

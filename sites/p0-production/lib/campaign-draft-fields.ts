@@ -203,6 +203,28 @@ export function projectionFieldValue(projection: unknown, pointer: string): unkn
   }, projection);
 }
 
+function replaceProjectionField(projection: Record<string, unknown>, pointer: string, value: unknown) {
+  const segments = pointer.slice(1).split("/").map((segment) => segment.replaceAll("~1", "/").replaceAll("~0", "~"));
+  let current = projection;
+  for (const segment of segments.slice(0, -1)) {
+    if (!current[segment] || typeof current[segment] !== "object" || Array.isArray(current[segment])) current[segment] = {};
+    current = current[segment] as Record<string, unknown>;
+  }
+  const leaf = segments.at(-1)!;
+  if (value === undefined) delete current[leaf];
+  else current[leaf] = structuredClone(value);
+}
+
+/** Keeps Strategy/capability-owned provider fields exact during an owner Draft-field edit. */
+export function preserveFixedDraftProjection(previous: unknown, edited: Record<string, unknown>) {
+  const preserved = structuredClone(edited);
+  for (const field of DIRECT_V501_DRAFT_FIELD_REGISTRY.fields) {
+    if (field.classification !== "FIXED_BY_STRATEGY" && field.classification !== "FIXED_BY_CAPABILITY") continue;
+    replaceProjectionField(preserved, field.pointer, projectionFieldValue(previous, field.pointer));
+  }
+  return preserved;
+}
+
 function inputError(code: string, message: string): never {
   const error = new Error(message) as Error & { code: string };
   error.code = code;

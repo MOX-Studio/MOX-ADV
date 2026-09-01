@@ -1,5 +1,14 @@
 import { validateCampaignPairs } from "./campaign-pair-validation.ts";
-import type { OwnerCampaignPairDossier } from "./campaign-pair-dossier.ts";
+import {
+  projectDemandCostResearchForOwner,
+  type OwnerJourneyProjection,
+} from "./p0-owner-journey.ts";
+import {
+  projectCampaignPairDossier,
+  type OwnerCampaignPairDossier,
+} from "./campaign-pair-dossier.ts";
+import type { CompiledCampaignPair } from "./campaign-design-agent.ts";
+import type { AutonomousCampaignStrategy } from "./campaign-strategy-agent.ts";
 import type { GoalCandidate } from "./goal-revision.ts";
 import {
   CURRENT_GOAL_SCHEMA,
@@ -11,10 +20,22 @@ import {
 import {
   explainCurrentResultQuestion,
   projectCurrentResultProvenance,
+  type CurrentCampaignPairReference,
   type OwnerResultExplanation,
   type OwnerResultProvenance,
 } from "./pipeline-result-explanation.ts";
 import { executeProductionPipeline } from "./pipeline-production-executor.ts";
+import {
+  saveVerifiedPipelineProduct,
+  type PipelineCurrentProducts,
+  type PipelineCurrentProductStore,
+} from "./pipeline-current-products.ts";
+import {
+  saveCurrentPipelineCampaignPairEdit,
+  saveCurrentPipelineStrategyCorrection,
+} from "./pipeline-current-edits.ts";
+import type { CampaignStrategyCorrectionChanges } from "./campaign-strategy-correction.ts";
+import type { CampaignPairEditRequest } from "./campaign-pair-edit.ts";
 import type { ProductionStageAgents } from "./production-stage-agents.ts";
 import {
   PIPELINE_INPUT_VERSIONS_SCHEMA,
@@ -55,6 +76,37 @@ export type OwnerPipelineProjection = {
     target: string;
   };
   campaignDossier: OwnerCampaignPairDossier | null;
+  campaignDossiers: OwnerCampaignPairDossier[];
+  currentProducts: null | {
+    stateRevision: number;
+    currentStage: OwnerPipelineStageId;
+    updatedAt: string;
+    evidence: { schemaVersion: string; revisionId: string; generatedAt: string; capabilityStatus: string } | null;
+    demandCostResearch: OwnerJourneyProjection["demandCostResearch"];
+    strategy: {
+      revisionId: string;
+      status: string;
+      dimensions: Array<{ id: string; value: unknown; confidence: string; rationale: string }>;
+    } | null;
+    campaignPairs: Array<{
+      pairKey: string;
+      hypothesisRevisionId: string;
+      draftRevisionId: string;
+      hypothesis: Record<string, unknown>;
+      publishProjection: Record<string, unknown>;
+      auctionProtocol: Record<string, unknown>;
+      reproducibility: Array<{ label: string; value: string }>;
+    }>;
+    pairValidation: { status: string; disposition: string; violations: string[] };
+    publicationReview: null | {
+      status: string;
+      pairCount: number;
+      externalWrite: "DENIED";
+      publication: "NOT_AUTHORIZED";
+      impressions: 0;
+      spendMicros: 0;
+    };
+  };
   goalFormation:
     | { status: "PENDING" }
     | {
@@ -237,6 +289,109 @@ export async function pipelineInputVersions(view: PipelineHistoricalView): Promi
   };
 }
 
+function currentProductProjection(value: Awaited<ReturnType<PipelineCurrentProductStore["loadCurrent"]>>): OwnerPipelineProjection["currentProducts"] {
+  if (!value) return null;
+  const evidence = record(value.analytics_evidence_snapshot);
+  const strategyProduct = record(value.campaign_strategy);
+  const strategy = record(strategyProduct.strategy ?? strategyProduct);
+  const dimensions = list(strategy.dimensions).map(record).map((dimension) => ({
+    id: text(dimension.dimension_id),
+    value: structuredClone(dimension.value),
+    confidence: text(dimension.confidence),
+    rationale: text(dimension.rationale),
+  })).filter((dimension) => dimension.id);
+  const campaignPairs = value.campaign_pairs.map((item, index) => {
+    const pair = record(item);
+    const hypothesis = record(pair.hypothesis);
+    const draft = record(pair.draft);
+    const publishProjection = record(draft.publish_projection);
+    const lineage = record(publishProjection.lineage);
+    const accountBinding = record(draft.account_binding);
+    return {
+      pairKey: identifier(pair.pair_revision_id ?? pair.pair_id, `pair-${index + 1}`),
+      hypothesisRevisionId: identifier(hypothesis.hypothesis_revision_id ?? hypothesis.hypothesis_id, `hypothesis-${index + 1}`),
+      draftRevisionId: identifier(
+        draft.draft_revision_id ?? lineage.draft_revision_id ?? pair.draft_revision_id,
+        `draft:${text(draft.publish_fingerprint ?? pair.publish_fingerprint).slice(7, 31) || index + 1}`,
+      ),
+      hypothesis: structuredClone(hypothesis),
+      publishProjection: structuredClone(publishProjection),
+      auctionProtocol: structuredClone(record(draft.auction_protocol)),
+      reproducibility: [
+        { label: "Direct Compiler", value: text(draft.schema_version) || "direct-v501-projection-compiler" },
+        { label: "Профиль", value: [text(draft.profile_id), text(draft.profile_version)].filter(Boolean).join(" · ") || "p0-campaign-creation-profile-v1" },
+        { label: "Applicability", value: text(draft.applicability_registry_version) || "current" },
+        { label: "Account binding", value: text(accountBinding.currency) || "exact capability snapshot" },
+      ],
+    };
+  });
+  const pairChecks = record(value.campaign_pair_checks);
+  const publication = value.publication_review ? record(value.publication_review) : null;
+  return {
+    stateRevision: value.state_revision,
+    currentStage: OWNER_STAGE_BY_PIPELINE[value.current_stage],
+    updatedAt: value.updated_at,
+    evidence: Object.keys(evidence).length ? {
+      schemaVersion: text(evidence.schema_version),
+      revisionId: identifier(evidence.snapshot_revision_id ?? evidence.snapshot_id, "current-evidence"),
+      generatedAt: text(evidence.generated_at),
+      capabilityStatus: text(record(evidence.financial_competitor_intelligence).capability_status) || "UNAVAILABLE",
+    } : null,
+    demandCostResearch: projectDemandCostResearchForOwner(evidence),
+    strategy: Object.keys(strategy).length ? {
+      revisionId: identifier(strategy.strategy_revision_id, "current-strategy"),
+      status: text(strategy.status),
+      dimensions,
+    } : null,
+    campaignPairs,
+    pairValidation: {
+      status: text(pairChecks.status),
+      disposition: text(pairChecks.set_disposition),
+      violations: list(pairChecks.violations).map((violation) => text(record(violation).message || violation)).filter(Boolean),
+    },
+    publicationReview: publication ? {
+      status: text(publication.status),
+      pairCount: Number(publication.pair_count ?? campaignPairs.length),
+      externalWrite: "DENIED",
+      publication: "NOT_AUTHORIZED",
+      impressions: 0,
+      spendMicros: 0,
+    } : null,
+  };
+}
+
+function currentPairReferences(value: PipelineCurrentProducts | null): CurrentCampaignPairReference[] {
+  if (!value) return [];
+  return value.campaign_pairs.flatMap((item) => {
+    const pair = record(item);
+    const hypothesis = record(pair.hypothesis);
+    const draft = record(pair.draft);
+    const lineage = record(record(draft.publish_projection).lineage);
+    const key = text(pair.pair_revision_id ?? pair.pair_id);
+    const hypothesisRevisionId = text(hypothesis.hypothesis_revision_id ?? hypothesis.hypothesis_id);
+    const draftRevisionId = text(draft.draft_revision_id ?? lineage.draft_revision_id ?? pair.draft_revision_id);
+    const hypothesisSchema = text(hypothesis.schema_version);
+    const draftSchema = text(draft.schema_version);
+    if (!key || !hypothesisRevisionId || !draftRevisionId || !hypothesisSchema || !draftSchema) return [];
+    return [{
+      key,
+      hypothesis: { schema_version: hypothesisSchema, revision_id: hypothesisRevisionId },
+      draft: { schema_version: draftSchema, revision_id: draftRevisionId },
+    }];
+  });
+}
+
+export async function projectCurrentCampaignDossiers(value: PipelineCurrentProducts | null) {
+  if (!value?.campaign_strategy || !value.campaign_pairs.length) return [];
+  const stageProduct = record(value.campaign_strategy);
+  const strategy = record(stageProduct.strategy ?? stageProduct) as AutonomousCampaignStrategy;
+  const dossiers = await Promise.all(value.campaign_pairs.map((pair) => projectCampaignPairDossier({
+    strategy,
+    result: { status: "COMPLETED", pair: structuredClone(pair) as unknown as CompiledCampaignPair },
+  })));
+  return dossiers.every((dossier): dossier is OwnerCampaignPairDossier => dossier !== null) ? dossiers : [];
+}
+
 function stageLabel(stageId: PipelineStageId) {
   return PIPELINE_STAGES.find((stage) => stage.id === stageId)?.label ?? stageId;
 }
@@ -246,6 +401,8 @@ export function projectOwnerPipeline(
   currentGoal: CurrentGoal | null = null,
   provenance: OwnerResultProvenance | null = null,
   campaignDossier: OwnerCampaignPairDossier | null = null,
+  currentProducts: OwnerPipelineProjection["currentProducts"] = null,
+  campaignDossiers: OwnerCampaignPairDossier[] = campaignDossier ? [campaignDossier] : [],
 ): OwnerPipelineProjection {
   if (!run) {
     return {
@@ -268,6 +425,8 @@ export function projectOwnerPipeline(
       })),
       return: null,
       campaignDossier,
+      campaignDossiers,
+      currentProducts,
       goalFormation: currentGoal ? {
         status: "VERIFIED",
         versionLabel: `Версия ${currentGoal.revision.version}`,
@@ -351,6 +510,8 @@ export function projectOwnerPipeline(
         }
       : null,
     campaignDossier,
+    campaignDossiers,
+    currentProducts,
     goalFormation,
     canStart: run.status !== "ACTIVE",
     canStop: run.status === "ACTIVE",
@@ -361,23 +522,43 @@ export class OwnerPipelineController {
   private readonly orchestrator: PipelineOrchestrator;
   private readonly goalStore: CurrentGoalStore | null;
   private readonly stageAgents: ProductionStageAgents | null;
+  private readonly productStore: PipelineCurrentProductStore | null;
   private readonly now: () => string;
 
   constructor(
     store: PipelineRunStore,
-    input: { now?: () => string; newRunId?: () => string; goalStore?: CurrentGoalStore; stageAgents?: ProductionStageAgents } = {},
+    input: {
+      now?: () => string;
+      newRunId?: () => string;
+      goalStore?: CurrentGoalStore;
+      stageAgents?: ProductionStageAgents;
+      productStore?: PipelineCurrentProductStore;
+    } = {},
   ) {
     this.orchestrator = new PipelineOrchestrator({ store, ...input });
     this.goalStore = input.goalStore ?? null;
     this.stageAgents = input.stageAgents ?? null;
+    this.productStore = input.productStore ?? null;
     this.now = input.now ?? (() => new Date().toISOString());
   }
 
   private async project(run: PipelineRunState | null, ownerKey = run?.owner_key) {
-    const currentGoal = ownerKey ? await this.goalStore?.loadCurrent(ownerKey) ?? null : null;
-    if (!run) return projectOwnerPipeline(null, currentGoal);
-    const provenance = await projectCurrentResultProvenance(run, await this.orchestrator.audit(run.run_id));
-    return projectOwnerPipeline(run, currentGoal, provenance);
+    const [currentGoal, products] = ownerKey ? await Promise.all([
+      this.goalStore?.loadCurrent(ownerKey) ?? null,
+      this.productStore?.loadCurrent(ownerKey) ?? null,
+    ]) : [null, null];
+    const scopedProducts = !run || products?.run_id === run.run_id ? products : null;
+    const [currentProducts, campaignDossiers] = await Promise.all([
+      Promise.resolve(currentProductProjection(scopedProducts)),
+      projectCurrentCampaignDossiers(scopedProducts),
+    ]);
+    if (!run) return projectOwnerPipeline(null, currentGoal, null, campaignDossiers[0] ?? null, currentProducts, campaignDossiers);
+    const provenance = await projectCurrentResultProvenance(
+      run,
+      await this.orchestrator.audit(run.run_id),
+      currentPairReferences(scopedProducts),
+    );
+    return projectOwnerPipeline(run, currentGoal, provenance, campaignDossiers[0] ?? null, currentProducts, campaignDossiers);
   }
 
   async current(ownerKey: string) {
@@ -420,6 +601,42 @@ export class OwnerPipelineController {
     return this.project(await this.orchestrator.start(ownerKey, versions), ownerKey);
   }
 
+  async execute(ownerKey: string, runId: string, view: PipelineHistoricalView) {
+    if (!this.stageAgents) throw new Error("Production stage agents are not configured; deterministic substitution is forbidden.");
+    const [started, currentGoal] = await Promise.all([
+      this.orchestrator.current(ownerKey),
+      this.goalStore?.loadCurrent(ownerKey) ?? null,
+    ]);
+    if (!started || started.run_id !== runId) throw new Error("Активный запуск изменился до начала исполнения.");
+    if (started.status !== "ACTIVE") return this.project(started, ownerKey);
+    try {
+      const completed = await executeProductionPipeline({
+        orchestrator: this.orchestrator,
+        run: started,
+        view,
+        currentGoal,
+        agents: this.stageAgents,
+        onVerifiedProduct: this.productStore
+          ? ({ run, product }) => saveVerifiedPipelineProduct({ store: this.productStore!, run, product, recordedAt: this.now() }).then(() => undefined)
+          : undefined,
+      });
+      await this.persistFormedGoal(ownerKey, completed);
+      return this.project(completed, ownerKey);
+    } catch (error) {
+      const current = await this.orchestrator.current(ownerKey);
+      if (current?.run_id === runId && current.status === "STOPPED") return this.project(current, ownerKey);
+      if (current?.run_id === runId && current.status === "ACTIVE") {
+        await this.orchestrator.stop({
+          run_id: current.run_id,
+          expected_version: current.version,
+          reason_code: "PRODUCTION_EXECUTION_FAILED",
+          reason: "Production executor безопасно остановлен до внешней записи.",
+        });
+      }
+      throw error;
+    }
+  }
+
   async startAndExecute(ownerKey: string, view: PipelineHistoricalView) {
     if (!this.stageAgents) throw new Error("Production stage agents are not configured; deterministic substitution is forbidden.");
     const { versions, currentGoal } = await this.frozenInputVersions(ownerKey, view);
@@ -431,6 +648,9 @@ export class OwnerPipelineController {
         view,
         currentGoal,
         agents: this.stageAgents,
+        onVerifiedProduct: this.productStore
+          ? ({ run, product }) => saveVerifiedPipelineProduct({ store: this.productStore!, run, product, recordedAt: this.now() }).then(() => undefined)
+          : undefined,
       });
       await this.persistFormedGoal(ownerKey, completed);
       return this.project(completed, ownerKey);
@@ -449,9 +669,16 @@ export class OwnerPipelineController {
   }
 
   async explain(ownerKey: string, input: { question: unknown; pairKey?: unknown }): Promise<OwnerResultExplanation> {
-    const run = await this.orchestrator.current(ownerKey);
+    const [run, products] = await Promise.all([
+      this.orchestrator.current(ownerKey),
+      this.productStore?.loadCurrent(ownerKey) ?? null,
+    ]);
     if (!run) throw new Error("Текущий запуск ещё не создан.");
-    const provenance = await projectCurrentResultProvenance(run, await this.orchestrator.audit(run.run_id));
+    const provenance = await projectCurrentResultProvenance(
+      run,
+      await this.orchestrator.audit(run.run_id),
+      currentPairReferences(products?.run_id === run.run_id ? products : null),
+    );
     return explainCurrentResultQuestion(provenance, input.question, input.pairKey);
   }
 
@@ -489,6 +716,45 @@ export class OwnerPipelineController {
       throw new Error("Текущая Цель изменилась. Обновите Dashboard.");
     }
     return this.project(run, ownerKey);
+  }
+
+  async correctStrategy(ownerKey: string, input: {
+    expectedStateRevision: number;
+    expectedStrategyRevisionId: string;
+    changes: CampaignStrategyCorrectionChanges;
+  }) {
+    if (!this.productStore || !this.stageAgents) throw new Error("Текущая Strategy недоступна для production correction.");
+    const run = await this.orchestrator.current(ownerKey);
+    if (run?.status === "ACTIVE") throw new Error("Остановите активный запуск перед исправлением Strategy.");
+    const result = await saveCurrentPipelineStrategyCorrection({
+      store: this.productStore,
+      ownerKey,
+      runStatus: run?.status ?? "NOT_STARTED",
+      expectedStateRevision: input.expectedStateRevision,
+      expectedStrategyRevisionId: input.expectedStrategyRevisionId,
+      changes: input.changes,
+      model: this.stageAgents.strategy_correction_model,
+      correctedAt: this.now(),
+    });
+    return { result, pipeline: await this.project(run, ownerKey) };
+  }
+
+  async editCampaignPair(ownerKey: string, input: {
+    expectedStateRevision: number;
+    edit: CampaignPairEditRequest;
+  }) {
+    if (!this.productStore) throw new Error("Текущие Campaign pairs недоступны для production edit.");
+    const run = await this.orchestrator.current(ownerKey);
+    if (run?.status === "ACTIVE") throw new Error("Остановите активный запуск перед исправлением Campaign pair.");
+    const result = await saveCurrentPipelineCampaignPairEdit({
+      store: this.productStore,
+      ownerKey,
+      runStatus: run?.status ?? "NOT_STARTED",
+      expectedStateRevision: input.expectedStateRevision,
+      edit: input.edit,
+      editedAt: this.now(),
+    });
+    return { result, pipeline: await this.project(run, ownerKey) };
   }
 
   async stop(ownerKey: string, input: { runId: string; expectedVersion: number }) {
