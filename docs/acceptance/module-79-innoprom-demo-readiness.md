@@ -13,9 +13,10 @@
 ## Что проверено
 
 1. Владелец прошёл через production Dashboard `http://127.0.0.1:19243/` от бизнес-входов до Campaign Draft и Publication Review.
-2. Strategy подтверждена в точной версии 52:
+2. Strategy в точной версии 52 принята Strategy Agent без повторного owner approval:
    - период: `2027-01-15` — `2027-06-30`;
-   - недельный бюджет: `30 000 ₽`.
+   - недельный бюджет: `30 000 ₽`;
+   - принятие не даёт authority на публикацию или расходы.
 3. Campaign Draft сохраняет:
    - название: «Участие со стендом в выставке ИННОПРОМ»;
    - бюджет теста: `30 000 ₽`;
@@ -30,6 +31,7 @@
 5. Посадочная проверена read-only изолированным Playwright bridge для desktop и mobile; оба scope имеют статус «Готово».
 6. Direct и Metrika использовались только для чтения. Внешние записи, публикация, показы и расходы отсутствуют.
 7. Dashboard после перезапроса возвращает `GET /api/p0 → 200`, показывает этап Publication Review и не пишет ошибок в browser console.
+8. Целевой production run через Dashboard фактически вызвал Goal Agent, Evidence Analyst, Strategy Agent и Campaign Design Agent. Именованные `AGENT` events сохранены в audit trail; Campaign Design прошёл `CAMPAIGN_DESIGN_AGENT_DIRECT_COMPILER_VERIFIED`; внешняя запись осталась запрещена.
 
 ## Подтверждённые границы
 
@@ -67,12 +69,13 @@
 ### Демонстрационный проход
 
 1. Открыть `http://127.0.0.1:19243/?stage=review`.
-2. Показать завершённые этапы «Цель кампании», «Сбор сведений», «Стратегия», «Кампании».
-3. На этапе «Проверка публикации» показать точный Campaign Draft, период, бюджет, посадочную и Auction Protocol.
-4. Показать provenance Wordstat: «Яндекс Wordstat · авторизованный интерфейс · headless Playwright».
-5. Показать desktop/mobile destination readiness.
-6. Показать честный measurement blocker и 7/9 preflight.
-7. Завершить демо без нажатия «Запустить», без изменения пакета и без попытки обхода заблокированных проверок.
+2. Раскрыть «Агенты и проверяемый след» и показать Goal Agent, Evidence Analyst, Strategy Agent и Campaign Design Agent с их работой, основанием и результатом.
+3. Показать завершённые этапы «Цель кампании», «Сбор сведений», «Стратегия», «Кампании».
+4. На этапе «Проверка публикации» показать точный Campaign Draft, период, бюджет, посадочную и Auction Protocol.
+5. Показать provenance Wordstat: «Яндекс Wordstat · авторизованный интерфейс · headless Playwright».
+6. Показать desktop/mobile destination readiness.
+7. Показать честный measurement blocker и 7/9 preflight.
+8. Завершить демо без принятия пакета, без изменения пакета и без попытки обхода заблокированных проверок. Кнопка «Запустить» запускает только новый внутренний zero-write agent run; для короткого демо достаточно уже сохранённого проверяемого следа.
 
 ### Запрещённые действия
 

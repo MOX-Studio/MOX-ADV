@@ -794,9 +794,18 @@ function ResultProvenance({ provenance }: { provenance: NonNullable<PipelineProj
     }
   }
 
-  return <details className="owner-result-provenance">
+  return <details className="owner-result-provenance" open>
     <summary>{provenance.title}</summary>
     <p className="owner-result-safety">{provenance.safety}</p>
+    {provenance.agents.length > 0 && <section className="owner-result-agents" aria-label="Агенты текущего запуска">
+      <h3>Агенты текущего запуска</h3>
+      {provenance.agents.map((agent, index) => <article key={`${agent.name}-${agent.stage}-${index}`}>
+        <header><strong>{agent.name}</strong><span>{agent.stage}</span></header>
+        <p><b>Работа:</b> {agent.work}.</p>
+        <p><b>Результат:</b> {agent.outcome}</p>
+        <p><b>Основание:</b> {agent.evidenceBasis.length ? agent.evidenceBasis.join("; ") : "точные входы текущего этапа"}.</p>
+      </article>)}
+    </section>}
     {provenance.pairs.length > 0 && <section className="owner-result-pairs" aria-label="Текущие проверенные пары">
       <h3>Текущие пары результата</h3>
       {provenance.pairs.map((pair) => <article key={pair.key}>

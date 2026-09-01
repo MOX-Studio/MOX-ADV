@@ -198,6 +198,7 @@ export const P0_CONTEXT_SCHEMA = "p0-context-v2";
 const P0_LEGACY_CONTEXT_SCHEMA = "p0-context-v1";
 export const P0_CONTEXT_PREFLIGHT_MAX_AGE_MS = 5 * 60_000;
 export const P0_AGENT_POLICY_VERSION = "p0-agent-policy-v12";
+export const P0_STRATEGY_AGENT_ACCEPTANCE = Symbol("P0_STRATEGY_AGENT_ACCEPTANCE");
 export const P0_AGENT_OBJECTIVE: P0AgentApplicationContract["objective"] = {
   kind: "COORDINATE_OWNER_JOURNEY",
   statement: "Coordinate bounded safe research, queued reads, approved dispatch, and local correction preparation for the current P0 owner journey, preserving application truth and stopping only at a Critical Decision or Material Uncertainty.",
@@ -2851,7 +2852,10 @@ async function migrateDocument(raw: Record<string, unknown>, revision: number, u
           confirmedAt: String(confirmedStrategy.approved_at ?? updatedAt),
           approvalCommand: confirmedStrategy.approval_command === "CONFIRM_EXACT_CAMPAIGN_STRATEGY"
             ? "CONFIRM_EXACT_CAMPAIGN_STRATEGY"
-            : "APPROVE_CAMPAIGN_STRATEGY",
+            : confirmedStrategy.approval_command === "AGENT_ACCEPT_CAMPAIGN_STRATEGY"
+              ? "AGENT_ACCEPT_CAMPAIGN_STRATEGY"
+              : "APPROVE_CAMPAIGN_STRATEGY",
+          acceptedBy: confirmedStrategy.approved_by === "STRATEGY_AGENT" ? "STRATEGY_AGENT" : "OWNER",
         });
         changed = true;
       }
@@ -5154,6 +5158,7 @@ export class P0Application {
       }
       state.strategy_review = rejectCampaignStrategyReview(state.strategy_review, this.adapters.now());
     } else if (action === "approve_strategy" || action === "confirm_strategy_review") {
+      const strategyAgentAcceptance = payload.agent_acceptance === P0_STRATEGY_AGENT_ACCEPTANCE;
       const exactReview = action === "confirm_strategy_review" ? state.strategy_review : null;
       if (action === "approve_strategy" && state.strategy_review) {
         fail("P0_STRATEGY_REVIEW_CONFIRMATION_REQUIRED", "Подготовленную версию нужно подтвердить на отдельном шаге проверки.");
@@ -5266,17 +5271,23 @@ export class P0Application {
                 material_fingerprint: materialFingerprint,
                 lineage: { previous_strategy_revision_id: existingStrategy ? String(existingStrategy.strategy_revision_id ?? "") || null : null },
               };
-          const approvalCommand = exactReview ? "CONFIRM_EXACT_CAMPAIGN_STRATEGY" as const : "APPROVE_CAMPAIGN_STRATEGY" as const;
+          const approvalCommand = strategyAgentAcceptance
+            ? "AGENT_ACCEPT_CAMPAIGN_STRATEGY" as const
+            : exactReview
+              ? "CONFIRM_EXACT_CAMPAIGN_STRATEGY" as const
+              : "APPROVE_CAMPAIGN_STRATEGY" as const;
+          const acceptedBy = strategyAgentAcceptance ? "STRATEGY_AGENT" as const : "OWNER" as const;
           state.strategy = {
             ...candidate,
             approved_at: approvedAt,
-            approved_by: "OWNER",
+            approved_by: acceptedBy,
             approval_command: approvalCommand,
             owner_confirmation: await buildCampaignStrategyOwnerConfirmation({
               candidate,
               reviewId: exactReview?.review_id ?? null,
               confirmedAt: approvedAt,
               approvalCommand,
+              acceptedBy,
             }),
           };
           state.strategy_review = null;

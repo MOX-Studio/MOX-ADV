@@ -170,7 +170,7 @@ export type CampaignStrategyOwnerConfirmation = {
   decision: "APPROVED";
   review_id: string | null;
   confirmed_at: string;
-  confirmed_by: "OWNER";
+  confirmed_by: "OWNER" | "STRATEGY_AGENT";
   exact_lineage: {
     context_revision_id: string;
     business_model_revision_id: string;
@@ -183,8 +183,8 @@ export type CampaignStrategyOwnerConfirmation = {
 
 export type CampaignStrategyRevision = CampaignStrategyCandidate & {
   approved_at: string;
-  approved_by: "OWNER";
-  approval_command: "APPROVE_CAMPAIGN_STRATEGY" | "CONFIRM_EXACT_CAMPAIGN_STRATEGY";
+  approved_by: "OWNER" | "STRATEGY_AGENT";
+  approval_command: "APPROVE_CAMPAIGN_STRATEGY" | "CONFIRM_EXACT_CAMPAIGN_STRATEGY" | "AGENT_ACCEPT_CAMPAIGN_STRATEGY";
   owner_confirmation: CampaignStrategyOwnerConfirmation;
 };
 
@@ -695,6 +695,7 @@ export async function buildCampaignStrategyOwnerConfirmation(input: {
   reviewId: string | null;
   confirmedAt: string;
   approvalCommand: CampaignStrategyRevision["approval_command"];
+  acceptedBy?: CampaignStrategyRevision["approved_by"];
 }): Promise<CampaignStrategyOwnerConfirmation> {
   const exactLineage = {
     context_revision_id: input.candidate.context_revision_id,
@@ -704,11 +705,12 @@ export async function buildCampaignStrategyOwnerConfirmation(input: {
     strategy_revision_id: input.candidate.strategy_revision_id,
     strategy_material_fingerprint: input.candidate.material_fingerprint,
   };
+  const acceptedBy = input.acceptedBy ?? "OWNER";
   const identity = {
     decision: "APPROVED" as const,
     review_id: input.reviewId,
     confirmed_at: input.confirmedAt,
-    confirmed_by: "OWNER" as const,
+    confirmed_by: acceptedBy,
     approval_command: input.approvalCommand,
     exact_lineage: exactLineage,
   };
@@ -719,7 +721,7 @@ export async function buildCampaignStrategyOwnerConfirmation(input: {
     decision: "APPROVED",
     review_id: input.reviewId,
     confirmed_at: input.confirmedAt,
-    confirmed_by: "OWNER",
+    confirmed_by: acceptedBy,
     exact_lineage: exactLineage,
   };
 }
@@ -735,6 +737,7 @@ export async function verifyCampaignStrategyOwnerConfirmation(strategy: Campaign
     reviewId: confirmation.review_id,
     confirmedAt: confirmation.confirmed_at,
     approvalCommand: strategy.approval_command,
+    acceptedBy: strategy.approved_by,
   });
   return JSON.stringify(confirmation) === JSON.stringify(expected);
 }

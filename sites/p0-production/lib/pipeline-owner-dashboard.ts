@@ -15,6 +15,7 @@ import {
   type OwnerResultProvenance,
 } from "./pipeline-result-explanation.ts";
 import { executeProductionPipeline } from "./pipeline-production-executor.ts";
+import type { ProductionStageAgents } from "./production-stage-agents.ts";
 import {
   PIPELINE_INPUT_VERSIONS_SCHEMA,
   PIPELINE_STAGES,
@@ -359,14 +360,16 @@ export function projectOwnerPipeline(
 export class OwnerPipelineController {
   private readonly orchestrator: PipelineOrchestrator;
   private readonly goalStore: CurrentGoalStore | null;
+  private readonly stageAgents: ProductionStageAgents | null;
   private readonly now: () => string;
 
   constructor(
     store: PipelineRunStore,
-    input: { now?: () => string; newRunId?: () => string; goalStore?: CurrentGoalStore } = {},
+    input: { now?: () => string; newRunId?: () => string; goalStore?: CurrentGoalStore; stageAgents?: ProductionStageAgents } = {},
   ) {
     this.orchestrator = new PipelineOrchestrator({ store, ...input });
     this.goalStore = input.goalStore ?? null;
+    this.stageAgents = input.stageAgents ?? null;
     this.now = input.now ?? (() => new Date().toISOString());
   }
 
@@ -418,6 +421,7 @@ export class OwnerPipelineController {
   }
 
   async startAndExecute(ownerKey: string, view: PipelineHistoricalView) {
+    if (!this.stageAgents) throw new Error("Production stage agents are not configured; deterministic substitution is forbidden.");
     const { versions, currentGoal } = await this.frozenInputVersions(ownerKey, view);
     const started = await this.orchestrator.start(ownerKey, versions);
     try {
@@ -426,6 +430,7 @@ export class OwnerPipelineController {
         run: started,
         view,
         currentGoal,
+        agents: this.stageAgents,
       });
       await this.persistFormedGoal(ownerKey, completed);
       return this.project(completed, ownerKey);

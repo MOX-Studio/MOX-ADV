@@ -789,6 +789,7 @@ export class PipelineOrchestrator {
     run_id: string;
     expected_version: number;
     candidate: GoalCandidate;
+    actor?: PipelineAuditActor;
   }) {
     const current = await this.activeRun(input.run_id, input.expected_version, "CAMPAIGN_GOAL");
     const timestamp = this.now();
@@ -811,7 +812,7 @@ export class PipelineOrchestrator {
       revision_id: "1.0.0",
       digest: await pipelineDigest({ schema_version: "p0-goal-revision-v1", contract_version: "1.0.0" }),
     };
-    const actor: PipelineAuditActor = {
+    const actor: PipelineAuditActor = input.actor ?? {
       actor_id: "goal-revision-verifier",
       actor_type: "DETERMINISTIC_SERVICE",
       role: "GOAL_VALIDATOR",

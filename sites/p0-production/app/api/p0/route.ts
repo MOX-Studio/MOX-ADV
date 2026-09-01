@@ -3,6 +3,7 @@ import {
   operatorDiagnostics as productionOperatorDiagnostics,
   ownerOverview as productionOwnerOverview,
   ownerSnapshot as productionOwnerSnapshot,
+  productionPipelineStageAgents,
   recoverOwnerState as productionRecoverOwnerState,
   submitOwnerAction as productionSubmitOwnerAction,
   userKey,
@@ -48,6 +49,7 @@ function recoveryRequired() {
 function pipelineController() {
   return new OwnerPipelineController(new D1PipelineRunStore(env.DB), {
     goalStore: new D1CurrentGoalStore(env.DB),
+    stageAgents: productionPipelineStageAgents(),
   });
 }
 

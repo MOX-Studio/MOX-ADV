@@ -8,7 +8,7 @@ import {
   type PipelineVersionReference,
 } from "./pipeline-orchestrator.ts";
 
-const SENSITIVE_REFERENCE = /(oauth|token|secret|password|cookie|authorization|client[-_:]?login|counter[-_:]?id|goal[-_:]?id|campaign[-_:]?id|yandex|direct|metrika|provider|[\w.+-]+@[\w.-]+\.[a-z]{2,}|\+?\d[\d ()-]{8,}\d)/iu;
+const SENSITIVE_REFERENCE = /(^sha256:|oauth|token|secret|password|cookie|authorization|client[-_:]?login|counter[-_:]?id|goal[-_:]?id|campaign[-_:]?id|yandex|direct|metrika|provider|[\w.+-]+@[\w.-]+\.[a-z]{2,}|\+?\d[\d ()-]{8,}\d)/iu;
 const QUESTION_LIMIT = 1_000;
 
 export type OwnerVersionReference = {
@@ -39,10 +39,19 @@ export type OwnerCampaignPairProvenance = {
   draft: OwnerVersionReference;
 };
 
+export type OwnerStageAgent = {
+  name: string;
+  stage: string;
+  work: string;
+  outcome: string;
+  evidenceBasis: string[];
+};
+
 export type OwnerResultProvenance = {
-  title: "Как получен результат";
+  title: "Агенты и проверяемый след";
   safety: string;
   currentTask: string;
+  agents: OwnerStageAgent[];
   pairs: OwnerCampaignPairProvenance[];
   events: OwnerResultProvenanceEvent[];
   versions: {
@@ -71,6 +80,16 @@ const ACTOR_LABELS: Record<string, string> = {
   OWNER: "Владелец",
   AGENT: "Агент этапа",
   DETERMINISTIC_SERVICE: "Детерминированная проверка",
+};
+
+const ACTOR_ROLE_LABELS: Record<string, string> = {
+  GOAL_AGENT: "Goal Agent",
+  EVIDENCE_ANALYST: "Evidence Analyst",
+  STRATEGY_AGENT: "Strategy Agent",
+  CAMPAIGN_DESIGN_AGENT: "Campaign Design Agent",
+  PIPELINE_OWNER: "Владелец",
+  GOAL_VALIDATOR: "Проверка GoalRevision",
+  STAGE_EXECUTOR: "Проверка этапа",
 };
 
 const EVENT_STATUS: Record<PipelineAuditEvent["event_kind"], OwnerResultProvenanceEvent["status"]> = {
@@ -128,7 +147,9 @@ function projectEvent(event: PipelineAuditEvent): OwnerResultProvenanceEvent {
   return {
     stage: stageLabel(event.stage),
     task: TASK_BY_STAGE[event.stage],
-    executor: ACTOR_LABELS[event.actor.actor_type] ?? "Проверенный исполнитель",
+    executor: ACTOR_ROLE_LABELS[event.actor.role]
+      ?? ACTOR_LABELS[event.actor.actor_type]
+      ?? "Проверенный исполнитель",
     attempt: event.attempt,
     status: EVENT_STATUS[event.event_kind],
     inputs: event.inputs.map(ownerReference),
@@ -152,10 +173,26 @@ export async function projectCurrentResultProvenance(
 ): Promise<OwnerResultProvenance> {
   await verifyPipelineRunState(run);
   await verifyPipelineAuditTrail(audit, run);
+  const agentEvents = audit.filter((event) => event.actor.actor_type === "AGENT");
   return {
-    title: "Как получен результат",
+    title: "Агенты и проверяемый след",
     safety: "Показаны только проверяемые факты очищенного следа. Скрытое рассуждение, секреты, персональные данные, идентификаторы поставщика и технические дампы не включаются.",
     currentTask: TASK_BY_STAGE[run.current_stage],
+    agents: agentEvents.map((event) => ({
+      name: ACTOR_ROLE_LABELS[event.actor.role] ?? "Агент этапа",
+      stage: stageLabel(event.stage),
+      work: TASK_BY_STAGE[event.stage],
+      outcome: event.event_kind === "STAGE_VERIFIED" || event.event_kind === "RUN_COMPLETED"
+        ? event.handoff
+          ? `Результат проверен и передан на этап «${stageLabel(event.handoff.target_stage)}».`
+          : "Результат проверен."
+        : event.event_kind === "ATTEMPT_DISCARDED"
+          ? "Результат не прошёл проверку и не был сохранён как текущий."
+          : event.event_kind === "RUN_STOPPED"
+            ? "Работа безопасно остановлена до внешней записи."
+            : "Работа начата.",
+      evidenceBasis: event.evidence.map((reference) => `${versionKind(reference.schema_version)} · ${safeReferenceText(reference.revision_id)}`),
+    })),
     pairs: run.input_versions.campaign_pairs.map((pair, index) => ({
       key: `pair-${index + 1}`,
       label: `Пара ${index + 1}`,

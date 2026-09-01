@@ -5224,42 +5224,18 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
     }),
   });
   ownerResponses.push(projection);
-  assert.equal(projection.journey.currentStage, "strategy");
-  assert.equal(projection.primaryAction, null);
-  assert.equal(projection.campaignStrategy.ownerReview.status, "Готова к подтверждению");
+  assert.equal(projection.journey.currentStage, "campaigns");
+  assert.equal(projection.campaignStrategy.ownerReview.status, "Принята Strategy Agent");
   assert.equal(projection.campaignStrategy.ownerReview.summary.map((item) => item.label).join(","), "Цель,Бюджет,Измерение,Неопределённость");
   assert.equal(projection.campaignStrategy.ownerReview.decisions.length, STRATEGY_FIELD_ORDER.length);
-  assert.ok(projection.campaignStrategy.ownerReview.confirmHandle?.startsWith("act_"));
-  assert.ok(projection.campaignStrategy.ownerReview.rejectHandle?.startsWith("act_"));
-  assert.match(projection.campaignStrategy.ownerReview.exactBinding, /моделью бизнеса.+рекламным фокусом.+доказательств/iu);
-  const staleConfirmationHandle = projection.campaignStrategy.ownerReview.confirmHandle;
-
-  projection = await journey.submit(ownerKey, {
-    handle: projection.campaignStrategy.ownerReview.rejectHandle,
-    values: {},
-  });
-  ownerResponses.push(projection);
-  assert.equal(projection.journey.currentStage, "strategy");
-  assert.equal(projection.campaignStrategy.ownerReview.status, "Возвращена к редактированию");
-  assert.equal(projection.primaryAction.label, "Проверить исправленную стратегию");
-  await assert.rejects(
-    journey.submit(ownerKey, { handle: staleConfirmationHandle, values: {} }),
-    (error) => error instanceof P0ApplicationError && error.code === "P0_OWNER_ACTION_STALE",
-  );
-
-  projection = await journey.submit(ownerKey, {
-    handle: projection.primaryAction.handle,
-    values: values(projection),
-  });
-  ownerResponses.push(projection);
-  assert.equal(projection.campaignStrategy.ownerReview.status, "Готова к подтверждению");
-  projection = await journey.submit(ownerKey, {
-    handle: projection.campaignStrategy.ownerReview.confirmHandle,
-    values: {},
-  });
-  ownerResponses.push(projection);
-  assert.equal(projection.journey.currentStage, "campaigns");
-  assert.equal(projection.campaignStrategy.ownerReview.status, "Подтверждена");
+  assert.equal(projection.campaignStrategy.ownerReview.confirmHandle, null);
+  assert.equal(projection.campaignStrategy.ownerReview.rejectHandle, null);
+  assert.ok(projection.campaignStrategy.ownerReview.editorHandle?.startsWith("act_"));
+  assert.match(projection.campaignStrategy.ownerReview.exactBinding, /Strategy Agent.+модели бизнеса.+рекламному фокусу.+доказательств/iu);
+  const agentAcceptedStrategy = (await application.query(ownerKey)).state.strategy;
+  assert.equal(agentAcceptedStrategy.approved_by, "STRATEGY_AGENT");
+  assert.equal(agentAcceptedStrategy.approval_command, "AGENT_ACCEPT_CAMPAIGN_STRATEGY");
+  assert.equal(agentAcceptedStrategy.owner_confirmation.confirmed_by, "STRATEGY_AGENT");
   assert.ok(projection.campaignOptions.length >= 1);
   assert.match(projection.appliedPractice.practice, /качественный результат|проверяемую практику/iu);
   assert.match(projection.appliedPractice.limitation, /не обещание результата/iu);

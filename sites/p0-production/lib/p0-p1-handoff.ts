@@ -196,9 +196,9 @@ async function verifyStrategy(strategy: CampaignStrategyRevision, model: Busines
     || strategy.analytics_evidence_snapshot_id !== evidence.snapshot_id
     || !strategy.strategy_revision_id
     || !Array.isArray(strategy.answers)
-    || strategy.approved_by !== "OWNER"
-    || !["APPROVE_CAMPAIGN_STRATEGY", "CONFIRM_EXACT_CAMPAIGN_STRATEGY"].includes(strategy.approval_command)) return false;
-  if (strategy.approval_command === "CONFIRM_EXACT_CAMPAIGN_STRATEGY"
+    || !["OWNER", "STRATEGY_AGENT"].includes(strategy.approved_by)
+    || !["APPROVE_CAMPAIGN_STRATEGY", "CONFIRM_EXACT_CAMPAIGN_STRATEGY", "AGENT_ACCEPT_CAMPAIGN_STRATEGY"].includes(strategy.approval_command)) return false;
+  if (["CONFIRM_EXACT_CAMPAIGN_STRATEGY", "AGENT_ACCEPT_CAMPAIGN_STRATEGY"].includes(strategy.approval_command)
     && !await verifyCampaignStrategyOwnerConfirmation(strategy)) return false;
   const answers = Object.fromEntries(strategy.answers.map((answer) => [answer.field_id, answer.value]));
   return strategy.material_fingerprint === await strategyAnswersFingerprint(answers as never);
@@ -454,7 +454,7 @@ async function verifyAttempt(value: P0P1CampaignAttempt, admitted: boolean) {
     || !exactKeys(value.campaign_revision.business_shape, ["name", "product", "audience", "offer", "keyword_cluster"])
     || !exactKeys(value.lineage, ["strategy_revision_id", "strategy_material_fingerprint", "previous_strategy_revision_id", "business_model_revision_id", "business_model_material_fingerprint", "analytics_evidence"])
     || !exactKeys(value.lineage.analytics_evidence, ["schema_version", "contract_version", "snapshot_id", "as_of", "hashes"])
-    || !exactKeys(value.lineage.analytics_evidence.hashes, ["input_root_sha256", "sources_sha256", "claims_sha256", "evidence_sha256", "conflicts_sha256", "gaps_sha256", "domain_manifest_sha256", "competitor_matrix_sha256", "product_catalog_sha256", "focus_opportunities_sha256", "market_evidence_sha256"])
+    || !exactKeys(value.lineage.analytics_evidence.hashes, ["input_root_sha256", "sources_sha256", "claims_sha256", "evidence_sha256", "conflicts_sha256", "gaps_sha256", "domain_manifest_sha256", "competitor_matrix_sha256", "financial_competitor_intelligence_sha256", "product_catalog_sha256", "focus_opportunities_sha256", "market_evidence_sha256"])
     || !exactKeys(value.final_state, ["schema_version", "state_evidence_id", "observed_at", "creation", "moderation", "serving", "supported_graph"]) 
     || value.campaign_revision.schema_version !== CAMPAIGN_REVISION_SCHEMA
     || value.final_state.schema_version !== STATE_EVIDENCE_SCHEMA

@@ -1,8 +1,5 @@
 import type { CurrentGoal } from "./goal-revision-lifecycle.ts";
-import {
-  GOAL_CANDIDATE_SCHEMA,
-  type GoalCandidate,
-} from "./goal-revision.ts";
+import type { ProductionStageAgents } from "./production-stage-agents.ts";
 import {
   PipelineOrchestrator,
   pipelineDigest,
@@ -39,16 +36,6 @@ function record(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function text(value: unknown, maximum = 1_000) {
-  return String(value ?? "").normalize("NFKC").replace(/\s+/gu, " ").trim().slice(0, maximum);
-}
-
-function required(value: unknown, code: string, message: string) {
-  const normalized = text(value);
-  if (!normalized) throw new ProductionPipelineExecutionError(code, message);
-  return normalized;
-}
-
 function exactReference(
   value: PipelineVersionReference | null,
   code: string,
@@ -56,74 +43,6 @@ function exactReference(
 ): PipelineVersionReference {
   if (!value) throw new ProductionPipelineExecutionError(code, message);
   return structuredClone(value);
-}
-
-function currentGoalCandidate(
-  view: ProductionHistoricalView,
-  currentGoal: CurrentGoal | null,
-): GoalCandidate {
-  if (currentGoal) {
-    return {
-      schema_version: GOAL_CANDIDATE_SCHEMA,
-      desired_outcome: currentGoal.revision.desired_outcome,
-      qualified_action: currentGoal.revision.qualified_action,
-      used_input_ids: ["priority_goal_revision"],
-      provenance: [{
-        supports: "DESIRED_OUTCOME",
-        input_id: "priority_goal_revision",
-        locator: "goal_revision.desired_outcome",
-        evidence: "Текущая проверенная GoalRevision содержит желаемый бизнес-результат.",
-      }, {
-        supports: "QUALIFIED_ACTION",
-        input_id: "priority_goal_revision",
-        locator: "goal_revision.qualified_action",
-        evidence: "Текущая проверенная GoalRevision содержит квалифицированное действие.",
-      }],
-      known_constraints: currentGoal.revision.known_constraints.map((item) => ({
-        constraint: item.constraint,
-        input_ids: ["priority_goal_revision"],
-      })),
-      material_ambiguity: null,
-    };
-  }
-
-  const state = record(view.state);
-  const context = record(state.context_state);
-  const decision = record(context.business_goal_decision);
-  const model = record(state.business_model);
-  const desiredOutcome = required(
-    decision.value,
-    "PRODUCTION_GOAL_MISSING",
-    "Новый production-запуск требует подтверждённую владельцем бизнес-цель.",
-  );
-  const qualifiedAction = required(
-    model.qualified_result || model.qualified_outcome,
-    "PRODUCTION_QUALIFIED_ACTION_MISSING",
-    "Новый production-запуск требует подтверждённый квалифицированный результат.",
-  );
-  const constraints = [model.exclusions, model.key_constraints]
-    .map((item) => text(item))
-    .filter(Boolean)
-    .map((constraint) => ({ constraint, input_ids: ["business_input"] }));
-  return {
-    schema_version: GOAL_CANDIDATE_SCHEMA,
-    desired_outcome: desiredOutcome,
-    qualified_action: qualifiedAction,
-    used_input_ids: ["business_input"],
-    provenance: [{
-      supports: "DESIRED_OUTCOME",
-      input_id: "business_input",
-      locator: "context_state.business_goal_decision.value",
-      evidence: "Сохранённое решение владельца задаёт текущую бизнес-цель.",
-    }, {
-      supports: "QUALIFIED_ACTION",
-      input_id: "business_input",
-      locator: "business_model.qualified_result",
-      evidence: "Сохранённая модель бизнеса задаёт критерий квалифицированного результата.",
-    }],
-    known_constraints: constraints,
-    material_ambiguity: null,
-  };
 }
 
 async function schemaReference(name: string): Promise<PipelineVersionReference> {
@@ -154,12 +73,10 @@ async function productionPrerequisites(
   view: ProductionHistoricalView,
 ): Promise<ProductionPrerequisites> {
   const state = record(view.state);
-  const strategyState = record(state.strategy);
-  const ownerConfirmation = record(strategyState.owner_confirmation);
-  if (ownerConfirmation.decision !== "APPROVED") {
+  if (!Object.keys(record(state.strategy)).length) {
     throw new ProductionPipelineExecutionError(
-      "PRODUCTION_STRATEGY_NOT_CONFIRMED",
-      "Production Pipeline требует точную Campaign Strategy, подтверждённую владельцем.",
+      "PRODUCTION_STRATEGY_MISSING",
+      "Production Pipeline требует одну текущую Campaign Strategy для автономной проверки Strategy Agent.",
     );
   }
   if (state.external_write_intent || state.package_execution || state.campaign) {
@@ -200,9 +117,11 @@ async function verifiedAttempt(input: {
   output: PipelineVersionReference;
   checkId: string;
   schemaName: string;
+  actor?: PipelineVerifiedAttempt["actor"];
+  schema?: PipelineVersionReference;
 }): Promise<PipelineVerifiedAttempt> {
   return {
-    actor: {
+    actor: input.actor ?? {
       actor_id: `production-${input.stage.toLowerCase()}-verifier`,
       actor_type: "DETERMINISTIC_SERVICE",
       role: "STAGE_EXECUTOR",
@@ -215,7 +134,7 @@ async function verifiedAttempt(input: {
       status: "PASSED",
       policy: structuredClone(input.run.input_versions.pipeline_policy),
     }],
-    schemas: [await schemaReference(input.schemaName)],
+    schemas: [input.schema ?? await schemaReference(input.schemaName)],
     policies: [structuredClone(input.run.input_versions.pipeline_policy)],
     campaign_playbook: structuredClone(input.run.input_versions.campaign_playbook),
   };
@@ -231,6 +150,7 @@ export async function executeProductionPipeline(input: {
   run: PipelineRunState;
   view: ProductionHistoricalView;
   currentGoal?: CurrentGoal | null;
+  agents: ProductionStageAgents;
 }) {
   if (input.run.status !== "ACTIVE" || input.run.current_stage !== "CAMPAIGN_GOAL") {
     throw new ProductionPipelineExecutionError(
@@ -239,10 +159,16 @@ export async function executeProductionPipeline(input: {
     );
   }
   const prerequisites = await productionPrerequisites(input.run, input.view);
+  const goalAgent = await input.agents.formGoal({
+    run: input.run,
+    view: input.view,
+    currentGoal: input.currentGoal ?? null,
+  });
   let run = await input.orchestrator.recordGoalCandidate({
     run_id: input.run.run_id,
     expected_version: input.run.version,
-    candidate: currentGoalCandidate(input.view, input.currentGoal ?? null),
+    candidate: goalAgent.candidate,
+    actor: goalAgent.actor,
   });
   if (run.goal_formation.status !== "VERIFIED") {
     throw new ProductionPipelineExecutionError(
@@ -256,54 +182,81 @@ export async function executeProductionPipeline(input: {
     digest: run.goal_formation.revision.digest,
   };
 
+  const evidenceAgent = await input.agents.analyzeEvidence({
+    run,
+    view: input.view,
+    goal: goalReference,
+    evidence: prerequisites.evidence,
+  });
   run = await input.orchestrator.advance({
     run_id: run.run_id,
     expected_version: run.version,
     source_stage: "EVIDENCE_COLLECTION",
     reason_code: "PRODUCTION_EVIDENCE_VERIFIED",
-    reason: "Текущий неизменяемый Analytics Evidence Snapshot получен production-коннекторами и прошёл проверку P0Application.",
+    reason: evidenceAgent.summary,
     attempt: await verifiedAttempt({
       run,
       stage: "EVIDENCE_COLLECTION",
       inputs: [goalReference, run.input_versions.business_input],
-      evidence: [prerequisites.evidence],
-      output: prerequisites.evidence,
-      checkId: "EVIDENCE_REFERENCE_FROZEN",
+      evidence: evidenceAgent.evidence,
+      output: evidenceAgent.output,
+      checkId: evidenceAgent.check_id,
       schemaName: "analytics-evidence-snapshot",
+      actor: evidenceAgent.actor,
+      schema: evidenceAgent.schema,
     }),
   });
 
+  const strategyAgent = await input.agents.formStrategy({
+    run,
+    view: input.view,
+    goal: goalReference,
+    evidence: prerequisites.evidence,
+    strategy: prerequisites.strategy,
+  });
   run = await input.orchestrator.advance({
     run_id: run.run_id,
     expected_version: run.version,
     source_stage: "STRATEGY",
     reason_code: "PRODUCTION_STRATEGY_VERIFIED",
-    reason: "Текущая Campaign Strategy подтверждена владельцем и связана с точными Goal и Evidence revisions.",
+    reason: strategyAgent.summary,
     attempt: await verifiedAttempt({
       run,
       stage: "STRATEGY",
       inputs: [goalReference, prerequisites.evidence],
-      evidence: [prerequisites.evidence],
-      output: prerequisites.strategy,
-      checkId: "STRATEGY_OWNER_CONFIRMATION_VERIFIED",
+      evidence: strategyAgent.evidence,
+      output: strategyAgent.output,
+      checkId: strategyAgent.check_id,
       schemaName: "campaign-strategy-revision",
+      actor: strategyAgent.actor,
+      schema: strategyAgent.schema,
     }),
   });
 
+  const designAgent = await input.agents.designCampaigns({
+    run,
+    view: input.view,
+    autonomousStrategy: strategyAgent.autonomous_strategy,
+    strategy: prerequisites.strategy,
+    evidence: prerequisites.evidence,
+    pairSet: prerequisites.pairSet,
+  });
   run = await input.orchestrator.advance({
     run_id: run.run_id,
     expected_version: run.version,
     source_stage: "CAMPAIGNS",
     reason_code: "PRODUCTION_CAMPAIGN_PAIRS_VERIFIED",
-    reason: "Текущие Campaign Hypothesis + Campaign Draft пары прошли authoritative typed hard checks и переданы на Publication Review без внешней записи.",
+    reason: designAgent.summary,
     attempt: await verifiedAttempt({
       run,
       stage: "CAMPAIGNS",
       inputs: [prerequisites.strategy, prerequisites.evidence],
-      evidence: [prerequisites.evidence, ...run.input_versions.campaign_pairs.map((pair) => pair.hypothesis)],
-      output: prerequisites.pairSet,
-      checkId: "CAMPAIGN_PAIR_CHECKS_PASSED",
+      evidence: designAgent.evidence,
+      output: designAgent.output,
+      checkId: designAgent.check_id,
       schemaName: "campaign-pair-set",
+      actor: designAgent.actor,
+      schema: designAgent.schema,
     }),
   });
 

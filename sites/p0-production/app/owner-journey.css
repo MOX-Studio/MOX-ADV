@@ -32,8 +32,13 @@
 .owner-result-provenance > section, .owner-result-provenance > form, .owner-result-provenance > p { margin: 12px 14px; }
 .owner-result-safety { padding: 10px 12px; border-left: 3px solid var(--owner-green); color: var(--owner-muted); background: var(--owner-soft); font-size: 8px; line-height: 1.5; }
 .owner-result-provenance h3 { margin: 0 0 8px; font-size: 10px; }
-.owner-result-pairs, .owner-result-events { display: grid; gap: 7px; }
-.owner-result-pairs article, .owner-result-events article { padding: 10px 11px; border: 1px solid var(--owner-line); border-radius: 7px; background: #fbfdfb; }
+.owner-result-agents, .owner-result-pairs, .owner-result-events { display: grid; gap: 7px; }
+.owner-result-agents article, .owner-result-pairs article, .owner-result-events article { padding: 10px 11px; border: 1px solid var(--owner-line); border-radius: 7px; background: #fbfdfb; }
+.owner-result-agents article { border-left: 3px solid var(--owner-green); }
+.owner-result-agents article header { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+.owner-result-agents article header strong { font-size: 9px; }
+.owner-result-agents article header span { color: var(--owner-green-dark); font-size: 7px; font-weight: 750; }
+.owner-result-agents article p { margin: 2px 0; color: var(--owner-muted); font-size: 7px; line-height: 1.5; overflow-wrap: anywhere; }
 .owner-result-pairs article { display: grid; grid-template-columns: auto 1fr 1fr; gap: 9px; align-items: center; }
 .owner-result-pairs article strong { font-size: 8px; }
 .owner-result-pairs article span, .owner-result-events article p, .owner-result-versions p { margin: 0; color: var(--owner-muted); font-size: 7px; line-height: 1.5; overflow-wrap: anywhere; }

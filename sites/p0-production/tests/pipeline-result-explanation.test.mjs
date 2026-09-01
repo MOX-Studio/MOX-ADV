@@ -79,8 +79,9 @@ function goalCandidate() {
 
 function attempt(stage, character, status = "PASSED") {
   const versions = inputVersions();
+  const roles = { EVIDENCE_COLLECTION: "EVIDENCE_ANALYST", STRATEGY: "STRATEGY_AGENT", CAMPAIGNS: "CAMPAIGN_DESIGN_AGENT" };
   return {
-    actor: { actor_id: `agent-${stage.toLowerCase()}`, actor_type: "AGENT", role: "STAGE_EXECUTOR" },
+    actor: { actor_id: `agent-${stage.toLowerCase()}`, actor_type: "AGENT", role: roles[stage] ?? "STAGE_EXECUTOR" },
     inputs: [reference(`${stage.toLowerCase()}-input`, character)],
     evidence: [reference(`${stage.toLowerCase()}-evidence`, character)],
     output: reference(`${stage.toLowerCase()}-output`, character),
@@ -128,7 +129,12 @@ async function currentResult() {
     now: () => new Date(Date.parse("2026-09-01T10:00:00.000Z") + tick++ * 1_000).toISOString(),
   });
   let run = await orchestrator.start("owner", inputVersions());
-  run = await orchestrator.recordGoalCandidate({ run_id: run.run_id, expected_version: run.version, candidate: goalCandidate() });
+  run = await orchestrator.recordGoalCandidate({
+    run_id: run.run_id,
+    expected_version: run.version,
+    candidate: goalCandidate(),
+    actor: { actor_id: "goal-agent:model", actor_type: "AGENT", role: "GOAL_AGENT" },
+  });
   run = await orchestrator.retry({
     run_id: run.run_id,
     expected_version: run.version,
@@ -152,7 +158,9 @@ test("owner disclosure projects actor, task, inputs, evidence, checks, retry, ha
   const { run, audit } = await currentResult();
   const provenance = await projectCurrentResultProvenance(run, audit);
 
-  assert.equal(provenance.title, "Как получен результат");
+  assert.equal(provenance.title, "Агенты и проверяемый след");
+  assert.deepEqual(provenance.agents.map((agent) => agent.name), ["Goal Agent", "Evidence Analyst", "Evidence Analyst"]);
+  assert.ok(provenance.agents.every((agent) => agent.stage && agent.work && agent.outcome && agent.evidenceBasis.length));
   assert.equal(provenance.pairs.length, 1);
   assert.equal(provenance.pairs[0].hypothesis.revision, "Скрыто как чувствительный идентификатор");
   assert.equal(provenance.pairs[0].draft.revision, "draft-revision-7");
@@ -194,6 +202,9 @@ test("Dashboard contract exposes selected-pair provenance and a free-question co
   ]);
 
   assert.match(client, /<summary>\{provenance\.title\}<\/summary>/u);
+  assert.match(client, /Агенты текущего запуска/u);
+  assert.match(client, /agent\.name/u);
+  assert.match(client, /agent\.outcome/u);
   assert.match(client, /name="pair_key"/u);
   assert.match(client, /name="question"/u);
   assert.match(client, /Получить объяснение/u);

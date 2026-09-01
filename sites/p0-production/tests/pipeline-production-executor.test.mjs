@@ -101,6 +101,37 @@ function inputVersions() {
   };
 }
 
+function stageAgents() {
+  const actor = (role) => ({ actor_id: `production-${role.toLowerCase()}:bounded-stage-model`, actor_type: "AGENT", role });
+  const schema = (name, character) => ({ schema_version: name, revision_id: "1.0.0", digest: digest(character) });
+  return {
+    model_id: "bounded-stage-model",
+    async formGoal() {
+      return {
+        actor: actor("GOAL_AGENT"),
+        candidate: {
+          schema_version: "p0-goal-candidate-v1",
+          desired_outcome: "Получать квалифицированные заявки на участие со стендом",
+          qualified_action: "Представитель промышленной компании подтвердил интерес и готов обсудить участие",
+          used_input_ids: ["business_input"],
+          provenance: [{ supports: "DESIRED_OUTCOME", input_id: "business_input", locator: "business_goal_decision.value", evidence: "Exact saved owner goal." }, { supports: "QUALIFIED_ACTION", input_id: "business_input", locator: "business_model.qualified_result", evidence: "Exact saved qualified result." }],
+          known_constraints: [],
+          material_ambiguity: null,
+        },
+      };
+    },
+    async analyzeEvidence({ goal, evidence }) {
+      return { actor: actor("EVIDENCE_ANALYST"), output: evidence, evidence: [goal, evidence], check_id: "EVIDENCE_ANALYST_VERIFIED", schema: schema("p0-evidence-analyst-result-v1", "4"), summary: "Evidence Analyst verified the exact snapshot and explicit gaps." };
+    },
+    async formStrategy({ goal, evidence, strategy }) {
+      return { actor: actor("STRATEGY_AGENT"), output: strategy, evidence: [goal, evidence], check_id: "STRATEGY_AGENT_VERIFIED", schema: schema("p0-autonomous-campaign-strategy-v1", "5"), summary: "Strategy Agent formed and accepted the current evidence-linked Strategy." };
+    },
+    async designCampaigns({ strategy, evidence, pairSet }) {
+      return { actor: actor("CAMPAIGN_DESIGN_AGENT"), output: pairSet, evidence: [strategy, evidence], check_id: "CAMPAIGN_DESIGN_AGENT_VERIFIED", schema: schema("p0-campaign-design-agent-result-v1", "6"), summary: "Campaign Design Agent formed the exact finite current pair set." };
+    },
+  };
+}
+
 function historicalView() {
   return {
     revision: 42,
@@ -140,7 +171,7 @@ test("production executor seals real current artifacts through Publication Revie
     now: () => new Date(Date.parse("2026-08-31T12:00:00.000Z") + tick++ * 1_000).toISOString(),
   });
   const started = await orchestrator.start("owner", inputVersions());
-  const completed = await executeProductionPipeline({ orchestrator, run: started, view: historicalView() });
+  const completed = await executeProductionPipeline({ orchestrator, run: started, view: historicalView(), agents: stageAgents() });
 
   assert.equal(completed.status, "COMPLETED");
   assert.equal(completed.current_stage, "PUBLICATION_REVIEW");
@@ -167,30 +198,32 @@ test("production executor seals real current artifacts through Publication Revie
     "STRATEGY",
     "CAMPAIGNS",
   ]);
-  assert.equal(audit.slice(2).every((event) => event.actor.actor_type === "DETERMINISTIC_SERVICE"), true);
+  assert.deepEqual(audit.slice(1).map((event) => event.actor.role), [
+    "GOAL_AGENT",
+    "EVIDENCE_ANALYST",
+    "STRATEGY_AGENT",
+    "CAMPAIGN_DESIGN_AGENT",
+  ]);
+  assert.equal(audit.slice(1).every((event) => event.actor.actor_type === "AGENT"), true);
   assert.equal(audit.some((event) => JSON.stringify(event).match(/fixture|synthetic/iu)), false);
   assert.equal(audit.at(-1).output.reference.schema_version, "campaign-pair-set-v1");
   assert.deepEqual(audit.at(-1).evidence.map((item) => item.revision_id), [
+    "campaign-strategy-revision-revision-1",
     "analytics-evidence-snapshot-revision-1",
-    "campaign-hypothesis-revision-1",
   ]);
 });
 
-test("production executor refuses unconfirmed Strategy before recording any stage output", async () => {
+test("Strategy Agent accepts the current exact Strategy without a redundant owner approval", async () => {
   const store = new MemoryPipelineStore();
   const orchestrator = new PipelineOrchestrator({ store, newRunId: () => "production-pipeline-2" });
   const started = await orchestrator.start("owner", inputVersions());
   const view = historicalView();
   view.state.strategy.owner_confirmation.decision = "PENDING";
 
-  await assert.rejects(
-    executeProductionPipeline({ orchestrator, run: started, view }),
-    (error) => error instanceof ProductionPipelineExecutionError
-      && error.code === "PRODUCTION_STRATEGY_NOT_CONFIRMED",
-  );
-  const current = await orchestrator.current("owner");
-  assert.equal(current.current_stage, "CAMPAIGN_GOAL");
-  assert.equal((await orchestrator.audit(current.run_id)).length, 1);
+  const completed = await executeProductionPipeline({ orchestrator, run: started, view, agents: stageAgents() });
+  assert.equal(completed.current_stage, "PUBLICATION_REVIEW");
+  const audit = await orchestrator.audit(completed.run_id);
+  assert.equal(audit.find((event) => event.stage === "STRATEGY").actor.role, "STRATEGY_AGENT");
 });
 
 test("production executor refuses runs without a fully current Campaign Pair", async () => {
@@ -203,7 +236,7 @@ test("production executor refuses runs without a fully current Campaign Pair", a
   const started = await orchestrator.start("owner", versions);
 
   await assert.rejects(
-    executeProductionPipeline({ orchestrator, run: started, view: historicalView() }),
+    executeProductionPipeline({ orchestrator, run: started, view: historicalView(), agents: stageAgents() }),
     (error) => error instanceof ProductionPipelineExecutionError
       && error.code === "PRODUCTION_CAMPAIGN_PAIRS_NOT_CURRENT",
   );

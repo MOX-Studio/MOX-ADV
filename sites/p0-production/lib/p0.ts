@@ -62,6 +62,9 @@ import {
   ensureP0DirectAuditTables,
 } from "./p0-direct-audit-d1-store.ts";
 import { createP0ModelAdapter } from "./p0-model-provider.ts";
+import { ProductionMethodologyAgent } from "./methodology-agent.ts";
+import { createProductionStageAgents } from "./production-stage-agents.ts";
+import { BoundedStageAgentModel } from "./stage-agent-model.ts";
 import { resolveHostnameWithDnsJson } from "./public-dns.ts";
 import { researchPublicFirstPartySite } from "./site-research.ts";
 import { cleanText } from "./text.ts";
@@ -1522,6 +1525,26 @@ const P0_AGENT_BUDGETS = {
   max_cost_microusd: 100_000,
 } as const;
 
+function configuredModelAdapter() {
+  const runtime = runtimeEnv();
+  return createP0ModelAdapter({
+    provider: runtime.P0_AGENT_PROVIDER ?? "",
+    model: runtime.P0_AGENT_MODEL ?? "gpt-5-mini",
+    openaiApiKey: runtime.OPENAI_API_KEY ?? "",
+    codexBridgeUrl: runtime.P0_CODEX_BRIDGE_URL ?? "",
+    codexBridgeToken: runtime.P0_CODEX_BRIDGE_TOKEN ?? "",
+  }, fetch);
+}
+
+export function productionPipelineStageAgents() {
+  return createProductionStageAgents(new BoundedStageAgentModel(configuredModelAdapter()), now);
+}
+
+/** Out-of-band only: produces a governed candidate and has no Playbook activation or owner-run path. */
+export function productionMethodologyAgent() {
+  return new ProductionMethodologyAgent(new BoundedStageAgentModel(configuredModelAdapter()), now);
+}
+
 function productionAgentRuntime() {
   const runtime = runtimeEnv();
   return new P0AgentRuntime({
@@ -1530,13 +1553,7 @@ function productionAgentRuntime() {
       executeTool: (input) => application.executeAgentTool(input),
       evaluate: (input) => application.evaluateAgentObjective(input),
     },
-    model: createP0ModelAdapter({
-      provider: runtime.P0_AGENT_PROVIDER ?? "",
-      model: runtime.P0_AGENT_MODEL ?? "gpt-5-mini",
-      openaiApiKey: runtime.OPENAI_API_KEY ?? "",
-      codexBridgeUrl: runtime.P0_CODEX_BRIDGE_URL ?? "",
-      codexBridgeToken: runtime.P0_CODEX_BRIDGE_TOKEN ?? "",
-    }, fetch),
+    model: configuredModelAdapter(),
     store: new D1P0AgentRunStore(runtime.DB),
     now,
   });

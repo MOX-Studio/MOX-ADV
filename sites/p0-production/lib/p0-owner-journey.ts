@@ -1,6 +1,7 @@
 import {
   P0Application,
   P0ApplicationError,
+  P0_STRATEGY_AGENT_ACCEPTANCE,
 } from "./p0-application.ts";
 import {
   projectOwnerGoalInterview,
@@ -199,7 +200,7 @@ export type OwnerJourneyProjection = {
       consequences: string;
     };
     ownerReview: null | {
-      status: "Готова к подтверждению" | "Возвращена к редактированию" | "Подтверждена";
+      status: "Готова к подтверждению" | "Возвращена к редактированию" | "Подтверждена" | "Принята Strategy Agent";
       versionLabel: string;
       exactBinding: string;
       summary: Array<{ label: string; value: string; explanation: string }>;
@@ -1557,6 +1558,7 @@ async function campaignStrategyProjection(ownerKey: string, view: InternalView):
   });
   const gate = record(questionnaire.human_decision_gate);
   const approved = Boolean(state.strategy);
+  const acceptedByStrategyAgent = record(state.strategy).approved_by === "STRATEGY_AGENT";
   const review = state.strategy_review;
   const strategySource = state.strategy ?? review?.candidate ?? null;
   const strategyAnswers = new Map(list(record(strategySource).answers).map((value) => {
@@ -1565,9 +1567,11 @@ async function campaignStrategyProjection(ownerKey: string, view: InternalView):
   }));
   const reviewFields = list(questionnaire.fields).map(record);
   const ownerReview: NonNullable<OwnerJourneyProjection["campaignStrategy"]>["ownerReview"] = strategySource ? {
-    status: approved ? "Подтверждена" : review?.status === "CHANGES_REQUESTED" ? "Возвращена к редактированию" : "Готова к подтверждению",
+    status: approved ? acceptedByStrategyAgent ? "Принята Strategy Agent" : "Подтверждена" : review?.status === "CHANGES_REQUESTED" ? "Возвращена к редактированию" : "Готова к подтверждению",
     versionLabel: ownerStrategyVersionLabel(record(strategySource).strategy_revision_id),
-    exactBinding: "Эта версия одновременно связана с текущими моделью бизнеса, рекламным фокусом и снимком доказательств. Изменение любого из них отменяет подтверждение и снова закрывает переход к кампаниям.",
+    exactBinding: acceptedByStrategyAgent
+      ? "Strategy Agent принял эту версию по текущим модели бизнеса, рекламному фокусу и снимку доказательств. Существенная правка становится приоритетным входом и запускает повторную проверку."
+      : "Эта версия одновременно связана с текущими моделью бизнеса, рекламным фокусом и снимком доказательств. Изменение любого из них отменяет подтверждение и снова закрывает переход к кампаниям.",
     summary: [
       {
         label: "Цель",
@@ -1598,13 +1602,17 @@ async function campaignStrategyProjection(ownerKey: string, view: InternalView):
     })),
     alternatives: list(gate.alternatives).map((item) => ownerText(item)).filter(Boolean).length
       ? list(gate.alternatives).map((item) => ownerText(item)).filter(Boolean)
-      : ["Подтвердить точную показанную версию", "Вернуться к редактированию без открытия черновиков кампаний"],
+      : acceptedByStrategyAgent
+        ? ["Продолжить с принятой Strategy", "Изменить Strategy как приоритетный бизнес-вход"]
+        : ["Подтвердить точную показанную версию", "Вернуться к редактированию без открытия черновиков кампаний"],
     limitations: [...new Set([
       ...list(gate.evidence).map((item) => ownerText(item)),
       ...list(gate.consequences).map((item) => ownerText(item)),
       ownerText(economics.uncertainty, "", 600),
       ownerText(prelaunchCost.uncertainty, "", 600),
-      "Подтверждение стратегии не разрешает публикацию, показы или расходы.",
+      acceptedByStrategyAgent
+        ? "Принятие Strategy Agent не разрешает публикацию, показы или расходы."
+        : "Подтверждение стратегии не разрешает публикацию, показы или расходы.",
     ].filter(Boolean))].slice(0, 8),
     confirmHandle: review?.status === "REVIEW_REQUIRED" && allowed(view, "confirm_strategy_review")
       ? await strategyReviewActionHandle(ownerKey, view, "confirm")
@@ -2542,10 +2550,10 @@ export class P0OwnerJourney {
     const accessState = this.accessReadiness ? await this.accessReadiness.get(ownerKey, true) : null;
     const access = accessState && this.accessReadiness ? this.accessReadiness.project(accessState) : null;
     if (accessState && !accessIsActive(accessState)) return projectAccessOnly(ownerKey, accessState, access!);
-    const initial = await this.application.query(ownerKey);
+    const initial = await this.acceptStrategyAgentWork(ownerKey, await this.application.query(ownerKey));
     if (!this.agentProjection) return project(ownerKey, await this.continueSafeWork(ownerKey, initial, false), null, access);
     const agent = await this.agentProjection(ownerKey);
-    const current = await this.application.query(ownerKey);
+    const current = await this.acceptStrategyAgentWork(ownerKey, await this.application.query(ownerKey));
     return project(ownerKey, current, agent, access);
   }
 
@@ -2648,8 +2656,9 @@ export class P0OwnerJourney {
           strategy_revision_id: strategyReviewAction.review.candidate.strategy_revision_id,
         });
       }
+      view = await this.acceptStrategyAgentWork(ownerKey, view);
       const agent = this.agentProjection ? await this.agentProjection(ownerKey) : null;
-      if (agent) view = await this.application.query(ownerKey);
+      if (agent) view = await this.acceptStrategyAgentWork(ownerKey, await this.application.query(ownerKey));
       const access = accessState && this.accessReadiness ? this.accessReadiness.project(accessState) : null;
       return project(ownerKey, view, agent, access);
     }
@@ -2891,6 +2900,7 @@ export class P0OwnerJourney {
       }
     }
 
+    view = await this.acceptStrategyAgentWork(ownerKey, view);
     let agent: P0AgentOwnerProjection | null = null;
     if (!this.agentProjection) {
       view = await this.continueSafeWork(ownerKey, view, descriptor.kind !== "authorize-and-create");
@@ -2904,6 +2914,19 @@ export class P0OwnerJourney {
 
   async diagnostics(ownerKey: string) {
     return this.application.query(ownerKey);
+  }
+
+  private async acceptStrategyAgentWork(ownerKey: string, view: InternalView) {
+    const review = view.state.strategy_review;
+    if (!review || review.status !== "REVIEW_REQUIRED" || !allowed(view, "confirm_strategy_review")) return view;
+    return this.application.command(ownerKey, {
+      action: "confirm_strategy_review",
+      expected_revision: view.revision,
+      confirmation: "CONFIRM_EXACT_CAMPAIGN_STRATEGY",
+      review_id: review.review_id,
+      strategy_revision_id: review.candidate.strategy_revision_id,
+      agent_acceptance: P0_STRATEGY_AGENT_ACCEPTANCE,
+    });
   }
 
   private async continueSafeWork(ownerKey: string, initial: InternalView, allowDispatch = true) {
