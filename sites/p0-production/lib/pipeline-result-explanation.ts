@@ -124,7 +124,7 @@ function versionKind(schemaVersion: string) {
   if (/playbook/iu.test(schemaVersion)) return "Campaign Playbook";
   if (/policy/iu.test(schemaVersion)) return "Политика";
   if (/schema/iu.test(schemaVersion)) return "Схема";
-  if (/goal/iu.test(schemaVersion)) return "Цель кампании";
+  if (/goal/iu.test(schemaVersion)) return "Цели";
   if (/business/iu.test(schemaVersion)) return "Бизнес-вход";
   return "Версия объекта";
 }

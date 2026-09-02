@@ -5,7 +5,11 @@ import {
   type CompetitorAdObservationInput,
   type CompetitorCandidateSet,
 } from "./competitor-research.ts";
-import { researchAllowlistedPublicCompetitorPage, type SiteResearchDependencies } from "./site-research.ts";
+import {
+  researchAllowlistedPublicCompetitorPage,
+  type PublicCompetitorPageObservation,
+  type SiteResearchDependencies,
+} from "./site-research.ts";
 import { cleanText } from "./text.ts";
 
 export type ProductionCompetitorResearchInput = {
@@ -17,10 +21,6 @@ type ConfiguredCandidate = {
   competitor: string;
   rationale: string;
   exactDestinations: string[];
-  productsServices: string[];
-  observedOfferMessage: string;
-  evidenceQuote: string;
-  publishedPrice: { status: "PUBLISHED"; value: string } | { status: "NOT_PUBLISHED"; value: null };
   adVisibilitySample: Omit<CompetitorAdObservationInput, "geography" | "device"> | null;
   campaignAnalysis: {
     evidenceStatus: "OBSERVED_AD" | "HYPOTHESIS_FROM_PUBLIC_POSITIONING";
@@ -73,13 +73,22 @@ export function parseProductionCompetitorResearchConfig(raw: string): Configured
   const input = record(parsed);
   const candidates = Array.isArray(input.candidates) ? input.candidates.map((value) => {
     const candidate = record(value);
-    const price = record(candidate.publishedPrice);
-    const priceStatus = String(price.status ?? "");
-    const publishedPrice = priceStatus === "PUBLISHED"
-      ? { status: "PUBLISHED" as const, value: requiredText(price.value, "Published competitor price", 300) }
-      : priceStatus === "NOT_PUBLISHED" && price.value === null
-        ? { status: "NOT_PUBLISHED" as const, value: null }
-        : (() => { throw new Error("Configured competitor price must be published with a value or explicitly not published."); })();
+    const legacyProductsServices = candidate.productsServices === undefined
+      ? []
+      : stringList(candidate.productsServices, "Competitor products and services", 12, 500);
+    const legacyObservedOfferMessage = candidate.observedOfferMessage === undefined
+      ? ""
+      : requiredText(candidate.observedOfferMessage, "Competitor offer message", 1_000);
+    const legacyEvidenceQuote = candidate.evidenceQuote === undefined
+      ? ""
+      : requiredText(candidate.evidenceQuote, "Competitor evidence quote", 1_000);
+    const legacyPrice = candidate.publishedPrice === undefined ? null : (() => {
+      const price = record(candidate.publishedPrice);
+      const priceStatus = String(price.status ?? "");
+      if (priceStatus === "PUBLISHED") return requiredText(price.value, "Published competitor price", 300);
+      if (priceStatus === "NOT_PUBLISHED" && price.value === null) return "";
+      throw new Error("Configured competitor price must be published with a value or explicitly not published.");
+    })();
     const sample = record(candidate.adVisibilitySample);
     const sampleStatus = String(sample.status ?? "");
     const adVisibilitySample = Object.keys(sample).length === 0 ? null : (() => {
@@ -170,19 +179,16 @@ export function parseProductionCompetitorResearchConfig(raw: string): Configured
       competitor: requiredText(candidate.competitor, "Competitor", 200),
       rationale: requiredText(candidate.rationale, "Competitor rationale", 1_000),
       exactDestinations: stringList(candidate.exactDestinations, "Competitor exact destinations", 3, 2_000),
-      productsServices: stringList(candidate.productsServices, "Competitor products and services", 12, 500),
-      observedOfferMessage: requiredText(candidate.observedOfferMessage, "Competitor offer message", 1_000),
-      evidenceQuote: requiredText(candidate.evidenceQuote, "Competitor evidence quote", 1_000),
-      publishedPrice,
       adVisibilitySample,
       campaignAnalysis,
     } satisfies ConfiguredCandidate;
     [
       configuredCandidate.competitor,
       configuredCandidate.rationale,
-      ...configuredCandidate.productsServices,
-      configuredCandidate.observedOfferMessage,
-      configuredCandidate.evidenceQuote,
+      ...legacyProductsServices,
+      legacyObservedOfferMessage,
+      legacyEvidenceQuote,
+      legacyPrice,
       configuredCandidate.adVisibilitySample?.query,
       configuredCandidate.adVisibilitySample?.sourceName,
       configuredCandidate.adVisibilitySample?.limitation,
@@ -207,6 +213,34 @@ function competitorSubject(value: string) {
     .replace(/^-|-$/gu, "");
 }
 
+function observedPageEvidence(page: PublicCompetitorPageObservation["page"]) {
+  const headings = page.headings
+    .map((value) => cleanText(value, 500))
+    .filter(Boolean)
+    .slice(0, 12);
+  const productsServices = headings.length
+    ? headings
+    : [cleanText(page.title, 500), cleanText(page.description, 500)].filter(Boolean).slice(0, 12);
+  const observedOfferMessage = cleanText(page.description, 1_000)
+    || productsServices[0]
+    || cleanText(page.title, 1_000);
+  const evidenceQuote = cleanText(page.text_excerpt, 1_000);
+  const priceMatch = evidenceQuote.match(/(?:от\s+)?\d+(?:[\s\u00a0]\d{3})*(?:[.,]\d{1,2})?\s*(?:₽|руб(?:\.|лей|ля)?)/iu);
+  const publishedPrice = priceMatch
+    ? { status: "PUBLISHED" as const, value: cleanText(priceMatch[0], 300) }
+    : { status: "NOT_PUBLISHED" as const, value: null };
+  if (!productsServices.length || !observedOfferMessage || !evidenceQuote) {
+    throw new Error("Public competitor page does not expose enough observable offer evidence.");
+  }
+  [
+    ...productsServices,
+    observedOfferMessage,
+    evidenceQuote,
+    publishedPrice.value,
+  ].forEach(assertSafeCompetitorObservationText);
+  return { productsServices, observedOfferMessage, evidenceQuote, publishedPrice };
+}
+
 export async function collectProductionCompetitorResearch(
   rawConfig: string,
   dependencies: SiteResearchDependencies,
@@ -214,13 +248,11 @@ export async function collectProductionCompetitorResearch(
   const configured = parseProductionCompetitorResearchConfig(rawConfig);
   const candidateSet = createBoundedCompetitorCandidateSet(configured);
   const byName = new Map(configured.candidates.map((candidate) => [candidate.competitor.toLocaleLowerCase("ru-RU"), candidate]));
-  const observations: Array<Record<string, unknown>> = [];
-
-  for (const candidate of candidateSet.candidates) {
+  const observationTasks: Array<Promise<Record<string, unknown> | null>> = candidateSet.candidates.flatMap((candidate) => {
     const configuredCandidate = byName.get(candidate.competitor.toLocaleLowerCase("ru-RU"));
-    if (!configuredCandidate) continue;
+    if (!configuredCandidate) return [];
     const allowedHosts = [...new Set(candidate.exact_destinations.map((destination) => new URL(destination).hostname.toLowerCase()))];
-    for (const destination of candidate.exact_destinations) {
+    return candidate.exact_destinations.map(async (destination) => {
       try {
         const origin = new URL(destination).origin;
         const page = await researchAllowlistedPublicCompetitorPage(destination, {
@@ -231,7 +263,8 @@ export async function collectProductionCompetitorResearch(
           policyUrl: `${origin}/robots.txt`,
           observationScope: `Exact public landing for ${candidate.competitor}; rationale: ${candidate.rationale}`,
         }, dependencies);
-        observations.push({
+        const observed = observedPageEvidence(page.page);
+        return {
           source_url: page.source_url,
           observed_at: page.observed_at,
           collected_via: page.collected_via,
@@ -241,14 +274,14 @@ export async function collectProductionCompetitorResearch(
           claim: {
             subject: `competitor:${competitorSubject(candidate.competitor)}`,
             predicate: "published_offer",
-            value: configuredCandidate.observedOfferMessage,
+            value: observed.observedOfferMessage,
           },
-          raw_quote: configuredCandidate.evidenceQuote,
+          raw_quote: observed.evidenceQuote,
           matrix_row: {
             competitor: candidate.competitor,
-            products_services: configuredCandidate.productsServices,
-            observed_offer_message: configuredCandidate.observedOfferMessage,
-            published_price: configuredCandidate.publishedPrice,
+            products_services: observed.productsServices,
+            observed_offer_message: observed.observedOfferMessage,
+            published_price: observed.publishedPrice,
             exact_landing: page.source_url,
             source: { label: "Публичная страница услуги", url: page.source_url },
             geography: configured.geography,
@@ -319,12 +352,15 @@ export async function collectProductionCompetitorResearch(
               ? "Рекламное наблюдение относится только к точному sample одобренного артефакта и не раскрывает активность вне sample."
               : "Одобренный источник не предоставлен; отсутствие наблюдения не означает отсутствие рекламы.",
           ],
-        });
+        };
       } catch {
         // A failed exact landing remains unavailable in the denominator; it is never converted to zero evidence.
+        return null;
       }
-    }
-  }
+    });
+  });
+  const observations = (await Promise.all(observationTasks))
+    .filter((observation): observation is Record<string, unknown> => observation !== null);
 
   return {
     competitor_candidate_set: candidateSet,

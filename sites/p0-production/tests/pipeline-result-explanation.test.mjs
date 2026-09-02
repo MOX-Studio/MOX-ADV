@@ -225,19 +225,13 @@ test("free question is answered only from the selected current pair and sanitize
   );
 });
 
-test("Dashboard contract exposes selected-pair provenance and a free-question control without a model dump", async () => {
+test("explanation remains available in the backend while the Dashboard omits the removed provenance and question panels", async () => {
   const [client, route] = await Promise.all([
     readFile(new URL("../app/P0Client.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/p0/route.ts", import.meta.url), "utf8"),
   ]);
 
-  assert.match(client, /<summary>\{provenance\.title\}<\/summary>/u);
-  assert.match(client, /Агенты текущего запуска/u);
-  assert.match(client, /agent\.name/u);
-  assert.match(client, /agent\.outcome/u);
-  assert.match(client, /name="pair_key"/u);
-  assert.match(client, /name="question"/u);
-  assert.match(client, /Получить объяснение/u);
+  assert.doesNotMatch(client, /<summary>\{provenance\.title\}<\/summary>|Агенты текущего запуска|name="question"|Получить объяснение|pipeline_action: "EXPLAIN"/u);
   assert.match(route, /pipelineAction === "EXPLAIN"/u);
   assert.match(route, /controller\.explain\(key/u);
   assert.doesNotMatch(client, /chain.of.thought|system prompt|raw payload/iu);

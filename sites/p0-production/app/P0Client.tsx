@@ -4,6 +4,7 @@ import Link from "next/link";
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import styles from "./prototype/prd-149/prototype.module.css";
 import AnalyticsSummaryDisclosure from "./AnalyticsSummaryDisclosure";
+import { localizedText, machineLabel, ownerDate, ownerFieldLabel, ownerValue } from "./ui-copy.ts";
 import type {
   OwnerActionField,
   OwnerJourneyProjection,
@@ -13,7 +14,6 @@ import type { CurrentPipelineOwnerResult } from "../lib/pipeline-current-contrac
 
 type JsonRecord = Record<string, unknown>;
 type CurrentOwnerProjection = OwnerJourneyProjection & { currentResult?: CurrentPipelineOwnerResult };
-type CurrentResultExplanation = { answer: string; scope: string; facts: string[]; safety: string };
 type LocalRecovery = { action: "RESET_INVALID_LOCAL_P0_STATE"; label: string; description: string };
 
 class DashboardRequestError extends Error {
@@ -26,16 +26,30 @@ class DashboardRequestError extends Error {
   }
 }
 
-async function request(path: string, init?: RequestInit) {
-  const response = await fetch(path, init);
-  const value = await response.json() as JsonRecord;
-  if (!response.ok) {
-    const recovery = value.recovery && typeof value.recovery === "object" && !Array.isArray(value.recovery)
-      ? value.recovery as LocalRecovery
-      : null;
-    throw new DashboardRequestError(String(value.message ?? "Действие не выполнено."), recovery);
+const DASHBOARD_REQUEST_TIMEOUT_MS = 165_000;
+
+async function request(path: string, init?: RequestInit, timeoutMs = DASHBOARD_REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const signal = init?.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal;
+  const timeout = globalThis.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(path, { ...init, signal });
+    const value = await response.json() as JsonRecord;
+    if (!response.ok) {
+      const recovery = value.recovery && typeof value.recovery === "object" && !Array.isArray(value.recovery)
+        ? value.recovery as LocalRecovery
+        : null;
+      throw new DashboardRequestError(String(value.message ?? "Действие не выполнено."), recovery);
+    }
+    return value as CurrentOwnerProjection;
+  } catch (reason) {
+    if (controller.signal.aborted) {
+      throw new DashboardRequestError(`Запрос остановлен через ${Math.round(timeoutMs / 1_000)} секунд. Поздний ответ не будет показан как свежий; повторите обновление.`);
+    }
+    throw reason;
+  } finally {
+    globalThis.clearTimeout(timeout);
   }
-  return value as CurrentOwnerProjection;
 }
 
 function actionValues(form: HTMLFormElement, fields: OwnerActionField[]) {
@@ -43,10 +57,14 @@ function actionValues(form: HTMLFormElement, fields: OwnerActionField[]) {
   return Object.fromEntries(fields.map((field) => [field.key, String(data.get(field.key) ?? "").trim()]));
 }
 
+function goalNeedsClarification(projection: OwnerJourneyProjection) {
+  const formation = projection.pipeline?.goalFormation;
+  return Boolean(formation && (formation.status !== "VERIFIED" || !formation.criterionComplete));
+}
+
 function authoritativeStage(projection: OwnerJourneyProjection) {
-  return projection.pipeline && projection.pipeline.status !== "NOT_STARTED"
-    ? projection.pipeline.currentStage
-    : projection.journey.currentStage;
+  if (goalNeedsClarification(projection)) return "goal";
+  return projection.pipeline?.currentStage ?? projection.journey.currentStage;
 }
 
 const cardLabels = {
@@ -58,12 +76,10 @@ const cardLabels = {
 
 export default function P0Client() {
   const [projection, setProjection] = useState<CurrentOwnerProjection | null>(null);
-  const [resultExplanation, setResultExplanation] = useState<CurrentResultExplanation | null>(null);
   const [selectedStage, setSelectedStage] = useState<OwnerJourneyStageId | null>(null);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
   const [recovery, setRecovery] = useState<LocalRecovery | null>(null);
-  const interviewHeadingRef = useRef<HTMLHeadingElement>(null);
   const errorRef = useRef<HTMLParagraphElement>(null);
 
   useEffect(() => {
@@ -71,10 +87,11 @@ export default function P0Client() {
       .then((next) => {
         setProjection(next);
         setRecovery(null);
-        const requestedStage = new URL(window.location.href).searchParams.get("stage");
+        const searchParams = new URL(window.location.href).searchParams;
+        const requestedStage = searchParams.get("stage");
         setSelectedStage(next.journey.stages.some((stage) => stage.id === requestedStage)
           ? requestedStage as OwnerJourneyStageId
-          : next.goalInterview?.primaryAction ? "goal" : authoritativeStage(next));
+          : authoritativeStage(next));
       })
       .catch((reason) => {
         setError(reason instanceof Error ? reason.message : String(reason));
@@ -82,12 +99,6 @@ export default function P0Client() {
       })
       .finally(() => setBusy(false));
   }, []);
-
-  useEffect(() => {
-    if (selectedStage === "goal" && projection?.goalInterview?.primaryAction) {
-      interviewHeadingRef.current?.focus();
-    }
-  }, [projection?.goalInterview?.primaryAction, selectedStage]);
 
   useEffect(() => {
     if (error) errorRef.current?.focus();
@@ -132,37 +143,6 @@ export default function P0Client() {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setBusy(false);
-    }
-  }
-
-  async function submitInterview(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const action = projection?.goalInterview?.primaryAction;
-    if (!action || busy) return;
-    setBusy(true);
-    setError("");
-    try {
-      const next = await request("/api/p0", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          handle: action.handle,
-          values: actionValues(event.currentTarget, action.fields),
-        }),
-      });
-      setProjection(next);
-      setSelectedStage(next.goalInterview?.primaryAction ? "goal" : next.journey.currentStage);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function keyboardSubmit(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-      event.preventDefault();
-      event.currentTarget.form?.requestSubmit();
     }
   }
 
@@ -234,22 +214,51 @@ export default function P0Client() {
 
   async function submitGoalCorrection(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busy) return;
+    if (busy) return false;
     const values = new FormData(event.currentTarget);
+    setBusy(true);
+    setError("");
+    try {
+      await request("/api/p0", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pipeline_action: "CORRECT_GOAL",
+          desired_outcome: String(values.get("desired_outcome") ?? "").trim(),
+          qualified_action: String(values.get("qualified_action") ?? "").trim(),
+          target_count: Number(values.get("target_count")),
+          deadline: String(values.get("deadline") ?? ""),
+          max_result_cost_rub: Number(values.get("max_result_cost_rub")),
+        }),
+      });
+      const started = await request("/api/p0", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pipeline_action: "START" }),
+      });
+      setProjection(started);
+      setSelectedStage(authoritativeStage(started));
+      return true;
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function refreshEvidence() {
+    if (busy || projection?.pipeline?.active) return;
     setBusy(true);
     setError("");
     try {
       const next = await request("/api/p0", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pipeline_action: "CORRECT_GOAL",
-          desired_outcome: String(values.get("desired_outcome") ?? ""),
-          qualified_action: String(values.get("qualified_action") ?? ""),
-        }),
+        body: JSON.stringify({ pipeline_action: "REFRESH_EVIDENCE" }),
       });
       setProjection(next);
-      setSelectedStage("goal");
+      setSelectedStage("findings");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -257,23 +266,15 @@ export default function P0Client() {
     }
   }
 
-  async function submitPipelineAction(action: "START" | "STOP") {
-    if (busy) return;
-    const pipeline = projection?.pipeline;
-    if (action === "STOP" && (!pipeline?.runId || pipeline.version === null)) return;
+  async function stopPipeline() {
+    if (busy || !projection?.pipeline?.active) return;
     setBusy(true);
     setError("");
     try {
       const next = await request("/api/p0", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(action === "START"
-          ? { pipeline_action: "START" }
-          : {
-              pipeline_action: "STOP",
-              run_id: pipeline!.runId,
-              expected_version: pipeline!.version,
-            }),
+        body: JSON.stringify({ pipeline_action: "STOP" }),
       });
       setProjection(next);
       setSelectedStage(authoritativeStage(next));
@@ -284,25 +285,22 @@ export default function P0Client() {
     }
   }
 
-  async function submitResultQuestion(question: string, pairKey?: string) {
-    if (busy) return;
+  async function refreshCompetitorAnalysis() {
+    const currentResult = projection?.currentResult;
+    if (busy || !currentResult?.products?.evidence || currentResult.stateRevision === null) return;
     setBusy(true);
     setError("");
-    setResultExplanation(null);
     try {
-      const response = await fetch("/api/p0", {
+      const next = await request("/api/p0", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pipeline_action: "EXPLAIN", question, pair_key: pairKey }),
+        body: JSON.stringify({
+          pipeline_action: "REFRESH_COMPETITOR_ANALYSIS",
+          expected_state_revision: currentResult.stateRevision,
+        }),
       });
-      const value = await response.json() as JsonRecord;
-      if (!response.ok) throw new Error(String(value.message ?? "Объяснение недоступно."));
-      setResultExplanation({
-        answer: String(value.answer ?? "Объяснение недоступно."),
-        scope: String(value.scope ?? "Текущий запуск"),
-        facts: Array.isArray(value.facts) ? value.facts.map(String) : [],
-        safety: String(value.safety ?? "Показаны только проверяемые факты очищенного следа."),
-      });
+      setProjection(next);
+      setSelectedStage("findings");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -453,17 +451,15 @@ export default function P0Client() {
   const activeStageStatus = publicationReviewHandoff && activeStage === "review"
     ? "complete"
     : pipelineStage
-      ? pipelineStage.tone === "complete" ? "complete" : pipelineStage.tone === "active" ? "current" : "upcoming"
+      ? pipelineStage.tone === "complete"
+        ? "complete"
+        : pipelineStage.tone === "active" || pipelineStage.tone === "returned" ? "current" : "upcoming"
       : projection.journey.stages.find((stage) => stage.id === activeStage)?.status ?? "upcoming";
   const viewingCurrentStage = activeStage === authoritativeStage(projection);
-  const pipelineControl = projection.pipeline ?? null;
   const campaignDossiers = projection.pipeline?.campaignDossiers.length
     ? projection.pipeline.campaignDossiers
     : projection.pipeline?.campaignDossier ? [projection.pipeline.campaignDossier] : [];
-  const ownerHasAction = Boolean(
-    projection.primaryAction
-      || projection.goalInterview?.primaryAction,
-  );
+  const ownerHasAction = Boolean(projection.primaryAction);
   const ownerActionProblem = ownerHasAction
     ? projection.cards.find((card) => card.kind === "human-decision-gate")
       ?? projection.cards.find((card) => card.kind === "problem")
@@ -485,54 +481,45 @@ export default function P0Client() {
   return <div className={styles.prototype}>
     <Header />
     <main className={styles.pageA} id="module">
-      {activeStage === "goal" && <Hero projection={projection} />}
-      {pipelineControl && <PipelineControl
-        pipeline={pipelineControl}
-        busy={busy}
-        onAction={submitPipelineAction}
-      />}
       <StageNavigation projection={projection} selectedStage={activeStage} onStage={chooseStage} />
-      <fieldset className={`${styles.ownerWorkspace} ${styles.ownerWorkspaceFull} pipeline-readonly-boundary`} disabled={projection.pipeline?.editingLocked ?? false} aria-label="Текущий результат и редактирование">
+      {projection.pipeline?.active && <section className="owner-run-control" role="status" aria-label="Управление текущим запуском">
+        <div><strong>{projection.pipeline.currentTask}</strong><span>Внешняя запись, показы и расходы не выполняются.</span></div>
+        <button type="button" disabled={busy} onClick={stopPipeline}>{busy ? "Останавливаю…" : "Остановить текущий запуск"}</button>
+      </section>}
+      <fieldset className={`${styles.ownerWorkspace} ${styles.ownerWorkspaceFull} pipeline-readonly-boundary`} disabled={projection.pipeline?.editingLocked ?? false} aria-label="Текущий этап и редактирование">
         <section className={`${styles.artifact} owner-main`} id="owner-stage-panel" aria-labelledby={`owner-stage-tab-${activeStage}`}>
-          <header className={`${styles.sectionHead} owner-outcome`}>
-            <div><p className={styles.eyebrow}>ТЕКУЩИЙ БИЗНЕС-РЕЗУЛЬТАТ</p><h2>{projection.businessOutcome.headline}</h2></div>
-          </header>
-
           {projection.currentResult && <CurrentPipelineResult
             result={projection.currentResult}
             stage={activeStage}
             active={projection.pipeline?.active ?? false}
             busy={busy}
-            explanation={resultExplanation}
             demandResearch={projection.demandCostResearch}
-            onQuestion={submitResultQuestion}
+            onEvidenceRefresh={refreshEvidence}
+            onCompetitorRefresh={refreshCompetitorAnalysis}
             onStrategy={submitStrategyCorrection}
             onPair={submitPairEdit}
             onPlaybook={submitPlaybookDecision}
           />}
 
+          {viewingCurrentStage && projection.pipeline && !goalNeedsClarification(projection) && ["STOPPED", "FAILED"].includes(projection.pipeline.status) && <section className="owner-run-failure" role="alert" aria-labelledby="owner-run-failure-title">
+            <span>ЗАПУСК ОСТАНОВЛЕН</span>
+            <h2 id="owner-run-failure-title">Сведения не помечены как свежие</h2>
+            <p>{projection.pipeline.stateText}</p>
+          </section>}
+
           {projection.currentRecommendation && <section className="owner-recommendation">
             <span>Текущая рекомендация</span><h3>{projection.currentRecommendation.headline}</h3><p>{projection.currentRecommendation.rationale}</p>
           </section>}
 
-          {activeStageStatus === "upcoming" && <StageUnavailable projection={projection} stage={activeStage} />}
-          {activeStage === "goal" && activeStageStatus !== "upcoming" && <GoalStageSummary projection={projection} />}
-          {activeStage === "goal" && activeStageStatus !== "upcoming" && projection.pipeline && <GoalFormationSummary pipeline={projection.pipeline} busy={busy} onCorrect={submitGoalCorrection} />}
-          {activeStage === "goal" && activeStageStatus !== "upcoming" && projection.goalInterview && projection.pipeline?.goalFormation.status !== "VERIFIED" && <GoalInterview
-            interview={projection.goalInterview}
-            busy={busy}
-            headingRef={interviewHeadingRef}
-            onSubmit={submitInterview}
-            onKeyDown={keyboardSubmit}
-          />}
+          {activeStage === "goal" && activeStageStatus !== "upcoming" && <GoalStageSummary projection={projection} busy={busy} onCorrect={submitGoalCorrection} />}
 
           {activeStage === "findings" && activeStageStatus !== "upcoming" && projection.analyticsSummary && <AnalyticsSummaryDisclosure summary={projection.analyticsSummary} />}
 
           {activeStage === "findings" && activeStageStatus !== "upcoming" && projection.directReport && <section className="owner-direct-report" data-report-state={projection.directReport.state} aria-labelledby="owner-direct-report-title">
             <header><div><p className="owner-eyebrow">ТЕКУЩЕЕ ПРОДВИЖЕНИЕ В ЯНДЕКС ДИРЕКТЕ</p><h2 id="owner-direct-report-title">Отчёт о текущем продвижении</h2></div><strong>{projection.directReport.status}</strong></header>
-            <div className="owner-direct-lead"><div><h3>{projection.directReport.headline}</h3><p>{projection.directReport.summary}</p></div><dl><div><dt>Наблюдение</dt><dd>{projection.directReport.observedAt}</dd></div><div><dt>Свежесть</dt><dd>{projection.directReport.freshness}</dd></div></dl></div>
+            <div className="owner-direct-lead"><div><h3>{localizedText(projection.directReport.headline)}</h3><p>{localizedText(projection.directReport.summary)}</p></div><dl><div><dt>Проверено</dt><dd>{ownerDate(projection.directReport.observedAt)}</dd></div><div><dt>Свежесть</dt><dd>{localizedText(projection.directReport.freshness)}</dd></div></dl></div>
             <div className="owner-direct-inventory" aria-label="Состав продвижения">{projection.directReport.inventory.map((item) => <article key={item.label}><span>{item.label}</span><strong>{item.value}</strong><small>{item.detail}</small></article>)}</div>
-            <section className="owner-direct-campaign-list" aria-labelledby="owner-direct-campaigns-title"><h3 id="owner-direct-campaigns-title">Кампании в снимке</h3>{projection.directReport.campaigns.length > 0 ? <div>{projection.directReport.campaigns.map((campaign) => <article key={`${campaign.name}-${campaign.delivery}-${campaign.review}`}><strong>{campaign.name}</strong><span>{campaign.delivery}</span><small>{campaign.review}</small></article>)}</div> : <p>{projection.directReport.state === "empty" ? "Проверенный срез не содержит кампаний." : "Список кампаний недоступен; это не означает, что кампаний нет."}</p>}</section>
+            <section className="owner-direct-campaign-list" aria-labelledby="owner-direct-campaigns-title"><h3 id="owner-direct-campaigns-title">Кампании в отчёте</h3>{projection.directReport.campaigns.length > 0 ? <div>{projection.directReport.campaigns.map((campaign) => <article key={`${campaign.name}-${campaign.delivery}-${campaign.review}`}><strong>{campaign.name}</strong><span>{campaign.delivery}</span><small>{campaign.review}</small></article>)}</div> : <p>{projection.directReport.state === "empty" ? "В проверенном отчёте нет кампаний." : "Список кампаний недоступен; это не означает, что кампаний нет."}</p>}</section>
             <div className="owner-direct-details">
               <article><header><span>Поисковые запросы</span><b>{projection.directReport.queries.status}</b></header><h3>{projection.directReport.queries.value}</h3><p>{projection.directReport.queries.detail}</p></article>
               <article><header><span>Наблюдаемые результаты</span><b>{projection.directReport.results.status}</b></header><h3>{projection.directReport.results.value}</h3><p>{projection.directReport.results.detail}</p></article>
@@ -541,10 +528,10 @@ export default function P0Client() {
 
           {activeStage === "findings" && activeStageStatus !== "upcoming" && projection.businessModel && <section className="owner-business-model" aria-labelledby="owner-business-model-title">
             <header><div><p className="owner-eyebrow">МОДЕЛЬ БИЗНЕСА</p><h2 id="owner-business-model-title">Проверяемое понимание бизнеса</h2></div><strong>{projection.businessModel.economics.status}</strong></header>
-            <div className="owner-model-economics"><span>Целевая стоимость результата</span><b>{projection.businessModel.economics.targetResultCost}</b><p>{projection.businessModel.economics.explanation}</p></div>
+            <div className="owner-model-economics"><span>Целевая стоимость результата <button type="button" className="owner-term-info" aria-label="Описание целевой стоимости результата" aria-describedby="target-result-cost-help">?<span id="target-result-cost-help" className="owner-term-tooltip" role="tooltip"><strong>Предельная стоимость одного квалифицированного обращения, при которой реклама сохраняет экономический смысл.</strong><small><b>Формула:</b> ценность продажи × валовая маржа × конверсия обращения в продажу.</small></span></button></span><b>{projection.businessModel.economics.targetResultCost}</b><p>{projection.businessModel.economics.explanation}</p></div>
             <div className="owner-model-grid">{projection.businessModel.fields.map((field) => <article key={field.label}>
               <header><h3>{field.label}</h3><span>{field.availability}</span></header><p>{field.value}</p>
-              <dl><div><dt>Источник</dt><dd>{field.provenance}</dd></div><div><dt>Наблюдение</dt><dd>{field.observedAt}</dd></div><div><dt>Свежесть</dt><dd>{field.freshness}</dd></div><div><dt>Уверенность</dt><dd>{field.confidence}</dd></div><div><dt>Ограничение</dt><dd>{field.limitation}</dd></div><div><dt>Предположение</dt><dd>{field.assumption}</dd></div></dl>
+              <dl><div><dt>Источник</dt><dd>{localizedText(field.provenance)}</dd></div><div><dt>Проверено</dt><dd>{ownerDate(field.observedAt)}</dd></div><div><dt>Свежесть</dt><dd>{localizedText(field.freshness)}</dd></div><div><dt>Уверенность</dt><dd>{localizedText(field.confidence)}</dd></div><div><dt>Ограничение</dt><dd>{localizedText(field.limitation)}</dd></div><div><dt>Предположение</dt><dd>{localizedText(field.assumption)}</dd></div></dl>
             </article>)}</div>
             {projection.businessModel.materialQuestions.length > 0 && <div className="owner-model-questions"><h3>Только существенные вопросы</h3><ul>{projection.businessModel.materialQuestions.map((item) => <li key={item.question}><strong>{item.question}</strong><span>{item.consequence}</span></li>)}</ul></div>}
             {projection.businessModel.editor && <BusinessModelEditor
@@ -555,27 +542,27 @@ export default function P0Client() {
           </section>}
 
           {activeStage === "strategy" && activeStageStatus !== "upcoming" && projection.campaignStrategy && <section className="owner-business-readiness" aria-labelledby="owner-campaign-strategy-title">
-            <header><div><p className="owner-eyebrow">CAMPAIGN STRATEGY</p><h2 id="owner-campaign-strategy-title">Полная рекомендация агента</h2></div><strong>{projection.campaignStrategy.status}</strong></header>
+            <header><div><p className="owner-eyebrow">СТРАТЕГИЯ КАМПАНИИ</p><h2 id="owner-campaign-strategy-title">Полная рекомендация</h2></div><strong>{localizedText(projection.campaignStrategy.status)}</strong></header>
             <div className="owner-demand-cost-grid">{projection.campaignStrategy.recommendations.map((item) => <article key={item.label} data-strategy-recommendation={item.label === "Стоимость перехода до запуска" ? "prelaunch-click-cost" : undefined}>
               <span>{item.label}</span><h3>{item.value}</h3><p>{item.rationale}</p><small>Уверенность: {item.confidence}</small>
             </article>)}</div>
             <p className="owner-cost-semantics"><b>Разделение стоимости:</b> стоимость перехода отражает аукционный CPC по ключевой фразе; целевая стоимость результата относится к бизнес-экономике. Ни одно из значений не является прогнозом эффективности.</p>
-            {projection.campaignStrategy.materialQuestions.length > 0 && <div className="owner-model-questions"><h3>Только существенные вопросы</h3><ul>{projection.campaignStrategy.materialQuestions.map((item) => <li key={item.field}><strong>{item.field}: {item.question}</strong><span>{item.recommendation} {item.consequences}</span></li>)}</ul></div>}
-            {projection.campaignStrategy.decisionGate && <article className="owner-card human-decision-gate"><span>РЕШЕНИЕ ВЛАДЕЛЬЦА</span><h3>{projection.campaignStrategy.decisionGate.recommendation}</h3><p><b>Основание:</b> {projection.campaignStrategy.decisionGate.evidence}</p><p><b>Уверенность:</b> {projection.campaignStrategy.decisionGate.confidence}</p><p><b>Альтернативы:</b> {projection.campaignStrategy.decisionGate.alternatives}</p><p><b>Последствия:</b> {projection.campaignStrategy.decisionGate.consequences}</p></article>}
+            {projection.campaignStrategy.materialQuestions.length > 0 && <div className="owner-model-questions"><h3>Только важные вопросы</h3><ul>{projection.campaignStrategy.materialQuestions.map((item) => <li key={item.field}><strong>{ownerFieldLabel(item.field)}: {localizedText(item.question)}</strong><span>{localizedText(item.recommendation)} {localizedText(item.consequences)}</span></li>)}</ul></div>}
+            {projection.campaignStrategy.decisionGate && <article className="owner-card human-decision-gate"><span>РЕШЕНИЕ ВЛАДЕЛЬЦА</span><h3>{localizedText(projection.campaignStrategy.decisionGate.recommendation)}</h3><p><b>Основание:</b> {localizedText(projection.campaignStrategy.decisionGate.evidence)}</p><p><b>Уверенность:</b> {localizedText(projection.campaignStrategy.decisionGate.confidence)}</p><p><b>Альтернативы:</b> {localizedText(projection.campaignStrategy.decisionGate.alternatives)}</p><p><b>Последствия:</b> {localizedText(projection.campaignStrategy.decisionGate.consequences)}</p></article>}
           </section>}
 
           {activeStage === "findings" && activeStageStatus !== "upcoming" && projection.demandCostResearch && <section className="owner-demand-cost" aria-labelledby="owner-demand-cost-title">
             <header><div><p className="owner-eyebrow">СПРОС И СОПОСТАВИМАЯ СТОИМОСТЬ</p><h2 id="owner-demand-cost-title">Исследование нескольких формулировок</h2></div><strong>{projection.demandCostResearch.demand.status}</strong></header>
             <div className="owner-demand-cost-grid">
-              <article><span>Спрос</span><h3>{projection.demandCostResearch.demand.conclusion}</h3><dl><div><dt>Источник и дата</dt><dd>{projection.demandCostResearch.demand.source} · {projection.demandCostResearch.demand.observedAt}</dd></div><div><dt>Метод</dt><dd>{projection.demandCostResearch.demand.method}</dd></div><div><dt>Окно</dt><dd>{projection.demandCostResearch.demand.window}</dd></div><div><dt>Область</dt><dd>{projection.demandCostResearch.demand.scope}</dd></div><div><dt>Покрытие</dt><dd>{projection.demandCostResearch.demand.coverage}</dd></div><div><dt>Сезонность</dt><dd>{projection.demandCostResearch.demand.seasonality}</dd></div></dl><p>{projection.demandCostResearch.demand.limitation}</p></article>
-              <article><span>Сопоставимая стоимость</span><h3>{projection.demandCostResearch.cost.range}</h3><dl><div><dt>Источник и дата</dt><dd>{projection.demandCostResearch.cost.source} · {projection.demandCostResearch.cost.observedAt}</dd></div><div><dt>Валюта и НДС</dt><dd>{projection.demandCostResearch.cost.currency} · {projection.demandCostResearch.cost.vat}</dd></div><div><dt>Выборка</dt><dd>{projection.demandCostResearch.cost.sample}</dd></div><div><dt>Сопоставимость</dt><dd>{projection.demandCostResearch.cost.scope}</dd></div></dl><p>{projection.demandCostResearch.cost.limitation}</p></article>
+              <article><span>Спрос</span><h3>{localizedText(projection.demandCostResearch.demand.conclusion)}</h3><dl><div><dt>Источник и дата</dt><dd>{localizedText(projection.demandCostResearch.demand.source)} · {ownerDate(projection.demandCostResearch.demand.observedAt)}</dd></div><div><dt>Как проверяли</dt><dd>{localizedText(projection.demandCostResearch.demand.method)}</dd></div><div><dt>Период</dt><dd>{localizedText(projection.demandCostResearch.demand.window)}</dd></div><div><dt>Где и для кого</dt><dd>{localizedText(projection.demandCostResearch.demand.scope)}</dd></div><div><dt>Покрытие</dt><dd>{localizedText(projection.demandCostResearch.demand.coverage)}</dd></div><div><dt>Сезонность</dt><dd>{localizedText(projection.demandCostResearch.demand.seasonality)}</dd></div></dl><p>{localizedText(projection.demandCostResearch.demand.limitation)}</p></article>
+              <article><span>Сопоставимая стоимость</span><h3>{projection.demandCostResearch.cost.range}</h3><dl><div><dt>Источник и дата</dt><dd>{localizedText(projection.demandCostResearch.cost.source)} · {ownerDate(projection.demandCostResearch.cost.observedAt)}</dd></div><div><dt>Валюта и НДС</dt><dd>{projection.demandCostResearch.cost.currency} · {projection.demandCostResearch.cost.vat}</dd></div><div><dt>Что сравнивали</dt><dd>{localizedText(projection.demandCostResearch.cost.sample)}</dd></div><div><dt>Насколько сравнение подходит</dt><dd>{localizedText(projection.demandCostResearch.cost.scope)}</dd></div></dl><p>{localizedText(projection.demandCostResearch.cost.limitation)}</p></article>
             </div>
             <div className="owner-demand-formulations"><h3>Частоты проверенных формулировок</h3>{projection.demandCostResearch.demand.formulations.map((item, index) => <article key={`${item.category}-${index}`} data-frequency-state={item.status === "Частота получена" ? "available" : "unavailable"}>
-              <header><span>{item.category}</span><strong>{item.phrase}</strong><b>{item.frequency}</b></header>
-              <dl><div><dt>Метод</dt><dd>{item.method} · {item.operator}</dd></div><div><dt>Область и дата</dt><dd>{item.scope} · {item.observedAt}</dd></div><div><dt>Происхождение</dt><dd>{item.provenance}</dd></div></dl>
+              <header><span>{localizedText(item.category)}</span><strong>{localizedText(item.phrase)}</strong><b>{item.frequency}</b></header>
+              <dl><div><dt>Как проверяли</dt><dd>{localizedText(item.method)} · {item.operator}</dd></div><div><dt>Где и когда</dt><dd>{localizedText(item.scope)} · {ownerDate(item.observedAt)}</dd></div><div><dt>Источник</dt><dd>{localizedText(item.provenance)}</dd></div></dl>
               <small>{item.status}</small>
             </article>)}</div>
-            {projection.demandCostResearch.demand.gaps.length > 0 && <div className="owner-demand-gaps"><strong>Пробелы пакета</strong><ul>{projection.demandCostResearch.demand.gaps.map((gap) => <li key={gap}>{gap}</li>)}</ul></div>}
+            {projection.demandCostResearch.demand.gaps.length > 0 && <div className="owner-demand-gaps"><strong>Чего не хватает</strong><ul>{projection.demandCostResearch.demand.gaps.map((gap) => <li key={gap}>{localizedText(gap)}</li>)}</ul></div>}
             <article className="owner-demand-next-action"><span>Следующий шаг</span><strong>{projection.demandCostResearch.demand.nextAction}</strong></article>
           </section>}
 
@@ -584,7 +571,7 @@ export default function P0Client() {
           </section>}
 
           {activeStage === "findings" && activeStageStatus !== "upcoming" && projection.competitorMatrix && <section className="owner-competitor-matrix" aria-labelledby="owner-competitor-matrix-title">
-            <header><div><p className="owner-eyebrow">ПУБЛИЧНОЕ ПОЗИЦИОНИРОВАНИЕ</p><h2 id="owner-competitor-matrix-title">Матрица конкурентов</h2></div><strong>{projection.competitorMatrix.status}</strong></header>
+            <header><div><p className="owner-eyebrow">КАК КОНКУРЕНТЫ ПОКАЗЫВАЮТ СЕБЯ</p><h2 id="owner-competitor-matrix-title">Сравнение конкурентов</h2></div><strong>{projection.competitorMatrix.status}</strong></header>
             <p className="owner-competitor-rule"><b>Как выбран набор:</b> {projection.competitorMatrix.competitorSetRule}</p>
             <div className="owner-competitor-candidates">{projection.competitorMatrix.candidates.map((candidate) => <article key={candidate.competitor}><h3>{candidate.competitor}</h3><p>{candidate.rationale}</p><small>{candidate.exactDestinations.join(" · ")}</small></article>)}</div>
             {projection.competitorMatrix.rows.length > 0 ? <div className="owner-competitor-rows">{projection.competitorMatrix.rows.map((row) => <article key={`${row.competitor}-${row.exactLanding}`}>
@@ -603,17 +590,17 @@ export default function P0Client() {
                 <div><dt>Ограничение рекламного наблюдения</dt><dd>{row.adObservationLimitation}</dd></div>
               </dl>
             </article>)}</div> : <p className="owner-competitor-unavailable">Публичные наблюдения не получены и остаются недоступными, а не нулевыми.</p>}
-            <div className="owner-competitor-aggregates"><h3>Выводы только по этому набору</h3>{projection.competitorMatrix.aggregateClaims.map((claim) => <article key={claim.claim}><strong>{claim.claim}</strong><span>{claim.result}</span><p>{claim.scope} {claim.limitation}</p></article>)}</div>
+            <div className="owner-competitor-aggregates"><h3>Выводы только по этому набору</h3>{projection.competitorMatrix.aggregateClaims.map((claim) => <article key={claim.claim}><strong>{localizedText(claim.claim)}</strong><span>{localizedText(claim.result)}</span><p>{localizedText(claim.scope)} {localizedText(claim.limitation)}</p></article>)}</div>
             {projection.competitorMatrix.hypotheses.length > 0 && <div className="owner-competitor-hypotheses"><h3>Гипотезы для кампании — не факты эффективности</h3>{projection.competitorMatrix.hypotheses.map((hypothesis) => <article key={hypothesis.pattern}>
               <span>ПОВТОРЯЮЩАЯСЯ РЫНОЧНАЯ ТЕХНИКА</span>
               <h4>{hypothesis.pattern}</h4>
-              <p><b>Проверяемая гипотеза:</b> {hypothesis.hypothesis}</p>
-              <p><b>Основание:</b> {hypothesis.basis}</p>
+              <p><b>Проверяемая гипотеза:</b> {localizedText(hypothesis.hypothesis)}</p>
+              <p><b>Основание:</b> {localizedText(hypothesis.basis)}</p>
               <p><b>Точный набор доказательств:</b></p>
               <ul>{hypothesis.evidenceSet.map((evidence) => <li key={`${evidence.competitor}-${evidence.exactLanding}`}><strong>{evidence.competitor}</strong> · {evidence.exactLanding} · {evidence.observationDate}</li>)}</ul>
               <p>{hypothesis.limitation}</p>
             </article>)}</div>}
-            <div className="owner-competitor-limitations"><strong>Что эта матрица не доказывает</strong><ul>{projection.competitorMatrix.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}</ul></div>
+            <div className="owner-competitor-limitations"><strong>Чего это сравнение не доказывает</strong><ul>{projection.competitorMatrix.limitations.map((limitation) => <li key={limitation}>{localizedText(limitation)}</li>)}</ul></div>
           </section>}
 
           {viewingCurrentStage && projection.agentActivity && <section className="owner-progress" aria-label="Ход работы агента">
@@ -630,7 +617,7 @@ export default function P0Client() {
 
           {activeStage === "review" && publicationReviewHandoff && <section className="owner-recommendation publication-review-boundary" role="status">
             <span>ПРОВЕРКА ПУБЛИКАЦИИ</span>
-            <h3>Текущие Draft переданы на отдельную проверку</h3>
+            <h3>Текущие черновики переданы на отдельную проверку</h3>
             <p>Просмотр и правки доступны без решения о публикации. Этот этап не создаёт и не изменяет кампании в Директе, не запускает показы и не расходует бюджет.</p>
           </section>}
 
@@ -640,7 +627,7 @@ export default function P0Client() {
           />)}
 
           {(activeStage === "campaigns" || (activeStage === "review" && publicationReviewHandoff)) && activeStageStatus !== "upcoming" && projection.campaignOptions.length > 0 && <section className="owner-campaigns" aria-labelledby="owner-campaigns-title">
-            <header><p className="owner-eyebrow">ТЕКУЩИЕ CAMPAIGN DRAFT</p><h2 id="owner-campaigns-title">Кампании для бизнес-проверки</h2></header>
+            <header><p className="owner-eyebrow">ТЕКУЩИЕ ЧЕРНОВИКИ КАМПАНИЙ</p><h2 id="owner-campaigns-title">Кампании для проверки</h2></header>
             <div>{projection.campaignOptions.map((campaign, index) => <CampaignOption
               key={`${campaign.editor.publicationHandle ?? campaign.editor.protocolHandle ?? campaign.editor.versionLabel}-${index}`}
               campaign={campaign}
@@ -655,7 +642,6 @@ export default function P0Client() {
             <button className={styles.primaryButton} type="submit" disabled={busy}>{busy ? "Агент выполняет работу…" : projection.primaryAction.label}</button>
           </form>}
           {viewingCurrentStage && !ownerHasAction && autonomousWork && <div className="owner-progress" role="status"><i /><div><strong>Агент продолжает работу</strong><p>Автоматические проверки и безопасная сверка не требуют действий владельца.</p></div></div>}
-          {viewingCurrentStage && !ownerHasAction && !autonomousWork && <section className="owner-terminal-result" role="status"><span>ТЕКУЩИЙ РЕЗУЛЬТАТ</span><h2>{projection.businessOutcome.headline}</h2><p>{projection.businessOutcome.summary}</p></section>}
           {error && <p className="owner-error" role="alert" ref={errorRef} tabIndex={-1}>{error}</p>}
         </section>
 
@@ -679,7 +665,7 @@ function BusinessModelEditor({
   return <section className="owner-strategy-version-editor owner-business-model-editor">
     <button type="button" onClick={() => setEditing((value) => !value)} aria-expanded={editing}>{editing ? "Закрыть редактор модели бизнеса" : "Изменить модель бизнеса"}</button>
     {editing && <form onSubmit={(event) => onEdit(event, editor.handle, editor.fields)}>
-      <p>Сохранение создаст новую текущую версию модели бизнеса и заново соберёт зависимые сведения, Strategy и Campaign Draft.</p>
+      <p>Сохранение создаст новую версию модели бизнеса и заново соберёт связанные данные, стратегию и черновики кампаний.</p>
       <div className="owner-fields">{editor.fields.map((field) => <OwnerField key={field.key} field={field} />)}</div>
       <footer><button type="button" onClick={(event) => { event.currentTarget.form?.reset(); setEditing(false); }}>Отменить правки</button><button type="submit" disabled={busy}>{busy ? "Сохраняю…" : "Сохранить и пересобрать"}</button></footer>
     </form>}
@@ -691,36 +677,29 @@ type PipelineCampaignDossier = NonNullable<NonNullable<OwnerJourneyProjection["p
 function CampaignPairDossier({ dossier }: { dossier: PipelineCampaignDossier }) {
   return <section className="owner-campaign-dossier" aria-labelledby="owner-campaign-dossier-title">
     <header>
-      <div><p className="owner-eyebrow">CAMPAIGN HYPOTHESIS + ПОЛНЫЙ CAMPAIGN DRAFT</p><h2 id="owner-campaign-dossier-title">{dossier.title}</h2><p>{dossier.profile}</p></div>
-      <strong>{dossier.state}</strong>
+      <div><p className="owner-eyebrow">ГИПОТЕЗА И ПОЛНЫЙ ЧЕРНОВИК КАМПАНИИ</p><h2 id="owner-campaign-dossier-title">{localizedText(dossier.title)}</h2><p title={dossier.profile}>Профиль черновика проверен</p></div>
+      <strong>{machineLabel(dossier.state)}</strong>
     </header>
-    <p className="owner-dossier-safety">{dossier.safety}</p>
-    <ol className="owner-dossier-lineage" aria-label="Campaign Strategy → Campaign Hypothesis → Campaign Draft">
-      {dossier.lineage.map((item) => <li key={item.kind}><span>{item.kind}</span><strong>{item.summary}</strong><small>{item.versionLabel}</small></li>)}
+    <p className="owner-dossier-safety">{localizedText(dossier.safety)}</p>
+    <ol className="owner-dossier-lineage" aria-label="Стратегия → гипотеза → черновик кампании">
+      {dossier.lineage.map((item) => <li key={item.kind}><span>{localizedText(item.kind)}</span><strong>{localizedText(item.summary)}</strong><small title={item.versionLabel}>Проверенная версия</small></li>)}
     </ol>
-    <section className="owner-dossier-hypothesis" aria-labelledby="owner-dossier-hypothesis-title">
-      <div><p className="owner-eyebrow">БИЗНЕС-СМЫСЛ</p><h3 id="owner-dossier-hypothesis-title">{dossier.hypothesis.mechanism}</h3></div>
-      <dl><div><dt>Основная метрика</dt><dd>{dossier.hypothesis.primaryMetric}</dd></div><div><dt>С чем сравниваем</dt><dd>{dossier.hypothesis.baseline}</dd></div></dl>
-      <p><b>Доказательства:</b> {dossier.hypothesis.evidence.join(" · ")}</p>
-    </section>
     <section className="owner-dossier-preview" aria-labelledby="owner-dossier-preview-title">
       <header><p className="owner-eyebrow">ЧТО УВИДИТ КЛИЕНТ</p><h3 id="owner-dossier-preview-title">Заголовки, тексты, ссылка и все сочетания</h3></header>
       <div className="owner-dossier-copy"><article><h4>Заголовки</h4><ul>{dossier.clientPreview.titles.map((title) => <li key={title}>{title}</li>)}</ul></article><article><h4>Тексты</h4><ul>{dossier.clientPreview.texts.map((value) => <li key={value}>{value}</li>)}</ul></article></div>
       <p className="owner-dossier-link"><b>Ссылка:</b> {dossier.clientPreview.link}</p>
       <ol className="owner-dossier-combinations">{dossier.clientPreview.combinations.map((combination, index) => <li key={`${combination.title}-${combination.text}-${index}`}><strong>{combination.title}</strong><span>{combination.text}</span><small>{combination.link}</small></li>)}</ol>
-      <footer><p><b>Происхождение:</b> {dossier.clientPreview.creativeSource} · {dossier.clientPreview.creativeRights}</p><p><b>Обязательные оговорки:</b> {dossier.clientPreview.requiredDisclaimers.length ? dossier.clientPreview.requiredDisclaimers.join(" · ") : "Не требуются для текущего подтверждённого содержания"}</p></footer>
+      <footer><p title={dossier.clientPreview.creativeSource}><b>Источник:</b> подготовлено по утверждённой стратегии · {localizedText(dossier.clientPreview.creativeRights)}</p><p><b>Обязательные оговорки:</b> {dossier.clientPreview.requiredDisclaimers.length ? dossier.clientPreview.requiredDisclaimers.map(localizedText).join(" · ") : "Не требуются для текущего подтверждённого содержания"}</p></footer>
     </section>
     <section className="owner-dossier-mapping" aria-labelledby="owner-dossier-mapping-title">
-      <header><p className="owner-eyebrow">STRATEGY → CAMPAIGN DRAFT</p><h3 id="owner-dossier-mapping-title">Решение → evidence → точное поле</h3></header>
+      <header><p className="owner-eyebrow">ОТ СТРАТЕГИИ К ЧЕРНОВИКУ</p><h3 id="owner-dossier-mapping-title">Ключевые решения стратегии</h3></header>
       {dossier.strategyMapping.map((item) => <article key={item.dimension}>
-        <h4>{item.dimension}</h4>
-        <div><span>Решение</span><strong>{item.decision}</strong><small>{item.rationale}</small></div>
-        <div><span>Evidence</span><ul>{item.evidence.map((reference) => <li key={reference}>{reference}</li>)}</ul></div>
-        <div><span>Точное поле Draft</span><dl>{item.exactDraftFields.map((field) => <div key={field.pointer}><dt><code>{field.pointer}</code></dt><dd>{field.value}</dd></div>)}</dl></div>
+        <h4>{ownerFieldLabel(item.dimension)}</h4>
+        <div><span>Решение</span><strong>{localizedText(item.decision)}</strong><small>{localizedText(item.rationale)}</small></div>
       </article>)}
     </section>
     <details className="owner-dossier-direct">
-      <summary>Точная Direct Projection · {dossier.directProjection.fields.length} полей</summary>
+      <summary>Технические поля Яндекс Директа · {dossier.directProjection.fields.length}</summary>
       <p>{dossier.directProjection.graph.join(" · ")}</p>
       <div>{dossier.directProjection.fields.map((field) => <article key={field.pointer}><code>{field.pointer}</code><strong>{field.disposition}</strong><output>{field.value}</output><small>Происхождение: {field.provenance}</small></article>)}</div>
     </details>
@@ -756,7 +735,7 @@ function currentAuctionSummary(projection: Record<string, unknown>) {
   const networkType = String(projectionAt(projection, "/direct/campaign/UnifiedCampaign/BiddingStrategy/Network/BiddingStrategyType") ?? "");
   const negatives = projectionAt(projection, "/direct/ad_group/NegativeKeywords/Items");
   return {
-    name: String(projectionAt(projection, "/direct/campaign/Name") ?? "Текущий Campaign Draft"),
+    name: localizedText(projectionAt(projection, "/direct/campaign/Name") ?? "Текущий черновик кампании"),
     placement: [
       searchResults === "YES" ? "Поиск Яндекса" : null,
       productGallery === "YES" ? "Товарная галерея" : null,
@@ -786,29 +765,29 @@ function CampaignMarketChecks({
   const cost = research?.cost;
   return <section className="owner-current-market" aria-labelledby="owner-current-market-title">
     <header>
-      <div><p className="owner-eyebrow">РЫНОЧНАЯ ПРОВЕРКА CAMPAIGN DRAFT</p><h3 id="owner-current-market-title">Аукцион и анализ Wordstat</h3></div>
+      <div><p className="owner-eyebrow">ПРОВЕРКА ЧЕРНОВИКА КАМПАНИИ</p><h3 id="owner-current-market-title">Спрос и аукцион</h3></div>
       <strong>{demand?.status ?? "Недоступно"}</strong>
     </header>
     <div className="owner-current-market-grid">
       <article className="owner-current-wordstat">
-        <span>АНАЛИЗ WORDSTAT</span>
-        <h4>{demand?.conclusion ?? "Подтверждённый срез Wordstat не найден; это не означает нулевой спрос."}</h4>
+        <span>ДАННЫЕ WORDSTAT</span>
+        <h4>{localizedText(demand?.conclusion ?? "Подтверждённые данные Wordstat не найдены; это не означает нулевой спрос.")}</h4>
         {demand ? <>
           <dl>
-            <div><dt>Источник и дата</dt><dd>{demand.source} · {demand.observedAt}</dd></div>
-            <div><dt>Метод и окно</dt><dd>{demand.method} · {demand.window}</dd></div>
-            <div><dt>Область</dt><dd>{demand.scope}</dd></div>
-            <div><dt>Покрытие</dt><dd>{demand.coverage}</dd></div>
-            <div><dt>Динамика и сезонность</dt><dd>{demand.seasonality}</dd></div>
+            <div><dt>Источник и дата</dt><dd>{localizedText(demand.source)} · {ownerDate(demand.observedAt)}</dd></div>
+            <div><dt>Как и когда проверяли</dt><dd>{localizedText(demand.method)} · {localizedText(demand.window)}</dd></div>
+            <div><dt>Где и для кого</dt><dd>{localizedText(demand.scope)}</dd></div>
+            <div><dt>Покрытие</dt><dd>{localizedText(demand.coverage)}</dd></div>
+            <div><dt>Динамика и сезонность</dt><dd>{localizedText(demand.seasonality)}</dd></div>
           </dl>
-          <ol>{demand.formulations.map((item, index) => <li key={`${item.category}-${item.phrase}-${index}`} data-frequency-state={item.status === "Частота получена" ? "available" : "unavailable"}><span>{item.category}</span><strong>{item.phrase}</strong><b>{item.frequency}</b><small>{item.method} · {item.operator} · {item.scope}</small></li>)}</ol>
-          {demand.gaps.length > 0 && <p><b>Пробелы:</b> {demand.gaps.join(" · ")}</p>}
-          <p>{demand.limitation}</p>
-        </> : <p>В текущем проверенном evidence нет доступной Wordstat-частоты. Нельзя подменять отсутствие данных нулевым спросом.</p>}
+          <ol>{demand.formulations.map((item, index) => <li key={`${item.category}-${item.phrase}-${index}`} data-frequency-state={item.status === "Частота получена" ? "available" : "unavailable"}><span>{localizedText(item.category)}</span><strong>{localizedText(item.phrase)}</strong><b>{item.frequency}</b><small>{localizedText(item.method)} · {item.operator} · {localizedText(item.scope)}</small></li>)}</ol>
+          {demand.gaps.length > 0 && <p><b>Чего не хватает:</b> {demand.gaps.map(localizedText).join(" · ")}</p>}
+          <p>{localizedText(demand.limitation)}</p>
+        </> : <p>В текущих проверенных данных нет частоты Wordstat. Отсутствие данных нельзя считать нулевым спросом.</p>}
       </article>
       <article className="owner-current-auction">
         <span>УЧАСТИЕ В АУКЦИОНЕ</span>
-        <h4>Как Draft ограничивает будущие торги</h4>
+        <h4>Как черновик ограничивает будущие торги</h4>
         {auctions.length ? <div>{auctions.map((auction, index) => <section key={`${auction.name}-${index}`}>
           <h5>{auction.name}</h5>
           <dl>
@@ -819,15 +798,209 @@ function CampaignMarketChecks({
             <div><dt>Ключевая фраза</dt><dd>{auction.keyword}</dd></div>
             <div><dt>Минус-слова</dt><dd>{auction.negativeKeywords}</dd></div>
           </dl>
-        </section>)}</div> : <p>Полная настройка участия в аукционе ещё не подтверждена Campaign Draft.</p>}
+        </section>)}</div> : <p>Настройки участия в аукционе ещё не подтверждены черновиком кампании.</p>}
         <dl className="owner-current-cost">
           <div><dt>Сопоставимая стоимость перехода</dt><dd>{cost?.range ?? "Недоступна"}</dd></div>
-          <div><dt>Источник оценки</dt><dd>{cost ? `${cost.source} · ${cost.observedAt}` : "Квалифицированный источник не найден"}</dd></div>
+          <div><dt>Источник оценки</dt><dd>{cost ? `${localizedText(cost.source)} · ${ownerDate(cost.observedAt)}` : "Квалифицированный источник не найден"}</dd></div>
         </dl>
         <p>Предел ставки — верхняя граница, а не обещанная цена клика. Фактическая цена может быть ниже; позиция и объём трафика заранее не гарантируются.</p>
       </article>
     </div>
-    <footer>Wordstat показывает наблюдаемую частоту формулировок. Аукционный блок показывает настройки черновика и доступную сопоставимую стоимость — ни один из блоков не является прогнозом кликов, позиции или бизнес-результата.</footer>
+    <footer>Wordstat показывает частоту запросов, а аукционный блок — настройки черновика и ориентир по стоимости. Эти данные не обещают клики, позицию или бизнес-результат.</footer>
+  </section>;
+}
+
+function financialRub(value: string | null) {
+  if (!value || !/^-?\d+$/u.test(value)) return "Недоступно";
+  return `${BigInt(value).toLocaleString("ru-RU")} ₽`;
+}
+
+function competitorAnalysisStatus(status: "AVAILABLE" | "PARTIAL" | "UNAVAILABLE") {
+  return status === "AVAILABLE" ? "Получено" : status === "PARTIAL" ? "Получено частично" : "Недоступно";
+}
+
+function competitiveRelationLabel(relation: "DIRECT_COMPETITOR" | "SUBSTITUTE_COMPETITOR" | null) {
+  return relation === "SUBSTITUTE_COMPETITOR"
+    ? "Альтернативный конкурент"
+    : relation === "DIRECT_COMPETITOR" ? "Прямой конкурент" : "Роль не классифицирована";
+}
+
+function financialProfileRoleLabel(role: "COMPANY" | "COMPETITOR" | "COMPANY_COMPETITOR") {
+  return role === "COMPANY_COMPETITOR" ? "Организатор · конкурент" : role === "COMPANY" ? "Организатор" : "Конкурент";
+}
+
+type CurrentEvidenceProjection = NonNullable<NonNullable<CurrentPipelineOwnerResult["products"]>["evidence"]>;
+
+const EVIDENCE_CODE_LABELS: Record<string, string> = {
+  CURRENT: "Актуально",
+  current: "Актуально",
+  AGING: "Требует скорого обновления",
+  aging: "Требует скорого обновления",
+  STALE: "Устарело",
+  stale: "Устарело",
+  UNKNOWN: "Свежесть неизвестна",
+  unknown: "Свежесть неизвестна",
+  COMPLETE_FOR_SCOPE: "Полно для указанной области",
+  complete_for_scope: "Полно для указанной области",
+  PARTIAL: "Частично",
+  partial: "Частично",
+  PRIMARY_ONLY: "Только первичные источники",
+  MIXED_ALLOWED: "Первичные и разрешённые публичные источники",
+  SINGLE_SOURCE: "Один источник",
+  CORROBORATED: "Подтверждено несколькими источниками",
+  CONFLICTED: "Есть противоречия",
+  TIER_1_VERIFIED: "Проверенный факт",
+  TIER_2_CORROBORATED: "Подтверждённый факт",
+  TIER_3_INDICATIVE: "Ориентировочные данные",
+  TIER_4_INFERENCE: "Интерпретация",
+  BLOCKED_UNKNOWN: "Неизвестно — использование заблокировано",
+};
+
+function evidenceCodeLabel(value: unknown) {
+  const code = String(value ?? "").trim();
+  return EVIDENCE_CODE_LABELS[code] ?? machineLabel(code, "Неизвестно");
+}
+
+const EVIDENCE_SCOPE_LABELS: Record<string, string> = {
+  client_login: "Логин аккаунта",
+  client_id: "ID клиента",
+  counter_id: "Счётчик Метрики",
+  goal_id: "Цель Метрики",
+  host: "Сайт",
+  regions: "Регионы",
+  region_names: "Регионы",
+  device: "Устройства",
+  access: "Доступ",
+  observations: "Наблюдения",
+};
+
+function evidenceScopeLabel(value: string) {
+  return EVIDENCE_SCOPE_LABELS[value] ?? ownerFieldLabel(value);
+}
+
+function evidenceScopeValue(value: unknown) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return Object.entries(value as JsonRecord).map(([key, item]) => `${evidenceScopeLabel(key)}: ${ownerValue(item)}`).join(" · ");
+  }
+  return ownerValue(value);
+}
+
+const COMPANY_FACT_PRIORITY = [
+  "product",
+  "value",
+  "audience",
+  "qualified_result",
+  "geography",
+  "exclusions",
+  "average_sale_value_rub",
+  "gross_margin_percent",
+];
+
+function EvidenceSnapshotOverview({ evidence }: { evidence: CurrentEvidenceProjection }) {
+  const provenance = evidence.provenance;
+  const companyFacts = [...provenance.company.facts]
+    .sort((left, right) => {
+      const leftPriority = COMPANY_FACT_PRIORITY.indexOf(left.field);
+      const rightPriority = COMPANY_FACT_PRIORITY.indexOf(right.field);
+      return (leftPriority < 0 ? COMPANY_FACT_PRIORITY.length : leftPriority)
+        - (rightPriority < 0 ? COMPANY_FACT_PRIORITY.length : rightPriority);
+    })
+    .slice(0, COMPANY_FACT_PRIORITY.length);
+  return <div className="owner-current-snapshot" data-evidence-status={provenance.recommendationStatus.toLowerCase()}>
+    <header>
+      <div><p className="owner-eyebrow">ТЕКУЩИЙ EVIDENCE SNAPSHOT</p><h4>Факты компании и доступ к данным</h4></div>
+      <strong>{evidenceCodeLabel(provenance.recommendationStatus)}</strong>
+    </header>
+    <p>Текущий Evidence Snapshot сформирован {ownerDate(provenance.generatedAt)}; состояние источников оценивается на {ownerDate(provenance.asOf)}.</p>
+    <dl className="owner-current-snapshot-meta">
+      <div><dt>ID среза</dt><dd>{provenance.snapshotId || "Недоступно"}</dd></div>
+      <div><dt>Источники</dt><dd>{provenance.summary.sourcesVerified} проверено · {provenance.summary.sourcesPartial} частично · {provenance.summary.sourcesUnavailable} недоступно</dd></div>
+      <div><dt>Свежесть</dt><dd>{evidenceCodeLabel(provenance.confidence.freshness)}</dd></div>
+      <div><dt>Покрытие</dt><dd>{evidenceCodeLabel(provenance.confidence.coverage)}</dd></div>
+      <div><dt>Уверенность</dt><dd>{evidenceCodeLabel(provenance.confidence.quality)} · {evidenceCodeLabel(provenance.confidence.consistency)}</dd></div>
+    </dl>
+    <div className="owner-current-evidence-core">
+      <article>
+        <header><h5>Компания · {provenance.company.host || "сайт не определён"}</h5><span>{companyFacts.length} из {provenance.company.facts.length} фактов</span></header>
+        {companyFacts.length ? <dl>{companyFacts.map((fact) => <div key={fact.id}>
+          <dt>{ownerFieldLabel(fact.field)}</dt>
+          <dd>{localizedText(fact.value)}</dd>
+          <small>{evidenceCodeLabel(fact.confidence.tier)} · {evidenceCodeLabel(fact.confidence.freshness)}</small>
+          {fact.sourceUrls.map((url) => <a key={url} href={url} target="_blank" rel="noreferrer">Источник</a>)}
+        </div>)}</dl> : <p>Подтверждённые сведения компании не получены.</p>}
+      </article>
+      {provenance.integrations.map((integration) => <article key={integration.id} data-source-status={integration.status.toLowerCase()}>
+        <header><h5>{integration.title}</h5><span>{evidenceCodeLabel(integration.status)}</span></header>
+        <dl>
+          <div><dt>Источник и дата наблюдения</dt><dd>{integration.sourceUrls.length ? integration.sourceUrls.map((url) => <a key={url} href={url} target="_blank" rel="noreferrer">Официальный источник</a>) : "URL недоступен"} · {integration.observedAt ? ownerDate(integration.observedAt) : "дата недоступна"}</dd></div>
+          <div><dt>Свежесть</dt><dd>{evidenceCodeLabel(integration.freshness)}</dd></div>
+          <div><dt>Область</dt><dd>{Object.entries(integration.scope).map(([key, value]) => `${evidenceScopeLabel(key)}: ${evidenceScopeValue(value)}`).join(" · ") || "Недоступна"}</dd></div>
+        </dl>
+        {integration.facts.length > 0 && <p>{integration.facts.map(localizedText).join(" · ")}</p>}
+        {integration.limitations.length > 0 && <p><b>Ограничения:</b> {integration.limitations.join(" · ")}</p>}
+      </article>)}
+    </div>
+    {(provenance.hardBlockers.length > 0 || provenance.materialUncertainties.length > 0) && <div className="owner-current-evidence-gaps">
+      <span className="owner-eyebrow">СУЩЕСТВЕННЫЕ НЕИЗВЕСТНЫЕ</span>
+      <strong>Недоступное не заменено нулями</strong>
+      <p>{[...provenance.hardBlockers, ...provenance.materialUncertainties].map(localizedText).join(" · ")}</p>
+    </div>}
+    <details className="owner-current-evidence-sources">
+      <summary>Источники, свежесть и ограничения</summary>
+      <div>{provenance.sources.map((source) => <article key={source.id} data-source-status={source.status.toLowerCase()}>
+        <header><h5>{localizedText(source.title)}</h5><span>{evidenceCodeLabel(source.status)}</span></header>
+        <dl>
+          <div><dt>Происхождение</dt><dd>{localizedText(source.provenanceClass)} · {localizedText(source.kind)}</dd></div>
+          <div><dt>Дата наблюдения</dt><dd>{source.observedAt ? ownerDate(source.observedAt) : "Недоступна"}</dd></div>
+          <div><dt>Свежесть</dt><dd>{evidenceCodeLabel(source.freshness)}</dd></div>
+          <div><dt>Область</dt><dd>{Object.entries(source.scope).map(([key, value]) => `${evidenceScopeLabel(key)}: ${evidenceScopeValue(value)}`).join(" · ") || "Недоступна"}</dd></div>
+        </dl>
+        {source.sourceUrls.length > 0 && <footer>{source.sourceUrls.map((url) => <a key={url} href={url} target="_blank" rel="noreferrer">Открыть источник</a>)}</footer>}
+        {source.facts.length > 0 && <p>{source.facts.map(localizedText).join(" · ")}</p>}
+        <p><b>Ограничения:</b> {source.limitations.length ? source.limitations.join(" · ") : "Не зафиксированы для текущей области."}</p>
+      </article>)}</div>
+      {provenance.domains.length > 0 && <ul className="owner-current-evidence-domains">{provenance.domains.map((domain) => <li key={domain.id}>
+        <strong>{localizedText(domain.id)}</strong><span>{evidenceCodeLabel(domain.status)}</span>
+        <small>Свежесть: {domain.freshness.current} актуально · {domain.freshness.aging} требует обновления · {domain.freshness.stale} устарело · {domain.freshness.unknown} неизвестно</small>
+      </li>)}</ul>}
+    </details>
+  </div>;
+}
+
+function EvidenceMarketResearch({ research }: { research: DemandCostResearchProjection }) {
+  const demand = research?.demand;
+  const cost = research?.cost;
+  return <section className="owner-current-market owner-current-market--evidence" aria-labelledby="owner-current-market-evidence-title">
+    <header><div><p className="owner-eyebrow">РЫНОК · ДО ЗАПУСКА</p><h3 id="owner-current-market-evidence-title">Спрос и сопоставимая стоимость</h3></div><strong>{demand?.status ?? "Недоступно"}</strong></header>
+    <div className="owner-current-market-grid">
+      <article className="owner-current-wordstat">
+        <span>ЯНДЕКС WORDSTAT</span>
+        <h4>{localizedText(demand?.conclusion ?? "Подтверждённая частота не получена.")}</h4>
+        {demand ? <>
+          <dl>
+            <div><dt>Источник и дата наблюдения</dt><dd>{localizedText(demand.source)} · {ownerDate(demand.observedAt)}</dd></div>
+            <div><dt>Метод и окно</dt><dd>{localizedText(demand.method)} · {localizedText(demand.window)}</dd></div>
+            <div><dt>Область</dt><dd>{localizedText(demand.scope)}</dd></div>
+            <div><dt>Покрытие</dt><dd>{localizedText(demand.coverage)}</dd></div>
+          </dl>
+          <ol>{demand.formulations.map((item, index) => <li key={`${item.category}-${item.phrase}-${index}`} data-frequency-state={item.status === "Частота получена" ? "available" : "unavailable"}><span>{localizedText(item.category)}</span><strong>{localizedText(item.phrase)}</strong><b>{item.frequency}</b><small>{localizedText(item.scope)} · {ownerDate(item.observedAt)}</small></li>)}</ol>
+          {demand.gaps.length > 0 && <p><b>Ограничения:</b> {demand.gaps.map(localizedText).join(" · ")}</p>}
+          <p>{localizedText(demand.limitation)}</p>
+        </> : <p>Недоступно — не означает ноль. Источник, дата и область наблюдения отсутствуют.</p>}
+      </article>
+      <article>
+        <span>СТОИМОСТЬ ДО ЗАПУСКА</span>
+        <h4>{cost?.range ?? "Сопоставимая стоимость недоступна"}</h4>
+        <dl>
+          <div><dt>Источник и дата наблюдения</dt><dd>{cost ? `${localizedText(cost.source)} · ${ownerDate(cost.observedAt)}` : "Недоступны"}</dd></div>
+          <div><dt>Область</dt><dd>{cost ? localizedText(cost.scope) : "Недоступна"}</dd></div>
+          <div><dt>Выборка</dt><dd>{cost?.sample ?? "Недоступна"}</dd></div>
+          <div><dt>НДС</dt><dd>{cost?.vat ?? "Недоступен"}</dd></div>
+        </dl>
+        <p><b>Ограничения:</b> {localizedText(cost?.limitation ?? "Недоступно — не означает нулевую стоимость.")}</p>
+      </article>
+    </div>
+    <footer>Коллекторы сохраняют источник, дату и область. Evidence Analyst интерпретирует только сохранённый срез; частота и диапазон не являются прогнозом результата.</footer>
   </section>;
 }
 
@@ -836,9 +1009,9 @@ function CurrentPipelineResult({
   stage,
   active,
   busy,
-  explanation,
   demandResearch,
-  onQuestion,
+  onEvidenceRefresh,
+  onCompetitorRefresh,
   onStrategy,
   onPair,
   onPlaybook,
@@ -847,9 +1020,9 @@ function CurrentPipelineResult({
   stage: OwnerJourneyStageId;
   active: boolean;
   busy: boolean;
-  explanation: CurrentResultExplanation | null;
   demandResearch: DemandCostResearchProjection;
-  onQuestion: (question: string, pairKey?: string) => Promise<void>;
+  onEvidenceRefresh: () => Promise<void>;
+  onCompetitorRefresh: () => Promise<void>;
   onStrategy: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   onPair: (
     event: FormEvent<HTMLFormElement>,
@@ -858,58 +1031,81 @@ function CurrentPipelineResult({
   ) => Promise<void>;
   onPlaybook: (action: "ACTIVATE_RELEASE" | "STOP_PLAYBOOK_USE", reason: string) => Promise<void>;
 }) {
-  const [stewardReason, setStewardReason] = useState("Проверено Knowledge Steward: применить решение только к будущему потреблению Playbook.");
+  const [stewardReason, setStewardReason] = useState("Проверено: применить решение только к будущему использованию базы правил.");
   const products = result.products;
   const governance = result.playbookGovernance as JsonRecord | null;
   const release = governance?.release as JsonRecord | undefined;
   const decision = governance?.latest_decision as JsonRecord | undefined;
   const playbookStopped = String(governance?.status ?? "") === "STOPPED";
   return <section className="owner-current-pipeline-result" data-current-state-revision={result.stateRevision ?? "none"}>
-    <section className="owner-result-questions" aria-labelledby="owner-result-questions-title">
-      <div><p className="owner-eyebrow">ПРОВЕРЯЕМЫЙ РЕЗУЛЬТАТ</p><h3 id="owner-result-questions-title">Спросить о текущем результате</h3></div>
-      <div>{result.questions.map((question) => <button key={question.label} type="button" disabled={busy || !products} onClick={() => onQuestion(question.prompt, products?.campaignPairs[0]?.pairKey)}>{question.label}</button>)}</div>
-      <form onSubmit={(event) => {
-        event.preventDefault();
-        const values = new FormData(event.currentTarget);
-        void onQuestion(
-          String(values.get("question") ?? ""),
-          String(values.get("pair_key") ?? "") || undefined,
-        );
-      }}>
-        <label><span>Свободный вопрос по проверяемому следу</span><textarea name="question" required maxLength={1_000} placeholder="Например: какие evidence и версии подтверждают эту пару?" /></label>
-        {products?.campaignPairs.length ? <label><span>Текущая материальная пара</span><select name="pair_key" defaultValue={products.campaignPairs[0].pairKey}>{products.campaignPairs.map((pair, index) => <option key={pair.pairKey} value={pair.pairKey}>Пара {index + 1}</option>)}</select></label> : null}
-        <button type="submit" disabled={busy || !products}>{busy ? "Проверяю…" : "Получить объяснение"}</button>
-      </form>
-      {explanation && <article role="status" className="owner-result-explanation"><strong>{explanation.scope}</strong><p>{explanation.answer}</p>{explanation.facts.length ? <ul>{explanation.facts.map((fact) => <li key={fact}>{fact}</li>)}</ul> : null}<small>{explanation.safety}</small></article>}
-    </section>
-
     {stage === "campaigns" && <CampaignMarketChecks
       research={demandResearch}
       auctions={products?.campaignPairs.map((pair) => currentAuctionSummary(pair.publishProjection)) ?? []}
     />}
 
     {stage === "findings" && <section className="owner-current-evidence" aria-labelledby="owner-current-evidence-title">
-      <p className="owner-eyebrow">EVIDENCE ANALYST</p><h3 id="owner-current-evidence-title">Текущий проверенный evidence-срез</h3>
-      {products?.evidence ? <dl><div><dt>Состояние среза</dt><dd>{products.evidence.schemaVersion || "Текущий snapshot"}</dd></div><div><dt>Financial Competitor Intelligence</dt><dd>{products.evidence.capabilityStatus === "UNAVAILABLE" ? "Недоступно — не считается нулём" : products.evidence.capabilityStatus}</dd></div><div><dt>Сформирован</dt><dd>{products.evidence.generatedAt || "Время сохранено в immutable lineage"}</dd></div></dl> : <p>Evidence Agent ещё не сохранил текущий срез.</p>}
+      <header>
+        <div><p className="owner-eyebrow">ПРОВЕРЕННЫЕ ДАННЫЕ</p><h3 id="owner-current-evidence-title">Компания, рынок, конкуренты и финансовый контекст</h3></div>
+        <div className="owner-current-evidence-actions">
+          {products?.evidence && <strong>{competitorAnalysisStatus(products.evidence.competitorAnalysis.status)}</strong>}
+          <button type="button" onClick={onEvidenceRefresh} disabled={busy || active}>{busy ? "Запускаю сбор…" : "Собрать все сведения заново"}</button>
+          <button type="button" onClick={onCompetitorRefresh} disabled={busy || active || !products?.evidence}>{busy ? "Обновляю…" : "Обновить данные о конкурентах"}</button>
+        </div>
+      </header>
+      {products?.evidence ? <>
+        <EvidenceSnapshotOverview evidence={products.evidence} />
+        <h4 className="owner-current-evidence-subtitle">Конкуренты и финансовый контекст</h4>
+        <p className="owner-current-evidence-summary">{products.evidence.competitorAnalysis.summary}</p>
+        <dl className="owner-current-evidence-meta">
+          <div><dt>Конкурентные предложения</dt><dd>{products.evidence.competitorAnalysis.observedOfferCount} из {products.evidence.competitorAnalysis.candidateCount}</dd></div>
+          <div><dt>Финансовая отчётность</dt><dd>{competitorAnalysisStatus(products.evidence.competitorAnalysis.financialStatus)}</dd></div>
+          <div><dt>Конкуренты проверены</dt><dd>{products.evidence.competitorRefresh?.refreshedAt ? ownerDate(products.evidence.competitorRefresh.refreshedAt) : products.evidence.generatedAt ? ownerDate(products.evidence.generatedAt) : "Время сохранено в истории версий"}</dd></div>
+        </dl>
+        {products.evidence.competitorAnalysis.competitors.length > 0 && <div className="owner-current-competitors">
+          {products.evidence.competitorAnalysis.competitors.map((competitor) => <article key={competitor.name} data-observation-status={competitor.observationStatus.toLowerCase()}>
+            <header><h4>{competitor.name}</h4><span>{competitor.publishedPrice ?? (competitor.observationStatus === "OBSERVED" ? "Проверено" : "Не получено")}</span></header>
+            <small className="owner-current-competitor-relation">{competitiveRelationLabel(competitor.competitiveRelation)}</small>
+            <p>{competitor.observationStatus === "OBSERVED" ? localizedText(competitor.observedOffer) : "Страница не получена при текущей проверке; предложение не считается подтверждённым."}</p>
+            {competitor.evidenceQuote && <blockquote>«{localizedText(competitor.evidenceQuote)}»</blockquote>}
+            <small>{competitor.observedAt ? `Наблюдение: ${ownerDate(competitor.observedAt)}` : "Дата наблюдения недоступна"}</small>
+            {competitor.observationScope && <small>{localizedText(competitor.observationScope)}</small>}
+            <small>{localizedText(competitor.rationale)}</small>
+            {competitor.limitations.length > 0 && <small><b>Ограничения:</b> {competitor.limitations.map(localizedText).join(" · ")}</small>}
+            {competitor.landingUrl && <a href={competitor.landingUrl} target="_blank" rel="noreferrer">{competitor.observationStatus === "OBSERVED" ? "Открыть подтверждённую страницу" : "Открыть заявленную страницу"}</a>}
+          </article>)}
+        </div>}
+        {products.evidence.competitorAnalysis.financialProfiles.length > 0 && <details className="owner-current-financial">
+          <summary>Финансовая отчётность юридических лиц</summary>
+          <div>{products.evidence.competitorAnalysis.financialProfiles.map((profile) => <article key={profile.name}>
+            <header><h4>{profile.name}</h4><span>{financialProfileRoleLabel(profile.role)}</span></header>
+            <dl><div><dt>Отчётный год</dt><dd>{profile.reportingYear ?? "Недоступен"}</dd></div><div><dt>Выручка</dt><dd>{financialRub(profile.revenueRub)}</dd></div><div><dt>Чистая прибыль</dt><dd>{financialRub(profile.netProfitRub)}</dd></div></dl>
+            <footer>{profile.bfoUrl && <a href={profile.bfoUrl} target="_blank" rel="noreferrer">ГИР БО ФНС</a>}{profile.rusprofileUrl && <a href={profile.rusprofileUrl} target="_blank" rel="noreferrer">Rusprofile</a>}</footer>
+          </article>)}</div>
+        </details>}
+        {products.evidence.competitorAnalysis.limitations.length > 0 && <p className="owner-current-evidence-limitations">Финансовые значения относятся к юридическим лицам целиком и не раскрывают рекламные бюджеты, CPC, CPA или эффективность кампаний конкурентов.</p>}
+        <p className="owner-current-evidence-refresh-note">Сбор выполняют read-only adapters: first-party HTTPS, официальные API Директа и Метрики, Wordstat bridge, разрешённые страницы конкурентов и настроенный Financial Intelligence bridge. Evidence Analyst интерпретирует уже собранный snapshot и не выполняет внешний сбор. Публикация, показы и расходы не разрешаются.</p>
+      </> : <p>Система проверки ещё не сохранила текущие данные.</p>}
     </section>}
 
+    {stage === "findings" && <EvidenceMarketResearch research={demandResearch} />}
+
     {stage === "strategy" && products?.strategy && <section className="owner-current-strategy" aria-labelledby="owner-current-strategy-title">
-      <header><div><p className="owner-eyebrow">STRATEGY AGENT · PRIORITY BUSINESS INPUT</p><h3 id="owner-current-strategy-title">Текущая Campaign Strategy</h3></div><strong>{products.strategy.status || "AGENT_ACCEPTED"}</strong></header>
-      <div className="owner-model-grid">{products.strategy.dimensions.map((dimension) => <article key={dimension.id}><header><h4>{dimension.id.replaceAll("_", " ")}</h4><span>{dimension.confidence || "—"}</span></header><p>{typeof dimension.value === "object" ? JSON.stringify(dimension.value) : String(dimension.value ?? "Не подтверждено")}</p><small>{dimension.rationale}</small></article>)}</div>
+      <header><div><p className="owner-eyebrow">ПОДГОТОВЛЕННАЯ СТРАТЕГИЯ</p><h3 id="owner-current-strategy-title">Текущая стратегия кампании</h3></div><strong>{machineLabel(products.strategy.status || "AGENT_ACCEPTED")}</strong></header>
+      <div className="owner-model-grid">{products.strategy.dimensions.map((dimension) => <article key={dimension.id}><header><h4>{ownerFieldLabel(dimension.id)}</h4><span>{machineLabel(dimension.confidence, "—")}</span></header><p>{ownerValue(dimension.value)}</p><small>{localizedText(dimension.rationale)}</small></article>)}</div>
       <form onSubmit={onStrategy}>
-        <h4>Материальная правка с полной повторной проверкой</h4>
+        <h4>Важная правка с полной повторной проверкой</h4>
         <div className="owner-fields">
           <label><span>География</span><input name="geography" required defaultValue={String(currentDimension(result, "geography"))} /></label>
           <label><span>Недельный бюджет, ₽</span><input name="weekly_budget" type="number" min="1" required defaultValue={String(currentDimension(result, "weekly_budget"))} /></label>
           <label><span>Целевая стоимость результата, ₽</span><input name="target_result_cost" type="number" min="0" defaultValue={String(currentDimension(result, "target_result_cost") ?? "")} /></label>
           <label><span>Основное сообщение</span><textarea name="core_message" required defaultValue={String(currentDimension(result, "core_message"))} /></label>
         </div>
-        <button type="submit" disabled={busy || active}>{busy ? "Перепроверяю…" : "Сохранить как приоритетный ввод"}</button>
+        <button type="submit" disabled={busy || active}>{busy ? "Перепроверяю…" : "Сохранить и перепроверить"}</button>
       </form>
     </section>}
 
     {stage === "campaigns" && <section className="owner-current-pairs" aria-labelledby="owner-current-pairs-title">
-      <header><div><p className="owner-eyebrow">CAMPAIGN HYPOTHESIS → CAMPAIGN DRAFT</p><h3 id="owner-current-pairs-title">Текущие материальные пары</h3></div><strong>{products?.campaignPairs.length ?? 0}</strong></header>
+      <header><div><p className="owner-eyebrow">ОТ ГИПОТЕЗЫ К ЧЕРНОВИКУ</p><h3 id="owner-current-pairs-title">Текущие пары</h3></div><strong>{products?.campaignPairs.length ?? 0}</strong></header>
       {products?.campaignPairs.map((pair, index) => {
         const semanticDefaults = {
           product: projectionAt(pair.publishProjection, "/business/product") ?? currentDimension(result, "campaign_focus"),
@@ -928,35 +1124,35 @@ function CurrentPipelineResult({
           measurement_goal: String(pair.auctionProtocol.measurement_goal ?? semanticDefaults.qualified_result ?? ""),
         };
         return <article key={pair.pairKey} className="owner-current-pair">
-          <header><span>Материальная пара {index + 1}</span><strong>Одна Hypothesis · один Draft</strong></header>
+          <header><span>Пара {index + 1}</span><strong>Одна гипотеза · один черновик</strong></header>
           <form onSubmit={(event) => onPair(event, pair, "semantic")}>
             <input type="hidden" name="pair_key" value={pair.pairKey} />
-            <h4>Campaign Hypothesis · бизнес-смысл</h4>
-            <div className="owner-fields">{Object.entries(semanticDefaults).map(([name, value]) => <label key={name}><span>{name.replaceAll("_", " ")}</span><textarea name={name} required defaultValue={String(value ?? "")} /></label>)}</div>
-            <button type="submit" disabled={busy || active}>Сохранить Hypothesis и пересобрать Draft</button>
+            <h4>Гипотеза кампании · бизнес-смысл</h4>
+            <div className="owner-fields">{Object.entries(semanticDefaults).map(([name, value]) => <label key={name}><span>{ownerFieldLabel(name)}</span><textarea name={name} required defaultValue={String(value ?? "")} /></label>)}</div>
+            <button type="submit" disabled={busy || active}>Сохранить гипотезу и пересобрать черновик</button>
           </form>
           <form onSubmit={(event) => onPair(event, pair, "technical")}>
             <input type="hidden" name="pair_key" value={pair.pairKey} />
-            <h4>Campaign Draft · Direct preview и протокол</h4>
-            <div className="owner-fields">{Object.entries(technicalDefaults).map(([name, value]) => <label key={name}><span>{name.replaceAll("_", " ")}</span><textarea name={name} required defaultValue={String(value)} /></label>)}</div>
-            <button type="submit" disabled={busy || active}>Сохранить новую Draft revision</button>
+            <h4>Черновик кампании · предпросмотр и настройки</h4>
+            <div className="owner-fields">{Object.entries(technicalDefaults).map(([name, value]) => <label key={name}><span>{ownerFieldLabel(name)}</span><textarea name={name} required defaultValue={String(value)} /></label>)}</div>
+            <button type="submit" disabled={busy || active}>Сохранить новую версию черновика</button>
           </form>
         </article>;
       })}
-      {!products?.campaignPairs.length && <p>Campaign Design Agent ещё не сохранил ни одной текущей материальной пары.</p>}
+      {!products?.campaignPairs.length && <p>Система подготовки кампаний ещё не сохранила ни одной текущей пары.</p>}
     </section>}
 
     {stage === "review" && <section className="owner-current-review" aria-labelledby="owner-current-review-title">
-      <header><div><p className="owner-eyebrow">PUBLICATION REVIEW · БЕЗ ПУБЛИКАЦИИ</p><h3 id="owner-current-review-title">Проверка готовности пакета</h3></div><strong>{result.preflight.passed}/{result.preflight.total}</strong></header>
-      <p>{result.preflight.status === "PASS" ? "Все бизнес-проверки пройдены." : `${Math.max(0, result.preflight.total - result.preflight.passed)} проверки требуют подтверждённого evidence.`}</p>
-      <ul className="owner-preflight-gates">{result.preflight.preflightGates.map((gate) => <li key={`${gate.label}-${gate.explanation}`} data-status={gate.status}><strong>{gate.label}</strong><span>{gate.status}</span><p>{gate.explanation}</p></li>)}</ul>
-      <p><b>Граница:</b> Direct write denied · публикация не разрешена · показы 0 · расходы 0.</p>
-      <details open><summary>Версии для воспроизводимости</summary><ul>{result.reproducibilityVersions.map((version) => <li key={`${version.label}-${version.value}`}><strong>{version.label}</strong><span>{version.value.replace(/sha256:[a-f0-9]{64}/gu, "content-addressed revision")}</span></li>)}</ul></details>
+      <header><div><p className="owner-eyebrow">ПРОВЕРКА ПЕРЕД ПУБЛИКАЦИЕЙ</p><h3 id="owner-current-review-title">Готовность кампаний</h3></div><strong>{result.preflight.passed}/{result.preflight.total}</strong></header>
+      <p>{result.preflight.status === "PASS" ? "Все проверки пройдены." : `${Math.max(0, result.preflight.total - result.preflight.passed)} проверки требуют подтверждённых данных.`}</p>
+      <ul className="owner-preflight-gates">{result.preflight.preflightGates.map((gate) => <li key={`${gate.label}-${gate.explanation}`} data-status={gate.status}><strong>{localizedText(gate.label)}</strong><span>{machineLabel(gate.status)}</span><p>{localizedText(gate.explanation)}</p></li>)}</ul>
+      <p><b>Важно:</b> запись в Яндекс Директ запрещена; публикации, показов и расходов нет.</p>
+      <details><summary>Технические версии</summary><ul>{result.reproducibilityVersions.map((version) => <li key={`${version.label}-${version.value}`}><strong>{localizedText(version.label)}</strong><span>{version.value.replace(/sha256:[a-f0-9]{64}/gu, "служебная версия")}</span></li>)}</ul></details>
       {governance && <section className="owner-playbook-governance" aria-labelledby="owner-playbook-governance-title">
-        <h4 id="owner-playbook-governance-title">Campaign Playbook · Knowledge Steward</h4>
-        <p>Состояние: <b>{String(governance.status ?? "BLOCKED")}</b>. Release: {String(release?.release_id ?? "нет")} · {String(release?.release_version ?? "")}. Methodology candidates: {String(governance.methodology_candidate_count ?? 0)}.</p>
-        <label><span>Основание решения Steward</span><textarea value={stewardReason} onChange={(event) => setStewardReason(event.currentTarget.value)} /></label>
-        <button type="button" disabled={busy || !decision || !stewardReason.trim()} onClick={() => onPlaybook(playbookStopped ? "ACTIVATE_RELEASE" : "STOP_PLAYBOOK_USE", stewardReason)}>{playbookStopped ? "Возобновить потребление exact release" : "Остановить новое потребление Playbook"}</button>
+        <h4 id="owner-playbook-governance-title">База проверенных правил</h4>
+        <p title={String(release?.release_id ?? "")}><b>{machineLabel(governance.status, "Заблокировано")}</b>. Версия: {String(release?.release_version ?? "не указана")}. Новых предложений: {String(governance.methodology_candidate_count ?? 0)}.</p>
+        <label><span>Почему принято это решение</span><textarea value={stewardReason} onChange={(event) => setStewardReason(event.currentTarget.value)} /></label>
+        <button type="button" disabled={busy || !decision || !stewardReason.trim()} onClick={() => onPlaybook(playbookStopped ? "ACTIVATE_RELEASE" : "STOP_PLAYBOOK_USE", stewardReason)}>{playbookStopped ? "Снова использовать базу правил" : "Не использовать базу правил в новых кампаниях"}</button>
       </section>}
     </section>}
   </section>;
@@ -1036,79 +1232,6 @@ function CampaignOption({
   </article>;
 }
 
-function Hero({ projection }: { projection: OwnerJourneyProjection }) {
-  return <section className={styles.hero}>
-    <div><p className={styles.eyebrow}>P0 · ПРОИЗВОДСТВЕННЫЙ МОДУЛЬ</p><h1>Стратегия и рекламные кампании</h1><p>Агент ведёт владельца от бизнес-цели до готовых рекламных кампаний.</p></div>
-    <div className={styles.heroOutcome}><span>Текущий результат</span><strong>{projection.businessOutcome.headline}</strong><small>{projection.businessOutcome.summary}</small></div>
-  </section>;
-}
-
-type PipelineProjection = NonNullable<OwnerJourneyProjection["pipeline"]>;
-
-function PipelineControl({
-  pipeline,
-  busy,
-  onAction,
-}: {
-  pipeline: PipelineProjection;
-  busy: boolean;
-  onAction: (action: "START" | "STOP") => Promise<void>;
-}) {
-  return <section className="owner-pipeline-control" data-run-status={pipeline.status} aria-labelledby="owner-pipeline-title">
-    <header>
-      <div><p className="owner-eyebrow">ЕДИНЫЙ ЗАПУСК</p><h2 id="owner-pipeline-title">{pipeline.currentTask}</h2><p>{pipeline.stateText}</p></div>
-      <strong>{pipeline.active ? "Выполняется" : pipeline.status === "STOPPED" ? "Остановлен" : pipeline.status === "COMPLETED" ? "Завершён" : "Готов к запуску"}</strong>
-    </header>
-    {pipeline.return && <article className="owner-pipeline-return" role="status">
-      <span>ВОЗВРАТ</span><strong>{pipeline.return.source} → {pipeline.return.target}</strong><p>{pipeline.return.reason}</p>
-    </article>}
-    {pipeline.editingLocked && <p className="owner-pipeline-lock" role="status">Текущие Цель, Campaign Strategy и пары доступны только для чтения до остановки или завершения запуска.</p>}
-    {pipeline.provenance && <ResultProvenance provenance={pipeline.provenance} />}
-    <footer>
-      {pipeline.canStart && <button type="button" className={styles.primaryButton} onClick={() => onAction("START")} disabled={busy}>{busy ? "Запускаю…" : "Запустить"}</button>}
-      {pipeline.canStop && <button type="button" className="owner-pipeline-stop" onClick={() => onAction("STOP")} disabled={busy}>{busy ? "Останавливаю…" : "Остановить"}</button>}
-    </footer>
-  </section>;
-}
-
-function ResultProvenance({ provenance }: { provenance: NonNullable<PipelineProjection["provenance"]> }) {
-  return <details className="owner-result-provenance" open>
-    <summary>{provenance.title}</summary>
-    <p className="owner-result-safety">{provenance.safety}</p>
-    {provenance.agents.length > 0 && <section className="owner-result-agents" aria-label="Агенты текущего запуска">
-      <h3>Агенты текущего запуска</h3>
-      {provenance.agents.map((agent, index) => <article key={`${agent.name}-${agent.stage}-${index}`}>
-        <header><strong>{agent.name}</strong><span>{agent.stage}</span></header>
-        <p><b>Работа:</b> {agent.work}.</p>
-        <p><b>Результат:</b> {agent.outcome}</p>
-        <p><b>Основание:</b> {agent.evidenceBasis.length ? agent.evidenceBasis.join("; ") : "точные входы текущего этапа"}.</p>
-      </article>)}
-    </section>}
-    {provenance.pairs.length > 0 && <section className="owner-result-pairs" aria-label="Текущие проверенные пары">
-      <h3>Текущие пары результата</h3>
-      {provenance.pairs.map((pair) => <article key={pair.key}>
-        <strong>{pair.label}</strong>
-        <span>{pair.hypothesis.kind}: {pair.hypothesis.revision}</span>
-        <span>{pair.draft.kind}: {pair.draft.revision}</span>
-      </article>)}
-    </section>}
-    <section className="owner-result-events" aria-label="Очищенный след этапов и попыток">
-      <h3>Запуск, этапы и попытки</h3>
-      {provenance.events.map((event, index) => <article key={`${event.stage}-${event.attempt}-${index}`}>
-        <header><strong>{event.stage}</strong><span>{event.status} · попытка {event.attempt}</span></header>
-        <p><b>Исполнитель:</b> {event.executor}. <b>Задача:</b> {event.task}.</p>
-        <p><b>Входы:</b> {event.inputs.length ? event.inputs.map((item) => `${item.kind} · ${item.revision}`).join("; ") : "не требовались"}.</p>
-        <p><b>Доказательства:</b> {event.evidence.length ? event.evidence.map((item) => `${item.kind} · ${item.revision}`).join("; ") : "не требовались"}.</p>
-        <p><b>Проверки:</b> {event.checks.length ? event.checks.join("; ") : "для этого события не требовались"}.</p>
-        {event.safeCorrection && <p><b>Безопасное исправление:</b> {event.safeCorrection}</p>}
-        {event.retry && <p><b>Повтор:</b> {event.retry}</p>}
-        {event.return && <p><b>Возврат:</b> {event.return}</p>}
-        {event.handoff && <p><b>Передача:</b> {event.handoff}</p>}
-      </article>)}
-    </section>
-  </details>;
-}
-
 function StageNavigation({ projection, selectedStage, onStage }: { projection: OwnerJourneyProjection; selectedStage: OwnerJourneyStageId; onStage: (stage: OwnerJourneyStageId) => void }) {
   const pipeline = projection.pipeline;
   const legacyStages = projection.journey.stages.map((stage, index) => ({
@@ -1118,8 +1241,14 @@ function StageNavigation({ projection, selectedStage, onStage }: { projection: O
     icon: stage.status === "complete" ? "✓" : String(index + 1),
     tone: stage.status === "complete" ? "complete" : stage.status === "current" ? "active" : "pending",
   }));
-  const stages = pipeline && pipeline.status !== "NOT_STARTED" ? pipeline.stages : legacyStages;
-  const currentStage = pipeline && pipeline.status !== "NOT_STARTED" ? pipeline.currentStage : projection.journey.currentStage;
+  const sourceStages = pipeline?.stages ?? legacyStages;
+  const needsGoalClarification = goalNeedsClarification(projection);
+  const stages = sourceStages.map((stage) => stage.id === "goal" && needsGoalClarification
+    ? { ...stage, status: "Требует уточнения", icon: "!", tone: "returned" as const }
+    : stage);
+  const currentStage = needsGoalClarification
+    ? "goal"
+    : pipeline?.currentStage ?? projection.journey.currentStage;
   return <ol className={`${styles.stageNav} ${styles.stageNavhorizontal}`} aria-label="Путь подготовки рекламных кампаний">
     {stages.map((stage) => {
       const statusText = stage.status;
@@ -1148,109 +1277,90 @@ function StageNavigation({ projection, selectedStage, onStage }: { projection: O
   </ol>;
 }
 
-function GoalFormationSummary({
-  pipeline,
-  busy,
-  onCorrect,
-}: {
-  pipeline: PipelineProjection;
-  busy: boolean;
-  onCorrect: (event: FormEvent<HTMLFormElement>) => Promise<void>;
-}) {
-  const formation = pipeline.goalFormation;
-  if (formation.status === "PENDING") {
-    return <section className="owner-goal-formation" data-goal-status="PENDING" aria-live="polite">
-      <header><div><p className="owner-eyebrow">GOAL AGENT + ПРОВЕРКА КОДОМ</p><h2>Формируется полная цель кампании</h2></div><strong>Выполняется</strong></header>
-      <p>Агент связывает желаемый бизнес-результат, квалифицированное действие, происхождение и известные ограничения.</p>
-    </section>;
-  }
-  if (formation.status === "VERIFIED") {
-    return <section className="owner-goal-formation" data-goal-status="VERIFIED" aria-labelledby="owner-verified-goal-title">
-      <header><div><p className="owner-eyebrow">ПРОВЕРЕННАЯ GOAL REVISION</p><h2 id="owner-verified-goal-title">{formation.desiredOutcome}</h2></div><strong>{formation.versionLabel} · Проверена</strong></header>
-      <article><span>Квалифицированное действие</span><h3>{formation.qualifiedAction}</h3><p>Без обязательного подтверждения владельцем: код проверил полную редакцию и точные входы.</p></article>
-      {formation.rebuildRequired.length > 0 && <section className="owner-goal-rebuild" role="status"><h3>Что требует пересборки</h3><ul>{formation.rebuildRequired.map((item) => <li key={item}>{item}</li>)}</ul><p>Независимые результаты не аннулируются.</p></section>}
-      {formation.canCorrect && <form className="owner-goal-correction" onSubmit={onCorrect}>
-        <h3>Исправить текущую Цель</h3><p>Существенная правка создаст новую редакцию и аннулирует только зависимые сведения, Strategy и пары.</p>
-        <label><span>Желаемый бизнес-результат</span><textarea name="desired_outcome" defaultValue={formation.desiredOutcome} required maxLength={1000} /></label>
-        <label><span>Квалифицированное действие</span><textarea name="qualified_action" defaultValue={formation.qualifiedAction} required maxLength={1000} /></label>
-        <button type="submit" disabled={busy}>{busy ? "Сохраняю…" : "Сохранить исправление"}</button>
-      </form>}
-    </section>;
-  }
-  return <section className="owner-goal-formation owner-goal-decision" data-goal-status="MATERIAL_DECISION_REQUIRED" aria-labelledby="owner-goal-decision-title">
-    <header><div><p className="owner-eyebrow">НУЖЕН ВЫБОР БИЗНЕС-РЕЗУЛЬТАТА</p><h2 id="owner-goal-decision-title">Варианты материально различаются</h2><p>{formation.reason}</p></div><strong>Рекомендация подготовлена</strong></header>
-    <p className="owner-goal-recommendation"><b>Рекомендация агента:</b> {formation.recommendation}</p>
-    <div className="owner-goal-options">{formation.options.map((option) => <article key={option.id} data-recommended={option.recommended}>
-      <header><span>{option.recommended ? "РЕКОМЕНДАЦИЯ" : "АЛЬТЕРНАТИВА"}</span><h3>{option.desiredOutcome}</h3></header>
-      <p><b>Квалифицированное действие:</b> {option.qualifiedAction}</p>
-      <section><h4>Доказательства</h4><ul>{option.evidence.map((item) => <li key={item}>{item}</li>)}</ul></section>
-      <section><h4>Последствия выбора</h4><ul>{option.consequences.map((item) => <li key={item}>{item}</li>)}</ul></section>
-    </article>)}</div>
-  </section>;
-}
+type GoalCriterionValues = {
+  targetCount: number;
+  deadline: string;
+  maxResultCostRub: number;
+};
 
-function GoalStageSummary({ projection }: { projection: OwnerJourneyProjection }) {
+function goalCriterionValues(projection: CurrentOwnerProjection): GoalCriterionValues {
   const currentGoal = projection.pipeline?.goalFormation.status === "VERIFIED"
     ? projection.pipeline.goalFormation
     : null;
-  const qualifiedResult = projection.businessModel?.fields.find((field) => field.label === "Квалифицированный результат");
-  return <section className="owner-stage-summary" aria-labelledby="owner-goal-summary-title">
-    <header><div><p className="owner-eyebrow">ЦЕЛЬ</p><h2 id="owner-goal-summary-title">Цель и бизнес-результат</h2></div><strong>{projection.campaignGoalConfirmed ? "Сформирована" : projection.campaignGoal ? "Рекомендация агента" : "Текущий этап"}</strong></header>
-    <div>
-      <article><span>Цель рекламной кампании</span><strong>{currentGoal?.desiredOutcome ?? projection.campaignGoal ?? "Агент готовит рекомендацию"}</strong><p>{currentGoal ? "Показана только текущая проверенная редакция Цели." : projection.campaignGoalConfirmed ? "Цель сохранена после подтверждения и определяет бизнес-смысл дальнейшей стратегии." : "Это подготовленная рекомендация; владелец может исправить её перед сохранением."}</p></article>
-      <article><span>Качественный результат</span><strong>{currentGoal?.qualifiedAction ?? qualifiedResult?.value ?? projection.businessOutcome.headline}</strong><p>{currentGoal ? "Текущее квалифицированное действие связано с этой редакцией Цели." : qualifiedResult?.limitation ?? projection.businessOutcome.summary}</p></article>
-      <article><span>Целевая стоимость результата <button type="button" className="owner-term-info" aria-label="Описание целевой стоимости результата" aria-describedby="target-result-cost-help">i<span id="target-result-cost-help" className="owner-term-tooltip" role="tooltip"><strong>Предельная стоимость одного квалифицированного обращения, при которой реклама сохраняет экономический смысл.</strong><small><b>Формула:</b> ценность продажи × валовая маржа × конверсия обращения в продажу.</small></span></button></span><strong>{projection.businessModel?.economics.targetResultCost ?? "Будет рассчитана после подтверждения экономики"}</strong><p>{projection.businessModel?.economics.explanation ?? "Агент сначала проверяет доступные факты и готовит цель для решения владельца."}</p></article>
-    </div>
-  </section>;
+  return currentGoal?.successCriterion ?? { targetCount: 0, deadline: "", maxResultCostRub: 0 };
 }
 
-function GoalInterview({
-  interview,
+function goalSuccessCriterion(qualifiedAction: string, values: GoalCriterionValues) {
+  const formattedDeadline = values.deadline
+    ? new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${values.deadline}T00:00:00Z`))
+    : "";
+  const formattedCost = values.maxResultCostRub > 0
+    ? `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 }).format(values.maxResultCostRub)} ₽`
+    : "";
+  const resultName = /заяв/iu.test(qualifiedAction)
+    ? "квалифицированных заявок"
+    : /обращ/iu.test(qualifiedAction) ? "квалифицированных обращений" : "квалифицированных результатов";
+  if (values.targetCount > 0 && formattedDeadline && formattedCost) {
+    return `${values.targetCount} ${resultName} до ${formattedDeadline} по цене не выше ${formattedCost} за результат`;
+  }
+  const missing = [
+    values.targetCount > 0 ? null : "целевое количество",
+    formattedDeadline ? null : "срок",
+    formattedCost ? null : "максимальную стоимость",
+  ].filter(Boolean);
+  return `Нужно уточнить: ${missing.join(", ")}`;
+}
+
+function GoalStageSummary({
+  projection,
   busy,
-  headingRef,
-  onSubmit,
-  onKeyDown,
+  onCorrect,
 }: {
-  interview: NonNullable<OwnerJourneyProjection["goalInterview"]>;
+  projection: CurrentOwnerProjection;
   busy: boolean;
-  headingRef: React.RefObject<HTMLHeadingElement | null>;
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-  onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+  onCorrect: (event: FormEvent<HTMLFormElement>) => Promise<boolean>;
 }) {
-  const action = interview.primaryAction;
-  const confidence = interview.recommendedAnswer?.confidence === "MEDIUM" ? "Средняя" : "Ограниченная";
-  return <section className="owner-interview" aria-labelledby="owner-interview-title">
-    <header><div><p className="owner-eyebrow">ДИАЛОГ С АГЕНТОМ</p><h2 id="owner-interview-title" ref={headingRef} tabIndex={-1}>Цель кампании и модель бизнеса</h2></div><strong>{interview.complete ? "Ответы сохранены" : "Нужно решение"}</strong></header>
-    {!interview.complete && <article className="owner-interview-question">
-      <span>Вопрос агента</span><h3>{interview.question}</h3>
-    </article>}
-    {interview.recommendedAnswer && !interview.complete && <article className="owner-interview-recommendation">
-      <span>Рекомендованный ответ</span><h3>{interview.recommendedAnswer.answer}</h3>
-      <p><b>Почему:</b> {interview.recommendedAnswer.rationale}</p>
-      <p><b>Основание:</b> {interview.recommendedAnswer.evidence}</p>
-      <small>Уверенность: {confidence}</small>
-    </article>}
-    {interview.ownerCorrection && !interview.complete && <article className="owner-interview-correction"><span>Исправление владельца</span><strong>{interview.ownerCorrection}</strong></article>}
-    {interview.confirmation && !interview.complete && <article className="owner-interview-confirmation"><span>Ответ перед сохранением · {interview.confirmation.source}</span><strong>{interview.confirmation.answer}</strong></article>}
-    {interview.confirmedAnswers.length > 0 && <section className="owner-interview-history" aria-labelledby="owner-interview-history-title">
-      <h3 id="owner-interview-history-title">Сохранённые ответы</h3>
-      <ol>{interview.confirmedAnswers.map((answer, index) => <li key={`${answer.question}-${index}`}><span>{answer.question}</span><strong>{answer.answer}</strong><small>{answer.source}</small></li>)}</ol>
-    </section>}
-    {action && <form key={action.handle} className="owner-interview-action" onSubmit={onSubmit} aria-label="Ответ агенту" aria-busy={busy}>
-      <header><h3>{action.label}</h3><p>{action.description}</p></header>
-      {action.fields.length > 0 && <div className="owner-fields">{action.fields.map((field) => <OwnerField key={field.key} field={field} onTextareaKeyDown={onKeyDown} />)}</div>}
-      <button className={styles.primaryButton} type="submit" disabled={busy}>{busy ? "Сохраняю ответ…" : action.label}</button>
-      {action.fields.length > 0 && <small className="owner-keyboard-hint">Ctrl/⌘ + Enter — проверить ответ</small>}
-      {busy && <span className="owner-visually-hidden" role="status">Ответ сохраняется</span>}
-    </form>}
-  </section>;
-}
+  const currentGoal = projection.pipeline?.goalFormation.status === "VERIFIED"
+    ? projection.pipeline.goalFormation
+    : null;
+  const criterion = goalCriterionValues(projection);
+  const criterionComplete = currentGoal?.criterionComplete === true;
+  const [editing, setEditing] = useState(!currentGoal || !criterionComplete);
+  const qualifiedResult = projection.businessModel?.fields.find((field) => field.label === "Квалифицированный результат");
+  const desiredOutcome = currentGoal?.desiredOutcome ?? projection.campaignGoal ?? "";
+  const qualifiedAction = currentGoal?.qualifiedAction ?? qualifiedResult?.value ?? projection.businessOutcome.headline;
+  const successCriterion = goalSuccessCriterion(qualifiedAction, criterion);
+  const canCorrect = projection.pipeline?.editingLocked !== true;
 
-function StageUnavailable({ projection, stage }: { projection: OwnerJourneyProjection; stage: OwnerJourneyStageId }) {
-  const label = projection.journey.stages.find((item) => item.id === stage)?.label ?? "Следующий этап";
-  const current = projection.journey.stages.find((item) => item.status === "current")?.label ?? "текущий этап";
-  return <section className="owner-stage-unavailable" role="status">
-    <span>ЭТАП ЕЩЁ НЕ ОТКРЫТ</span><h2>{label}</h2><p>Сначала завершите этап «{current}». Просмотр этого раздела не меняет состояние и не выдаёт новых полномочий.</p>
+  async function saveGoal(event: FormEvent<HTMLFormElement>) {
+    if (await onCorrect(event)) setEditing(false);
+  }
+
+  return <section className="owner-stage-summary owner-goal-summary" aria-labelledby="owner-goal-summary-title" data-complete={criterionComplete}>
+    <header className="owner-goal-summary-header">
+      <div><p className="owner-eyebrow">ЦЕЛЬ КАМПАНИИ</p><h2 id="owner-goal-summary-title">Что считаем успехом</h2></div>
+      <div><strong>{criterionComplete ? "Завершено" : currentGoal ? "Требует уточнения" : "Не заполнено"}</strong>{canCorrect && !editing && <button type="button" onClick={() => setEditing(true)}>Изменить цель</button>}</div>
+    </header>
+    {!editing ? <div className="owner-goal-cards">
+      <article className="owner-goal-card"><header><span>Бизнес-цель</span></header><strong>{desiredOutcome}</strong></article>
+      <article className="owner-goal-card"><header><span>Квалифицированный результат</span></header><strong>{qualifiedAction}</strong></article>
+      <article className="owner-goal-card owner-goal-criterion" data-complete={criterionComplete}><header><span>Критерий успеха</span></header><strong>{successCriterion}</strong></article>
+    </div> : <form className="owner-goal-editor" onSubmit={saveGoal}>
+      <div className="owner-goal-editor-copy">
+        <label><span>Бизнес-цель</span><textarea name="desired_outcome" defaultValue={desiredOutcome} required maxLength={1000} /></label>
+        <label><span>Квалифицированный результат</span><textarea name="qualified_action" defaultValue={qualifiedAction} required maxLength={1000} /></label>
+      </div>
+      <fieldset>
+        <legend>Критерий успеха</legend>
+        <div>
+          <label><span>Целевое количество</span><input name="target_count" type="number" min="1" step="1" defaultValue={criterion.targetCount || ""} required /></label>
+          <label><span>Срок</span><input name="deadline" type="date" defaultValue={criterion.deadline} required /></label>
+          <label><span>Максимальная стоимость, ₽</span><input name="max_result_cost_rub" type="number" min="1" step="1" defaultValue={criterion.maxResultCostRub || ""} required /></label>
+        </div>
+      </fieldset>
+      <p>Цель сохранится одной версией, после чего начнётся сбор сведений. При изменении связанные результаты будут пересобраны.</p>
+      <footer>{currentGoal && <button type="button" disabled={busy} onClick={() => setEditing(false)}>Отменить</button>}<button type="submit" disabled={busy}>{busy ? "Сохраняю и запускаю…" : "Сохранить и начать сбор сведений"}</button></footer>
+    </form>}
   </section>;
 }
 
@@ -1261,7 +1371,7 @@ function Header() {
       <Link className={styles.activeNav} href="/" aria-current="page">Стратегия</Link>
       <span>Управление<i>В РАЗРАБОТКЕ</i></span>
       <span>Мониторинг<i>В РАЗРАБОТКЕ</i></span>
-      <span>SEO<i>В РАЗРАБОТКЕ</i></span>
+      <span>Поиск<i>В РАЗРАБОТКЕ</i></span>
       <span>Каналы<i>VK · В РАЗРАБОТКЕ</i></span>
     </nav>
   </header>;

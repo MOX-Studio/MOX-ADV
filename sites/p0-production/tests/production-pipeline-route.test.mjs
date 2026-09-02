@@ -5,6 +5,7 @@ import test from "node:test";
 const routeSource = await readFile(new URL("../app/api/p0/route.ts", import.meta.url), "utf8");
 const clientSource = await readFile(new URL("../app/P0Client.tsx", import.meta.url), "utf8");
 const productionSource = await readFile(new URL("../lib/p0.ts", import.meta.url), "utf8");
+const wordstatClientSource = await readFile(new URL("../lib/wordstat-ui-client.ts", import.meta.url), "utf8");
 
 test("production route prepares real owner inputs without fixture or legacy-table dependency", () => {
   assert.doesNotMatch(routeSource, /p0-e2e|pipeline-acceptance-fixture|p0-e2e-runtime/iu);
@@ -12,9 +13,13 @@ test("production route prepares real owner inputs without fixture or legacy-tabl
   assert.match(routeSource, /operatorDiagnostics as productionOperatorDiagnostics/u);
   assert.doesNotMatch(routeSource, /ownerOverview as productionOwnerOverview|submitOwnerAction as productionSubmitOwnerAction/u);
   assert.match(routeSource, /historicalView\(key\)/u);
+  assert.match(routeSource, /historicalView\(key\)\.catch\(\(\) => null\)/u);
+  assert.match(routeSource, /historicalState: historical\?\.state/u);
   assert.match(routeSource, /canonicalOwnerResult/u);
   assert.match(routeSource, /controller\.start\(key, historical\)/u);
   assert.match(routeSource, /waitUntil\(controller\.execute\(key, pipeline\.runId, historical\)/u);
+  assert.match(routeSource, /productionPipelineEvidenceCollector/u);
+  assert.match(routeSource, /evidenceCollector: productionPipelineEvidenceCollector/u);
   assert.doesNotMatch(routeSource, /controller\.startAndExecute\(key/u);
 });
 
@@ -33,10 +38,17 @@ test("production route keeps only typed current actions and removes legacy handl
   assert.match(routeSource, /CORRECT_STRATEGY|EDIT_CAMPAIGN_PAIR/u);
 });
 
+test("production composition never substitutes built-in competitor or financial evidence", () => {
+  assert.doesNotMatch(productionSource, /public-competitor-analysis|buildPublicCompetitorAnalysis/u);
+  assert.match(productionSource, /if \(!researchConfig\) return null/u);
+  assert.match(productionSource, /if \(!bridgeUrl && !bridgeToken\) return null/u);
+});
+
 test("production Wordstat evidence uses only the authenticated headless UI bridge", () => {
   assert.match(productionSource, /collectHeadlessWordstatUiBatch/u);
   assert.match(productionSource, /P0_WORDSTAT_BRIDGE_URL/u);
-  assert.match(productionSource, /adaptCompleteWordstatUiBatch/u);
+  assert.match(wordstatClientSource, /adaptCompleteWordstatUiBatch/u);
+  assert.match(wordstatClientSource, /WORDSTAT_UI_REQUEST_TIMEOUT/u);
   assert.doesNotMatch(productionSource, /collectOfficialWordstatBatch/u);
   assert.doesNotMatch(productionSource, /YANDEX_WORDSTAT_OAUTH_TOKEN|YANDEX_WORDSTAT_CLIENT_ID/u);
 });
@@ -57,12 +69,13 @@ test("Dashboard lets the owner revise economics and rebuild dependent evidence w
 test("Dashboard omits routine Strategy confirmation and exposes only typed material correction", () => {
   assert.doesNotMatch(clientSource, /projection\.campaignStrategy\.ownerReview|function StrategyOwnerReview\(|submitStrategyDecision|Подтвердить точную версию/u);
   assert.match(clientSource, /pipeline_action: "CORRECT_STRATEGY"/u);
-  assert.match(clientSource, /Материальная правка с полной повторной проверкой/u);
-  assert.match(clientSource, /Сохранить как приоритетный ввод/u);
+  assert.match(clientSource, /Важная правка с полной повторной проверкой/u);
+  assert.match(clientSource, /Сохранить и перепроверить/u);
 });
 
-test("canonical Dashboard exposes Start for a fresh run and typed current-product editors", () => {
-  assert.match(clientSource, /const pipelineControl = projection\.pipeline \?\? null/u);
+test("canonical Dashboard omits the removed top-level run control and keeps typed current-product editors", () => {
+  assert.doesNotMatch(clientSource, /PipelineControl|owner-pipeline-control/u);
+  assert.match(clientSource, /pipeline_action: "CORRECT_GOAL"[\s\S]*pipeline_action: "START"/u);
   assert.match(clientSource, /pipeline_action: "CORRECT_STRATEGY"/u);
   assert.match(clientSource, /pipeline_action: "EDIT_CAMPAIGN_PAIR"/u);
   assert.match(clientSource, /name="pair_key"/u);

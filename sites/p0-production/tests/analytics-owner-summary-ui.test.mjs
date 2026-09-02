@@ -57,7 +57,7 @@ test("owner analytics disclosure renders facts, evidence quality and impact-orde
 
   assert.match(html, /СВОДКА АНАЛИТИКИ/u);
   assert.match(html, /Есть существенные пробелы/u);
-  assert.match(html, /Качество доказательств/u);
+  assert.match(html, /Качество данных/u);
   assert.match(html, /Модель бизнеса/u);
   assert.match(html, /Подтверждено/u);
   assert.match(html, /Текущее продвижение/u);
@@ -65,8 +65,8 @@ test("owner analytics disclosure renders facts, evidence quality and impact-orde
   assert.match(html, /Поисковый спрос/u);
   assert.match(html, /Недоступно/u);
   assert.match(html, /Observed Segment Revenue Share/u);
-  assert.match(html, /Числитель.*150 000 000 ₽/su);
-  assert.match(html, /Знаменатель.*450 000 000 ₽/su);
+  assert.match(html, /Что считаем.*150 000 000 ₽/su);
+  assert.match(html, /С чем сравниваем.*450 000 000 ₽/su);
   assert.match(html, /Покрытие.*2 наблюдаемых из 3/su);
   assert.match(html, /Отсутствующие организации.*ООО Конкурент без отчётности/su);
   assert.match(html, /не доля рынка/u);

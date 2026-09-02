@@ -7,7 +7,7 @@ import time
 import unittest
 from pathlib import Path
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import Page, sync_playwright
 
 from mox_adv.ui_server import build_server
 from mox_adv.ui_service import UiRunService
@@ -33,6 +33,13 @@ class ZeroConversionHttpClient(RecordingHttpClient):
             headers=response.headers,
             body=json.dumps(payload).encode("utf-8"),
         )
+
+
+def click_dashboard_nav(page: Page, name: str) -> None:
+    link = page.get_by_role("link", name=name, exact=True)
+    if not link.is_visible():
+        page.locator(".nav-more summary").click()
+    link.click()
 
 
 class UiBrowserTests(unittest.TestCase):
@@ -612,11 +619,8 @@ class UiBrowserTests(unittest.TestCase):
                         .locator("strong")
                         .inner_text(),
                     )
-                    page.get_by_role(
-                        "link",
-                        name="Правила",
-                        exact=True,
-                    ).click()
+                    click_dashboard_nav(page, "Правила")
+                    page.locator(".rule-reference summary").click()
                     self.assertEqual(
                         1,
                         page.locator(
@@ -678,11 +682,7 @@ class UiBrowserTests(unittest.TestCase):
                         "Следующий запуск",
                         page.locator("#automation-timing").inner_text(),
                     )
-                    page.get_by_role(
-                        "link",
-                        name="История",
-                        exact=True,
-                    ).click()
+                    click_dashboard_nav(page, "История")
                     page.locator("#decision-history article").first.wait_for(
                         timeout=10_000
                     )
@@ -727,6 +727,7 @@ class UiBrowserTests(unittest.TestCase):
                         "heading",
                         name="Правила автопилота",
                     ).wait_for()
+                    page.locator(".rule-reference summary").click()
                     self.assertGreaterEqual(
                         page.locator("#recommendation-matrix tbody tr").count(),
                         7,

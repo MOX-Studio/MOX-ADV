@@ -51,6 +51,17 @@ function assertCurrentProducts(value: unknown): asserts value is PipelineCurrent
     || current.authority?.spend_micros !== 0) {
     throw new Error("Current pipeline products violate the closed zero-write schema.");
   }
+  const refresh = current.competitor_evidence_refresh;
+  if (refresh && (
+    refresh.schema_version !== "p0-pipeline-competitor-evidence-refresh-v1"
+    || !refresh.revision_id || !refresh.refreshed_at || !refresh.evidence_pack_id
+    || refresh.authority?.external_write !== "DENIED"
+    || refresh.authority?.publication !== "NOT_AUTHORIZED"
+    || refresh.authority?.impressions !== 0
+    || refresh.authority?.spend_micros !== 0
+  )) {
+    throw new Error("Current competitor evidence refresh violates the closed zero-write schema.");
+  }
 }
 
 export async function ensurePipelineCurrentProductTables(db: D1Database) {

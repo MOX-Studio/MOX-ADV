@@ -14,6 +14,22 @@ const REGION_IDS: Record<string, number> = {
   "санкт-петербург": 2,
 };
 
+function regexLiteral(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+export function resolveCampaignRegionId(value: unknown) {
+  const geography = text(value).toLowerCase();
+  if (REGION_IDS[geography]) return REGION_IDS[geography];
+  const matches = Object.entries(REGION_IDS).filter(([name]) => new RegExp(
+    `(?:^|[^\\p{L}\\p{N}])${regexLiteral(name)}(?:$|[^\\p{L}\\p{N}])`,
+    "u",
+  ).test(geography));
+  if (matches.length > 1) throw new Error("Выбранная география неоднозначна для production P0.");
+  if (matches.length === 0) throw new Error("Выбранная география пока не поддерживается production P0.");
+  return matches[0][1];
+}
+
 export function buildCampaignNames(product: unknown, _geography: unknown, qualifiedResult: unknown) {
   const offer = text(product) || "Новая кампания";
   const participation = /участ|participant/u.test(text(qualifiedResult).toLowerCase());
@@ -53,9 +69,7 @@ export function buildPublishProjection(
   strategy: Record<string, unknown>,
   draft: Record<string, unknown>,
 ): DirectProjection {
-  const geography = text(strategyAnswerValue(strategy, "geography")).toLowerCase();
-  const regionId = REGION_IDS[geography];
-  if (!regionId) throw new Error("Выбранная география пока не поддерживается production P0.");
+  const regionId = resolveCampaignRegionId(strategyAnswerValue(strategy, "geography"));
   const weeklyBudget = Number(strategyAnswerValue(strategy, "weekly_budget"));
   if (!Number.isSafeInteger(weeklyBudget) || weeklyBudget < 1) {
     throw new Error("Недельный бюджет некорректен.");

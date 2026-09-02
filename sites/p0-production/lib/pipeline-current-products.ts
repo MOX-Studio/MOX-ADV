@@ -1,4 +1,5 @@
 import type { GoalRevision } from "./goal-revision.ts";
+import type { PipelineCompetitorEvidenceRefresh } from "./pipeline-competitor-refresh.ts";
 import {
   type CampaignPairValidationResult,
 } from "./campaign-pair-validation.ts";
@@ -37,6 +38,7 @@ export type PipelineCurrentProducts = {
   historical_source: PipelineRunState["input_versions"]["historical_document"];
   goal_revision: GoalRevision | null;
   analytics_evidence_snapshot: PipelineJsonRecord | null;
+  competitor_evidence_refresh?: PipelineCompetitorEvidenceRefresh | null;
   campaign_strategy: PipelineJsonRecord | null;
   campaign_pairs: PipelineJsonRecord[];
   campaign_pair_checks: CampaignPairValidationResult;
@@ -103,8 +105,11 @@ function nextState(input: {
         current_stage: input.product.stage,
         updated_at: input.recordedAt,
         historical_source: clone(input.run.input_versions.historical_document),
-        goal_revision: null,
+        goal_revision: input.run.goal_formation.status === "VERIFIED"
+          ? clone(input.run.goal_formation.revision)
+          : null,
         analytics_evidence_snapshot: null,
+        competitor_evidence_refresh: null,
         campaign_strategy: null,
         campaign_pairs: [],
         campaign_pair_checks: clone(input.run.input_versions.campaign_pair_checks),
@@ -122,14 +127,19 @@ function nextState(input: {
   base.current_stage = input.product.stage;
   base.updated_at = input.recordedAt;
   base.publication_review = null;
+  if (input.run.goal_formation.status === "VERIFIED") {
+    base.goal_revision = clone(input.run.goal_formation.revision);
+  }
 
   if (input.product.stage === "CAMPAIGN_GOAL") {
     base.goal_revision = clone(input.product.value);
     base.analytics_evidence_snapshot = null;
+    base.competitor_evidence_refresh = null;
     base.campaign_strategy = null;
     base.campaign_pairs = [];
   } else if (input.product.stage === "EVIDENCE_COLLECTION") {
     base.analytics_evidence_snapshot = clone(input.product.value);
+    base.competitor_evidence_refresh = null;
     base.campaign_strategy = null;
     base.campaign_pairs = [];
   } else if (input.product.stage === "STRATEGY") {

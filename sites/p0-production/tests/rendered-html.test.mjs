@@ -46,19 +46,17 @@ test("owner Dashboard does not promote legacy readiness checks to the main scree
   assert.match(ownerSource, /projectMeasurementReadinessForOwner/u);
 });
 
-test("owner Dashboard exposes sanitized current-result provenance and question flow", () => {
-  assert.match(clientSource, /Версии для воспроизводимости/u);
-  assert.match(clientSource, /Спросить о текущем результате/u);
-  assert.match(clientSource, /pipeline_action: "EXPLAIN"/u);
-  assert.match(clientSource, /name="question"/u);
+test("owner Dashboard keeps reproducibility while omitting the removed result-question flow", () => {
+  assert.match(clientSource, /Технические версии/u);
+  assert.doesNotMatch(clientSource, /Спросить о текущем результате|pipeline_action: "EXPLAIN"|name="question"/u);
   assert.match(clientSource, /name="pair_key"/u);
   assert.doesNotMatch(clientSource, /provider_ids|publish_fingerprint/u);
 });
 
 test("campaign stage surfaces the Wordstat analysis and auction boundaries before the editable pair", () => {
   for (const label of [
-    "Аукцион и анализ Wordstat",
-    "АНАЛИЗ WORDSTAT",
+    "Спрос и аукцион",
+    "ДАННЫЕ WORDSTAT",
     "УЧАСТИЕ В АУКЦИОНЕ",
     "Сопоставимая стоимость перехода",
     "Предел ставки — верхняя граница",
@@ -72,11 +70,18 @@ test("verified goal omits technical evidence and constraint blocks", () => {
   assert.doesNotMatch(ownerStyles, /\.owner-goal-formation-grid/u);
 });
 
-test("goal correction editor keeps fields and action in a styled grid", () => {
-  assert.match(clientSource, /className="owner-goal-correction"/u);
-  assert.match(ownerStyles, /\.owner-goal-correction \{[^}]*display: grid;[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/u);
-  assert.match(ownerStyles, /\.owner-goal-correction textarea \{[^}]*width: 100%;[^}]*min-height: 82px/u);
-  assert.match(ownerStyles, /\.owner-goal-correction > h3, \.owner-goal-correction > p, \.owner-goal-correction > button \{ grid-column: 1 \/ -1; \}/u);
+test("Goal keeps one atomic editor and one compact measurable criterion", () => {
+  assert.match(clientSource, /className="owner-goal-card owner-goal-criterion"/u);
+  assert.match(clientSource, /className="owner-goal-editor"/u);
+  for (const field of ["desired_outcome", "qualified_action", "target_count", "deadline", "max_result_cost_rub"]) {
+    assert.match(clientSource, new RegExp(`name="${field}"`, "u"));
+  }
+  assert.match(clientSource, /criterionComplete \? "Завершено" : currentGoal \? "Требует уточнения" : "Не заполнено"/u);
+  assert.match(clientSource, /Изменить цель[\s\S]*Сохранить и начать сбор сведений/u);
+  assert.match(ownerStyles, /\.owner-goal-cards \{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/u);
+  assert.match(ownerStyles, /\.owner-goal-editor-copy \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/u);
+  assert.match(ownerStyles, /\.owner-goal-editor fieldset > div \{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/u);
+  assert.doesNotMatch(clientSource, /type GoalEditableField|goalField\(|editingField|owner-goal-card-edit/u);
 });
 
 test("target result cost has an accessible definition and formula tooltip", () => {
@@ -90,7 +95,7 @@ test("Dashboard typography uses a compact scale with a smaller top navigation", 
   const sizes = [ownerStyles, analyticsStyles, globalStyles, prototypeStyles]
     .flatMap((stylesheet) => [...stylesheet.matchAll(/font-size:\s*(\d+)px/gu)].map((match) => Number(match[1])));
   assert.ok(sizes.length > 0);
-  assert.deepEqual([...new Set(sizes)].sort((left, right) => left - right), [10, 12, 14, 16]);
+  assert.deepEqual([...new Set(sizes)].sort((left, right) => left - right), [10, 11, 12, 13, 14, 15, 16]);
   assert.match(prototypeStyles, /\.topbar nav a, \.topbar nav > span \{[^}]*font-size: 12px/u);
   assert.match(prototypeStyles, /\.topbar nav i \{[^}]*font-size: 10px/u);
 });
@@ -109,22 +114,16 @@ test("definition grids prevent label collisions and collapsed previews cannot le
   assert.match(globalStyles, /\.campaign-draft-card dl > div \{[^}]*grid-template-columns: minmax\(0, \.28fr\) minmax\(0, \.72fr\)/u);
 });
 
-test("goal interview renders recommendations, corrections, saved answers and accessible keyboard status without technical identifiers", () => {
+test("Goals is a human-only three-part contract without agent assistance", () => {
   for (const label of [
-    "ДИАЛОГ С АГЕНТОМ",
-    "Рекомендованный ответ",
-    "Исправление владельца",
-    "Сохранённые ответы",
-    "Цель рекламной кампании",
-    "Ctrl/⌘ + Enter",
+    "Бизнес-цель",
+    "Квалифицированный результат",
+    "Критерий успеха",
+    "Сохранить и начать сбор сведений",
   ]) {
-    assert.match(clientSource, new RegExp(label.replace(/[+]/gu, "\\+"), "u"));
+    assert.match(clientSource, new RegExp(label, "u"));
   }
-  assert.match(clientSource, /role="alert"/u);
-  assert.match(clientSource, /role="status"/u);
-  assert.match(clientSource, /interviewHeadingRef\.current\?\.focus/u);
-  assert.doesNotMatch(clientSource, /interviewKey|questionKey|schema_version/u);
-  assert.match(ownerStyles, /\.owner-interview\b/u);
+  assert.doesNotMatch(clientSource, /УТОЧНЕНИЕ ЦЕЛИ|Рекомендованный ответ|Ответ агенту|GoalInterview|goal-agent|Помочь сформулировать|Проверить на противоречия/u);
 });
 
 test("owner Dashboard omits routine Strategy confirmation while preserving the historical contract", () => {
@@ -134,13 +133,13 @@ test("owner Dashboard omits routine Strategy confirmation while preserving the h
   assert.match(ownerSource, /review_strategy/u);
 });
 
-test("owner Dashboard shows at most one actionable problem and explicit autonomous or terminal state", () => {
+test("owner Dashboard shows at most one actionable problem and omits the redundant terminal result", () => {
   assert.match(clientSource, /projection\.cards\.find\(\(card\) => card\.kind === "human-decision-gate"\)/u);
   assert.match(clientSource, /projection\.cards\.find\(\(card\) => card\.kind === "problem"\)/u);
   assert.doesNotMatch(clientSource, /projection\.cards\.map/u);
   assert.match(clientSource, /Агент продолжает работу/u);
-  assert.match(clientSource, /owner-terminal-result/u);
-  assert.match(ownerStyles, /\.owner-terminal-result\b/u);
+  assert.doesNotMatch(clientSource, /ТЕКУЩИЙ РЕЗУЛЬТАТ|owner-terminal-result/u);
+  assert.doesNotMatch(ownerStyles, /\.owner-terminal-result\b/u);
 });
 
 test("owner Direct report omits the guidance cards below its verified details", () => {
@@ -162,7 +161,7 @@ test("owner interface fixes the accepted five stages and exposes only planned pr
   for (const label of ["Цель", "Что узнал агент", "Стратегия", "Кампании", "Проверка публикации"]) {
     assert.match(ownerSource, new RegExp(label, "u"));
   }
-  for (const label of ["Стратегия", "Управление", "Мониторинг", "SEO", "Каналы", "VK · В РАЗРАБОТКЕ"]) {
+  for (const label of ["Стратегия", "Управление", "Мониторинг", "Поиск", "Каналы", "VK · В РАЗРАБОТКЕ"]) {
     assert.match(clientSource, new RegExp(label, "u"));
   }
   assert.match(clientSource, /styles\.activeNav/u);

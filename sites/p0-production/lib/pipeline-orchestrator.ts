@@ -8,6 +8,7 @@ import {
   type GoalCandidate,
   type GoalFormationResult,
   type GoalInputReference,
+  type GoalRevision,
 } from "./goal-revision.ts";
 
 const SHA256_DIGEST = /^sha256:[0-9a-f]{64}$/u;
@@ -785,6 +786,68 @@ export class PipelineOrchestrator {
     });
   }
 
+  async acceptGoalRevision(input: {
+    run_id: string;
+    expected_version: number;
+    revision: GoalRevision;
+  }) {
+    const current = await this.activeRun(input.run_id, input.expected_version, "CAMPAIGN_GOAL");
+    await verifyGoalFormationResult({ status: "VERIFIED", revision: input.revision });
+    const frozenGoal = current.input_versions.goal_revision;
+    if (!frozenGoal
+      || frozenGoal.schema_version !== input.revision.schema_version
+      || frozenGoal.revision_id !== input.revision.goal_revision_id
+      || frozenGoal.digest !== input.revision.digest) {
+      throw new PipelineOrchestratorError(
+        "PIPELINE_GOAL_REVISION_NOT_CURRENT",
+        "Pipeline requires the exact complete GoalRevision saved by the owner before Start.",
+      );
+    }
+    const timestamp = this.now();
+    const next = clone(current);
+    next.version += 1;
+    next.goal_formation = { status: "VERIFIED", revision: clone(input.revision) };
+    next.current_stage = "EVIDENCE_COLLECTION";
+    next.stage_attempt = 1;
+    next.stages = next.stages.map((stage, index) => ({
+      ...stage,
+      status: index === 0 ? "COMPLETED" : index === 1 ? "ACTIVE" : "PENDING",
+    }));
+    next.last_transition = {
+      kind: "ADVANCE",
+      source_stage: "CAMPAIGN_GOAL",
+      target_stage: "EVIDENCE_COLLECTION",
+      reason_code: "OWNER_GOAL_ACCEPTED",
+      reason: "Полная GoalRevision владельца прошла детерминированную проверку.",
+      recorded_at: timestamp,
+    };
+    const goalRevision = {
+      schema_version: input.revision.schema_version,
+      revision_id: input.revision.goal_revision_id,
+      digest: input.revision.digest,
+    };
+    const goalSchema = {
+      schema_version: "p0-goal-revision-contract",
+      revision_id: "1.0.0",
+      digest: await pipelineDigest({ schema_version: "p0-goal-revision-v1", contract_version: "1.0.0" }),
+    };
+    return this.persist(current, next, {
+      event_kind: "STAGE_VERIFIED",
+      stage: "CAMPAIGN_GOAL",
+      attempt: current.stage_attempt,
+      actor: { actor_id: current.owner_key, actor_type: "OWNER", role: "PIPELINE_OWNER" },
+      inputs: [goalRevision],
+      evidence: [goalRevision],
+      output: { status: "VERIFIED", reference: goalRevision },
+      checks: [{ check_id: "OWNER_GOAL_REVISION_VERIFIED", status: "PASSED", policy: current.input_versions.pipeline_policy }],
+      schemas: [goalSchema],
+      policies: [current.input_versions.pipeline_policy],
+      handoff: { target_stage: "EVIDENCE_COLLECTION" },
+      current_product_link: goalRevision,
+      reason_code: "OWNER_GOAL_ACCEPTED",
+    });
+  }
+
   async recordGoalCandidate(input: {
     run_id: string;
     expected_version: number;
@@ -893,7 +956,7 @@ export class PipelineOrchestrator {
   }) {
     const current = await this.activeRun(input.run_id, input.expected_version, input.source_stage);
     if (current.current_stage === "CAMPAIGN_GOAL") {
-      throw new PipelineOrchestratorError("PIPELINE_GOAL_RESULT_REQUIRED", "Campaign Goal advances only through a verified Goal Agent candidate.");
+      throw new PipelineOrchestratorError("PIPELINE_GOAL_RESULT_REQUIRED", "Campaign Goal advances only through a verified owner GoalRevision.");
     }
     const typedReason = transitionReason(input.reason_code, input.reason);
     assertVerifiedAttempt(input.attempt, current.input_versions);

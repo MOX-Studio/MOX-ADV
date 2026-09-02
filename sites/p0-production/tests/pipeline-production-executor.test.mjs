@@ -2,14 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  ProductionPipelineExecutionError,
   executeProductionPipeline,
+  ProductionPipelineExecutionError,
 } from "../lib/pipeline-production-executor.ts";
 import {
   PIPELINE_INPUT_VERSIONS_SCHEMA,
   PipelineOrchestrator,
 } from "../lib/pipeline-orchestrator.ts";
 import { saveVerifiedPipelineProduct } from "../lib/pipeline-current-products.ts";
+import { createCurrentGoal } from "../lib/goal-revision-lifecycle.ts";
 
 class MemoryCurrentProductStore {
   current = null;
@@ -121,20 +122,6 @@ function stageAgents() {
   const schema = (name, character) => ({ schema_version: name, revision_id: "1.0.0", digest: digest(character) });
   return {
     model_id: "bounded-stage-model",
-    async formGoal() {
-      return {
-        actor: actor("GOAL_AGENT"),
-        candidate: {
-          schema_version: "p0-goal-candidate-v1",
-          desired_outcome: "Получать квалифицированные заявки на участие со стендом",
-          qualified_action: "Представитель промышленной компании подтвердил интерес и готов обсудить участие",
-          used_input_ids: ["business_input"],
-          provenance: [{ supports: "DESIRED_OUTCOME", input_id: "business_input", locator: "business_goal_decision.value", evidence: "Exact saved owner goal." }, { supports: "QUALIFIED_ACTION", input_id: "business_input", locator: "business_model.qualified_result", evidence: "Exact saved qualified result." }],
-          known_constraints: [],
-          material_ambiguity: null,
-        },
-      };
-    },
     async analyzeEvidence({ goal, evidence }) {
       return { actor: actor("EVIDENCE_ANALYST"), output: evidence, artifact: { schema_version: "analytics-evidence-snapshot-v1", snapshot_id: evidence.revision_id }, evidence: [goal, evidence], check_id: "EVIDENCE_ANALYST_VERIFIED", schema: schema("p0-evidence-analyst-result-v1", "4"), summary: "Evidence Analyst verified the exact snapshot and explicit gaps." };
     },
@@ -148,6 +135,22 @@ function stageAgents() {
       return { actor: actor("CAMPAIGN_DESIGN_AGENT"), output: pairSet, artifact: [{ schema_version: "p0-compiled-campaign-pair-v1", pair_revision_id: "pair-1", publish_fingerprint: digest("3"), draft: { publish_fingerprint: digest("3") } }], evidence: [strategy, evidence], check_id: "CAMPAIGN_DESIGN_AGENT_VERIFIED", schema: schema("p0-campaign-design-agent-result-v1", "6"), summary: "Campaign Design Agent formed the exact finite current pair set." };
     },
   };
+}
+
+async function ownerGoalAndVersions(versions = inputVersions()) {
+  const currentGoal = await createCurrentGoal({
+    owner_key: "owner",
+    desired_outcome: "Получать квалифицированные заявки на участие со стендом",
+    qualified_action: "Представитель промышленной компании подтвердил интерес и готов обсудить участие",
+    success_criterion: { target_count: 30, deadline: "2027-06-30", max_result_cost_rub: 30_000 },
+    created_at: "2026-08-31T11:00:00.000Z",
+  });
+  versions.goal_revision = {
+    schema_version: currentGoal.revision.schema_version,
+    revision_id: currentGoal.revision.goal_revision_id,
+    digest: currentGoal.revision.digest,
+  };
+  return { currentGoal, versions };
 }
 
 function historicalView() {
@@ -171,13 +174,20 @@ function historicalView() {
         strategy_revision_id: "campaign-strategy-revision-1",
         owner_confirmation: { decision: "APPROVED", confirmed_by: "OWNER" },
       },
-      analytics_evidence_snapshot: { snapshot_id: "analytics-evidence-snapshot-revision-1" },
+      analytics_evidence_snapshot: {
+        schema_version: "analytics-evidence-snapshot-v1",
+        snapshot_id: "analytics-evidence-snapshot-revision-1",
+      },
       recommendation_set: { recommendation_set_id: "recommendation-set-1" },
       external_write_intent: null,
       package_execution: null,
       campaign: null,
     },
   };
+}
+
+async function historicalEvidenceCollector({ view }) {
+  return structuredClone(view.state.analytics_evidence_snapshot);
 }
 
 test("production executor seals real current artifacts through Publication Review without Direct authority", async () => {
@@ -188,8 +198,16 @@ test("production executor seals real current artifacts through Publication Revie
     newRunId: () => "production-pipeline-1",
     now: () => new Date(Date.parse("2026-08-31T12:00:00.000Z") + tick++ * 1_000).toISOString(),
   });
-  const started = await orchestrator.start("owner", inputVersions());
-  const completed = await executeProductionPipeline({ orchestrator, run: started, view: historicalView(), agents: stageAgents() });
+  const { currentGoal, versions } = await ownerGoalAndVersions();
+  const started = await orchestrator.start("owner", versions);
+  const completed = await executeProductionPipeline({
+    orchestrator,
+    run: started,
+    view: historicalView(),
+    currentGoal,
+    agents: stageAgents(),
+    evidenceCollector: historicalEvidenceCollector,
+  });
 
   assert.equal(completed.status, "COMPLETED");
   assert.equal(completed.current_stage, "PUBLICATION_REVIEW");
@@ -217,12 +235,13 @@ test("production executor seals real current artifacts through Publication Revie
     "CAMPAIGNS",
   ]);
   assert.deepEqual(audit.slice(1).map((event) => event.actor.role), [
-    "GOAL_AGENT",
+    "PIPELINE_OWNER",
     "EVIDENCE_ANALYST",
     "STRATEGY_AGENT",
     "CAMPAIGN_DESIGN_AGENT",
   ]);
-  assert.equal(audit.slice(1).every((event) => event.actor.actor_type === "AGENT"), true);
+  assert.equal(audit[1].actor.actor_type, "OWNER");
+  assert.equal(audit.slice(2).every((event) => event.actor.actor_type === "AGENT"), true);
   assert.equal(audit.some((event) => JSON.stringify(event).match(/fixture|synthetic/iu)), false);
   assert.equal(audit.at(-1).output.reference.schema_version, "campaign-pair-set-v1");
   assert.deepEqual(audit.at(-1).evidence.map((item) => item.revision_id), [
@@ -231,16 +250,41 @@ test("production executor seals real current artifacts through Publication Revie
   ]);
 });
 
-test("only verified stage products become the canonical current product set", async () => {
+test("pipeline refuses agent work before the owner saves a complete Goal", async () => {
   const store = new MemoryPipelineStore();
-  const products = new MemoryCurrentProductStore();
-  const orchestrator = new PipelineOrchestrator({ store, newRunId: () => "production-pipeline-products" });
+  const orchestrator = new PipelineOrchestrator({ store, newRunId: () => "production-pipeline-goal-required" });
   const started = await orchestrator.start("owner", inputVersions());
-  const completed = await executeProductionPipeline({
+  let evidenceCalled = false;
+
+  await assert.rejects(executeProductionPipeline({
     orchestrator,
     run: started,
     view: historicalView(),
     agents: stageAgents(),
+    evidenceCollector: async () => {
+      evidenceCalled = true;
+      throw new Error("Evidence collection must not run before the owner saves the Goal.");
+    },
+  }), (error) => error instanceof ProductionPipelineExecutionError
+    && error.code === "PRODUCTION_OWNER_GOAL_REQUIRED");
+
+  assert.equal(evidenceCalled, false);
+  assert.equal((await orchestrator.current("owner")).current_stage, "CAMPAIGN_GOAL");
+});
+
+test("only verified stage products become the canonical current product set", async () => {
+  const store = new MemoryPipelineStore();
+  const products = new MemoryCurrentProductStore();
+  const orchestrator = new PipelineOrchestrator({ store, newRunId: () => "production-pipeline-products" });
+  const { currentGoal, versions } = await ownerGoalAndVersions();
+  const started = await orchestrator.start("owner", versions);
+  const completed = await executeProductionPipeline({
+    orchestrator,
+    run: started,
+    view: historicalView(),
+    currentGoal,
+    agents: stageAgents(),
+    evidenceCollector: historicalEvidenceCollector,
     onVerifiedProduct: ({ run, product }) => saveVerifiedPipelineProduct({
       store: products,
       run,
@@ -268,31 +312,146 @@ test("only verified stage products become the canonical current product set", as
   });
 });
 
+test("fresh adapter collection replaces the frozen evidence seed for analysis, strategy, audit and current products", async () => {
+  const store = new MemoryPipelineStore();
+  const products = new MemoryCurrentProductStore();
+  const orchestrator = new PipelineOrchestrator({ store, newRunId: () => "production-pipeline-fresh-evidence" });
+  const { currentGoal, versions } = await ownerGoalAndVersions();
+  const started = await orchestrator.start("owner", versions);
+  const freshSnapshot = {
+    schema_version: "p0-analytics-evidence-v7",
+    snapshot_id: "analytics-evidence-snapshot-fresh",
+    generated_at: "2026-09-01T14:00:00.000Z",
+    sources: [{ source_id: "fresh-site-source", source_kind: "PUBLIC_FIRST_PARTY_HTTPS", observed_at: "2026-09-01T14:00:00.000Z" }],
+  };
+  const baseAgents = stageAgents();
+  let analyzedSnapshot;
+  let strategySnapshot;
+  let collectionInput;
+  const agents = {
+    ...baseAgents,
+    async analyzeEvidence(input) {
+      analyzedSnapshot = structuredClone(input.snapshot);
+      return baseAgents.analyzeEvidence(input);
+    },
+    async formStrategy(input) {
+      strategySnapshot = structuredClone(input.evidenceSnapshot);
+      return baseAgents.formStrategy(input);
+    },
+  };
+
+  const completed = await executeProductionPipeline({
+    orchestrator,
+    run: started,
+    view: historicalView(),
+    currentGoal,
+    agents,
+    evidenceCollector: async (input) => {
+      collectionInput = structuredClone(input);
+      return structuredClone(freshSnapshot);
+    },
+    onVerifiedProduct: ({ run, product }) => saveVerifiedPipelineProduct({
+      store: products,
+      run,
+      product,
+      recordedAt: "2026-09-01T14:00:00.000Z",
+    }).then(() => undefined),
+  });
+
+  assert.equal(collectionInput.seed.revision_id, "analytics-evidence-snapshot-revision-1");
+  assert.equal(collectionInput.ownerKey, "owner");
+  assert.equal(analyzedSnapshot.snapshot_id, "analytics-evidence-snapshot-fresh");
+  assert.equal(strategySnapshot.snapshot_id, "analytics-evidence-snapshot-fresh");
+  assert.equal(products.current.analytics_evidence_snapshot.snapshot_id, "analytics-evidence-snapshot-fresh");
+  const evidenceEvent = (await orchestrator.audit(completed.run_id)).find((event) => event.stage === "EVIDENCE_COLLECTION");
+  assert.equal(evidenceEvent.output.reference.revision_id, "analytics-evidence-snapshot-fresh");
+  assert.notEqual(evidenceEvent.output.reference.digest, started.input_versions.analytics_evidence_snapshot.digest);
+});
+
+test("fresh collection can establish a current snapshot without a frozen evidence seed", async () => {
+  const store = new MemoryPipelineStore();
+  const orchestrator = new PipelineOrchestrator({ store, newRunId: () => "production-pipeline-no-evidence-seed" });
+  const prepared = await ownerGoalAndVersions();
+  prepared.versions.analytics_evidence_snapshot = null;
+  const started = await orchestrator.start("owner", prepared.versions);
+  const freshSnapshot = {
+    schema_version: "p0-analytics-evidence-v7",
+    snapshot_id: "analytics-evidence-snapshot-initial-fresh",
+    generated_at: "2026-09-02T11:40:00.000Z",
+    sources: [{ source_id: "fresh-site-source", source_kind: "PUBLIC_FIRST_PARTY_HTTPS", observed_at: "2026-09-02T11:40:00.000Z" }],
+  };
+  const priorCurrentSnapshot = {
+    schema_version: "p0-analytics-evidence-v7",
+    snapshot_id: "prior-current-product-snapshot",
+  };
+  let collectionSeed = "not-called";
+  let collectionSeedSnapshot = null;
+
+  const completed = await executeProductionPipeline({
+    orchestrator,
+    run: started,
+    view: historicalView(),
+    currentGoal: prepared.currentGoal,
+    agents: stageAgents(),
+    evidenceSeedSnapshot: priorCurrentSnapshot,
+    evidenceCollector: async (input) => {
+      collectionSeed = input.seed;
+      collectionSeedSnapshot = structuredClone(input.seedSnapshot);
+      return structuredClone(freshSnapshot);
+    },
+  });
+
+  assert.equal(collectionSeed, null);
+  assert.equal(collectionSeedSnapshot.snapshot_id, "prior-current-product-snapshot");
+  assert.equal(completed.status, "COMPLETED");
+  const evidenceEvent = (await orchestrator.audit(completed.run_id)).find((event) => event.stage === "EVIDENCE_COLLECTION");
+  assert.deepEqual(evidenceEvent.inputs.map((reference) => reference.revision_id), [
+    completed.goal_formation.revision.goal_revision_id,
+    started.input_versions.business_input.revision_id,
+  ]);
+});
+
 test("Strategy Agent accepts the current exact Strategy without a redundant owner approval", async () => {
   const store = new MemoryPipelineStore();
   const orchestrator = new PipelineOrchestrator({ store, newRunId: () => "production-pipeline-2" });
-  const started = await orchestrator.start("owner", inputVersions());
+  const { currentGoal, versions } = await ownerGoalAndVersions();
+  const started = await orchestrator.start("owner", versions);
   const view = historicalView();
   view.state.strategy.owner_confirmation.decision = "PENDING";
 
-  const completed = await executeProductionPipeline({ orchestrator, run: started, view, agents: stageAgents() });
+  const completed = await executeProductionPipeline({
+    orchestrator,
+    run: started,
+    view,
+    currentGoal,
+    agents: stageAgents(),
+    evidenceCollector: historicalEvidenceCollector,
+  });
   assert.equal(completed.current_stage, "PUBLICATION_REVIEW");
   const audit = await orchestrator.audit(completed.run_id);
   assert.equal(audit.find((event) => event.stage === "STRATEGY").actor.role, "STRATEGY_AGENT");
 });
 
-test("production executor refuses runs without a fully current Campaign Pair", async () => {
+test("production executor lets Campaign Design derive a current pair when no prior pair seed exists", async () => {
   const store = new MemoryPipelineStore();
-  const versions = inputVersions();
+  const { currentGoal, versions } = await ownerGoalAndVersions();
   versions.campaign_pairs = [];
   versions.campaign_pair_checks.set_disposition = "NO_CURRENT_PAIRS";
   versions.campaign_pair_checks.pairs = [];
   const orchestrator = new PipelineOrchestrator({ store, newRunId: () => "production-pipeline-3" });
   const started = await orchestrator.start("owner", versions);
 
-  await assert.rejects(
-    executeProductionPipeline({ orchestrator, run: started, view: historicalView(), agents: stageAgents() }),
-    (error) => error instanceof ProductionPipelineExecutionError
-      && error.code === "CAMPAIGN_DESIGN_REQUIRED_INPUT_MISSING",
-  );
+  const completed = await executeProductionPipeline({
+    orchestrator,
+    run: started,
+    view: historicalView(),
+    currentGoal,
+    agents: stageAgents(),
+    evidenceCollector: historicalEvidenceCollector,
+  });
+
+  assert.equal(completed.status, "COMPLETED");
+  assert.equal(completed.current_stage, "PUBLICATION_REVIEW");
+  const campaignEvent = (await orchestrator.audit(completed.run_id)).find((event) => event.stage === "CAMPAIGNS");
+  assert.equal(campaignEvent.actor.role, "CAMPAIGN_DESIGN_AGENT");
 });

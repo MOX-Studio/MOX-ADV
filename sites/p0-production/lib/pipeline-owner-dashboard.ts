@@ -1,17 +1,24 @@
 import { validateCampaignPairs } from "./campaign-pair-validation.ts";
 import {
+  projectCompetitorAnalysisForDashboard,
+  type OwnerCompetitorAnalysis,
+} from "./competitor-dashboard.ts";
+import {
   projectDemandCostResearchForOwner,
   type OwnerJourneyProjection,
 } from "./p0-owner-journey.ts";
+import {
+  projectEvidenceSnapshotForDashboard,
+  type OwnerPipelineEvidenceSnapshot,
+} from "./pipeline-evidence-dashboard.ts";
 import {
   projectCampaignPairDossier,
   type OwnerCampaignPairDossier,
 } from "./campaign-pair-dossier.ts";
 import type { CompiledCampaignPair } from "./campaign-design-agent.ts";
 import type { AutonomousCampaignStrategy } from "./campaign-strategy-agent.ts";
-import type { GoalCandidate } from "./goal-revision.ts";
 import {
-  CURRENT_GOAL_SCHEMA,
+  createCurrentGoal,
   goalDependencies,
   reviseCurrentGoal,
   type CurrentGoal,
@@ -24,12 +31,19 @@ import {
   type OwnerResultExplanation,
   type OwnerResultProvenance,
 } from "./pipeline-result-explanation.ts";
-import { executeProductionPipeline } from "./pipeline-production-executor.ts";
+import {
+  executeProductionPipeline,
+  type ProductionPipelineEvidenceCollector,
+} from "./pipeline-production-executor.ts";
 import {
   saveVerifiedPipelineProduct,
   type PipelineCurrentProducts,
   type PipelineCurrentProductStore,
 } from "./pipeline-current-products.ts";
+import {
+  refreshCurrentPipelineCompetitorEvidence,
+  type PipelineCompetitorEvidenceCollector,
+} from "./pipeline-competitor-refresh.ts";
 import {
   saveCurrentPipelineCampaignPairEdit,
   saveCurrentPipelineStrategyCorrection,
@@ -50,7 +64,7 @@ import {
 } from "./pipeline-orchestrator.ts";
 
 export type OwnerPipelineStageId = "goal" | "findings" | "strategy" | "campaigns" | "review";
-export type OwnerPipelineStageStatus = "Завершён" | "Выполняется" | "Ожидает" | "Возвращён" | "Остановлен";
+export type OwnerPipelineStageStatus = "Завершён" | "Выполняется" | "Ожидает" | "Возвращён" | "Остановлен" | "Требует уточнения" | "Не заполнено";
 
 export type OwnerPipelineProjection = {
   runId: string | null;
@@ -67,7 +81,7 @@ export type OwnerPipelineProjection = {
     pipelineStageId: PipelineStageId;
     label: string;
     status: OwnerPipelineStageStatus;
-    icon: "✓" | "…" | "○" | "↩" | "■";
+    icon: "✓" | "…" | "○" | "↩" | "■" | "!";
     tone: "complete" | "active" | "pending" | "returned" | "stopped";
   }>;
   return: null | {
@@ -81,7 +95,15 @@ export type OwnerPipelineProjection = {
     stateRevision: number;
     currentStage: OwnerPipelineStageId;
     updatedAt: string;
-    evidence: { schemaVersion: string; revisionId: string; generatedAt: string; capabilityStatus: string } | null;
+    evidence: {
+      schemaVersion: string;
+      revisionId: string;
+      generatedAt: string;
+      asOf: string;
+      provenance: OwnerPipelineEvidenceSnapshot;
+      competitorRefresh: null | { revisionId: string; refreshedAt: string };
+      competitorAnalysis: OwnerCompetitorAnalysis;
+    } | null;
     demandCostResearch: OwnerJourneyProjection["demandCostResearch"];
     strategy: {
       revisionId: string;
@@ -114,6 +136,12 @@ export type OwnerPipelineProjection = {
         versionLabel: string;
         desiredOutcome: string;
         qualifiedAction: string;
+        successCriterion: null | {
+          targetCount: number;
+          deadline: string;
+          maxResultCostRub: number;
+        };
+        criterionComplete: boolean;
         provenance: string[];
         knownConstraints: string[];
         ownerConfirmationRequired: false;
@@ -150,6 +178,14 @@ const OWNER_STAGE_BY_PIPELINE: Record<PipelineStageId, OwnerPipelineStageId> = {
   PUBLICATION_REVIEW: "review",
 };
 
+const OWNER_STAGE_LABEL_BY_PIPELINE: Record<PipelineStageId, string> = {
+  CAMPAIGN_GOAL: "Цели",
+  EVIDENCE_COLLECTION: "Сбор сведений",
+  STRATEGY: "Стратегия",
+  CAMPAIGNS: "Кампании",
+  PUBLICATION_REVIEW: "Проверка публикации",
+};
+
 const TASK_BY_STAGE: Record<PipelineStageId, string> = {
   CAMPAIGN_GOAL: "Формирую полный желаемый бизнес-результат и известные ограничения.",
   EVIDENCE_COLLECTION: "Собираю и проверяю разрешённые сведения для текущей цели.",
@@ -182,6 +218,33 @@ function list(value: unknown) {
 
 function text(value: unknown) {
   return String(value ?? "").normalize("NFKC").replace(/\s+/gu, " ").trim();
+}
+
+function finalValidationFailureSummary(error: unknown) {
+  const errorRecord = record(error);
+  const details = record(errorRecord.details);
+  const attempts = list(details.validation_attempts);
+  const finalAttempt = record(attempts.at(-1));
+  const violations = list(finalAttempt.violations).flatMap((value) => {
+    const violation = record(value);
+    const code = text(violation.code);
+    const path = text(violation.path);
+    if (!/^[A-Z][A-Z0-9_]{2,79}$/u.test(code) || !/^\/[A-Za-z0-9_~./-]{0,199}$/u.test(path)) return [];
+    return [`${code} ${path}`];
+  }).slice(0, 8);
+  return violations.length ? ` Финальная проверка: ${violations.join("; ")}.` : "";
+}
+
+function productionFailureReason(error: unknown) {
+  const codeValue = error && typeof error === "object" && "code" in error
+    ? text((error as { code?: unknown }).code)
+    : "";
+  const code = /^[A-Z][A-Z0-9_]{2,79}$/u.test(codeValue) ? codeValue : "PRODUCTION_EXECUTION_FAILED";
+  const rawMessage = error instanceof Error ? error.message : text(error);
+  const message = text(`${rawMessage}${finalValidationFailureSummary(error)}`)
+    .replace(/(?:Bearer|OAuth|Api-Key)\s+[^\s,;]+/giu, "[REDACTED]")
+    .slice(0, 650) || "Причина недоступна.";
+  return `Pipeline безопасно остановлен; внешняя запись не выполнялась. Причина: ${code} — ${message}`;
 }
 
 function schema(value: unknown, fallback: string) {
@@ -292,6 +355,14 @@ export async function pipelineInputVersions(view: PipelineHistoricalView): Promi
 function currentProductProjection(value: Awaited<ReturnType<PipelineCurrentProductStore["loadCurrent"]>>): OwnerPipelineProjection["currentProducts"] {
   if (!value) return null;
   const evidence = record(value.analytics_evidence_snapshot);
+  const competitorRefresh = record(value.competitor_evidence_refresh);
+  const competitorEvidence = Object.keys(competitorRefresh).length ? {
+    ...evidence,
+    competitor_matrix: structuredClone(competitorRefresh.competitor_matrix),
+    financial_competitor_intelligence: structuredClone(competitorRefresh.financial_competitor_intelligence),
+    competitor_observations: structuredClone(competitorRefresh.competitor_observations),
+    competitor_assessment: structuredClone(competitorRefresh.competitor_assessment),
+  } : evidence;
   const strategyProduct = record(value.campaign_strategy);
   const strategy = record(strategyProduct.strategy ?? strategyProduct);
   const dimensions = list(strategy.dimensions).map(record).map((dimension) => ({
@@ -333,9 +404,18 @@ function currentProductProjection(value: Awaited<ReturnType<PipelineCurrentProdu
     updatedAt: value.updated_at,
     evidence: Object.keys(evidence).length ? {
       schemaVersion: text(evidence.schema_version),
-      revisionId: identifier(evidence.snapshot_revision_id ?? evidence.snapshot_id, "current-evidence"),
+      revisionId: identifier(
+        evidence.snapshot_revision_id ?? evidence.snapshot_id,
+        "current-evidence",
+      ),
       generatedAt: text(evidence.generated_at),
-      capabilityStatus: text(record(evidence.financial_competitor_intelligence).capability_status) || "UNAVAILABLE",
+      asOf: text(evidence.as_of),
+      provenance: projectEvidenceSnapshotForDashboard(evidence),
+      competitorRefresh: Object.keys(competitorRefresh).length ? {
+        revisionId: identifier(competitorRefresh.revision_id, "current-competitor-refresh"),
+        refreshedAt: text(competitorRefresh.refreshed_at),
+      } : null,
+      competitorAnalysis: projectCompetitorAnalysisForDashboard(competitorEvidence),
     } : null,
     demandCostResearch: projectDemandCostResearchForOwner(evidence),
     strategy: Object.keys(strategy).length ? {
@@ -393,7 +473,7 @@ export async function projectCurrentCampaignDossiers(value: PipelineCurrentProdu
 }
 
 function stageLabel(stageId: PipelineStageId) {
-  return PIPELINE_STAGES.find((stage) => stage.id === stageId)?.label ?? stageId;
+  return OWNER_STAGE_LABEL_BY_PIPELINE[stageId] ?? stageId;
 }
 
 export function projectOwnerPipeline(
@@ -405,6 +485,7 @@ export function projectOwnerPipeline(
   campaignDossiers: OwnerCampaignPairDossier[] = campaignDossier ? [campaignDossier] : [],
 ): OwnerPipelineProjection {
   if (!run) {
+    const goalCriterionIncomplete = !currentGoal?.revision.success_criterion;
     return {
       runId: null,
       provenance: null,
@@ -413,15 +494,17 @@ export function projectOwnerPipeline(
       active: false,
       editingLocked: false,
       currentStage: "goal",
-      currentTask: "Сохранённые правки готовы для нового запуска.",
-      stateText: "Запуск ещё не начат. Редактирование доступно.",
-      stages: PIPELINE_STAGES.map((stage) => ({
+      currentTask: goalCriterionIncomplete ? "Заполните три блока Цели." : "Сохранённая Цель готова к сбору сведений.",
+      stateText: goalCriterionIncomplete
+        ? "Заполните бизнес-цель, квалифицированный результат и измеримый критерий успеха."
+        : "Запуск ещё не начат. Редактирование доступно.",
+      stages: PIPELINE_STAGES.map((stage, index) => ({
         id: OWNER_STAGE_BY_PIPELINE[stage.id],
         pipelineStageId: stage.id,
-        label: stage.label,
-        status: "Ожидает",
-        icon: "○",
-        tone: "pending",
+        label: OWNER_STAGE_LABEL_BY_PIPELINE[stage.id],
+        ...(goalCriterionIncomplete && index === 0
+          ? { status: currentGoal ? "Требует уточнения" : "Не заполнено", icon: "!" as const, tone: "returned" as const }
+          : { status: "Ожидает", icon: "○" as const, tone: "pending" as const }),
       })),
       return: null,
       campaignDossier,
@@ -432,39 +515,64 @@ export function projectOwnerPipeline(
         versionLabel: `Версия ${currentGoal.revision.version}`,
         desiredOutcome: currentGoal.revision.desired_outcome,
         qualifiedAction: currentGoal.revision.qualified_action,
+        successCriterion: currentGoal.revision.success_criterion ? {
+          targetCount: currentGoal.revision.success_criterion.target_count,
+          deadline: currentGoal.revision.success_criterion.deadline,
+          maxResultCostRub: currentGoal.revision.success_criterion.max_result_cost_rub,
+        } : null,
+        criterionComplete: Boolean(currentGoal.revision.success_criterion),
         provenance: currentGoal.revision.provenance.map((item) => `${item.evidence} · ${item.locator}`),
         knownConstraints: currentGoal.revision.known_constraints.map((item) => item.constraint),
         ownerConfirmationRequired: false,
         rebuildRequired: currentGoal.invalidation?.dependencies.map((item) => item.explanation) ?? [],
         canCorrect: true,
       } : { status: "PENDING" },
-      canStart: true,
+      canStart: !goalCriterionIncomplete,
       canStop: false,
     };
   }
-  const goalInvalidated = Boolean(currentGoal?.invalidation);
-  const stateText = goalInvalidated
-    ? "Текущая Цель исправлена. Зависимые результаты помечены для пересборки в новом запуске."
-    : run.status === "ACTIVE"
-      ? `Выполняется этап «${stageLabel(run.current_stage)}».`
-      : run.status === "STOPPED"
-        ? `Запуск остановлен на этапе «${stageLabel(run.current_stage)}». Следующий запуск будет новым.`
-        : run.status === "COMPLETED"
-          ? "Пять этапов завершены. Внешняя запись не выполнялась."
-          : "Запуск завершён технической ошибкой без внешней записи.";
+  const currentGoalAppliedToRun = Boolean(
+    currentGoal
+    && run.input_versions.goal_revision?.revision_id === currentGoal.revision.goal_revision_id
+    && run.input_versions.goal_revision.digest === currentGoal.revision.digest,
+  );
+  const goalInvalidated = Boolean(currentGoal?.invalidation) && !currentGoalAppliedToRun;
   const persistedGoalFormation = currentGoal
     ? { status: "VERIFIED" as const, revision: currentGoal.revision }
     : run.goal_formation;
+  const goalCriterionIncomplete = persistedGoalFormation.status === "VERIFIED"
+    && !persistedGoalFormation.revision.success_criterion;
+  const stateText = goalCriterionIncomplete
+    ? "Укажите целевое количество, срок и максимальную стоимость результата."
+    : goalInvalidated
+      ? "Текущая Цель исправлена. Зависимые результаты помечены для пересборки в новом запуске."
+      : run.status === "ACTIVE"
+      ? `Выполняется этап «${stageLabel(run.current_stage)}».`
+      : run.status === "STOPPED"
+        ? run.last_transition?.reason_code === "PRODUCTION_EXECUTION_FAILED"
+          ? `${run.last_transition.reason} Следующий запуск будет новым.`
+          : `Запуск остановлен на этапе «${stageLabel(run.current_stage)}». Следующий запуск будет новым.`
+        : run.status === "COMPLETED"
+          ? "Пять этапов завершены. Внешняя запись не выполнялась."
+          : "Запуск завершён технической ошибкой без внешней записи.";
   const goalFormation: OwnerPipelineProjection["goalFormation"] = persistedGoalFormation.status === "VERIFIED"
     ? {
         status: "VERIFIED",
         versionLabel: `Версия ${persistedGoalFormation.revision.version}`,
         desiredOutcome: persistedGoalFormation.revision.desired_outcome,
         qualifiedAction: persistedGoalFormation.revision.qualified_action,
+        successCriterion: persistedGoalFormation.revision.success_criterion ? {
+          targetCount: persistedGoalFormation.revision.success_criterion.target_count,
+          deadline: persistedGoalFormation.revision.success_criterion.deadline,
+          maxResultCostRub: persistedGoalFormation.revision.success_criterion.max_result_cost_rub,
+        } : null,
+        criterionComplete: Boolean(persistedGoalFormation.revision.success_criterion),
         provenance: persistedGoalFormation.revision.provenance.map((item) => `${item.evidence} · ${item.locator}`),
         knownConstraints: persistedGoalFormation.revision.known_constraints.map((item) => item.constraint),
         ownerConfirmationRequired: false,
-        rebuildRequired: currentGoal?.invalidation?.dependencies.map((item) => item.explanation) ?? [],
+        rebuildRequired: goalInvalidated
+          ? currentGoal?.invalidation?.dependencies.map((item) => item.explanation) ?? []
+          : [],
         canCorrect: run.status !== "ACTIVE",
       }
     : persistedGoalFormation.status === "MATERIAL_DECISION_REQUIRED"
@@ -489,18 +597,24 @@ export function projectOwnerPipeline(
     status: run.status,
     active: run.status === "ACTIVE",
     editingLocked: run.status === "ACTIVE",
-    currentStage: goalInvalidated ? "goal" : OWNER_STAGE_BY_PIPELINE[run.current_stage],
-    currentTask: goalInvalidated
-      ? "Сохранённая правка Цели готова для нового запуска."
-      : run.status === "ACTIVE" ? TASK_BY_STAGE[run.current_stage] : stateText,
+    currentStage: goalCriterionIncomplete || goalInvalidated ? "goal" : OWNER_STAGE_BY_PIPELINE[run.current_stage],
+    currentTask: goalCriterionIncomplete
+      ? "Уточните измеримый критерий успеха."
+      : goalInvalidated
+        ? "Сохранённая правка Цели готова для нового запуска."
+        : run.status === "ACTIVE" ? TASK_BY_STAGE[run.current_stage] : stateText,
     stateText,
     stages: run.stages.map((stage, index) => ({
       id: OWNER_STAGE_BY_PIPELINE[stage.id],
       pipelineStageId: stage.id,
-      label: stage.label,
-      ...(goalInvalidated
-        ? PRESENTATION_BY_STATUS[index === 0 ? "COMPLETED" : "PENDING"]
-        : PRESENTATION_BY_STATUS[stage.status]),
+      label: OWNER_STAGE_LABEL_BY_PIPELINE[stage.id],
+      ...(goalCriterionIncomplete
+        ? index === 0
+          ? { status: "Требует уточнения", icon: "!" as const, tone: "returned" as const }
+          : PRESENTATION_BY_STATUS["PENDING"]
+        : goalInvalidated
+          ? PRESENTATION_BY_STATUS[index === 0 ? "COMPLETED" : "PENDING"]
+          : PRESENTATION_BY_STATUS[stage.status]),
     })),
     return: run.last_transition.kind === "RETURN" && run.last_transition.source_stage && run.last_transition.target_stage
       ? {
@@ -513,7 +627,7 @@ export function projectOwnerPipeline(
     campaignDossiers,
     currentProducts,
     goalFormation,
-    canStart: run.status !== "ACTIVE",
+    canStart: run.status !== "ACTIVE" && !goalCriterionIncomplete,
     canStop: run.status === "ACTIVE",
   };
 }
@@ -522,7 +636,9 @@ export class OwnerPipelineController {
   private readonly orchestrator: PipelineOrchestrator;
   private readonly goalStore: CurrentGoalStore | null;
   private readonly stageAgents: ProductionStageAgents | null;
+  private readonly evidenceCollector: ProductionPipelineEvidenceCollector | null;
   private readonly productStore: PipelineCurrentProductStore | null;
+  private readonly competitorCollector: PipelineCompetitorEvidenceCollector | null;
   private readonly now: () => string;
 
   constructor(
@@ -532,13 +648,17 @@ export class OwnerPipelineController {
       newRunId?: () => string;
       goalStore?: CurrentGoalStore;
       stageAgents?: ProductionStageAgents;
+      evidenceCollector?: ProductionPipelineEvidenceCollector;
       productStore?: PipelineCurrentProductStore;
+      competitorCollector?: PipelineCompetitorEvidenceCollector;
     } = {},
   ) {
     this.orchestrator = new PipelineOrchestrator({ store, ...input });
     this.goalStore = input.goalStore ?? null;
     this.stageAgents = input.stageAgents ?? null;
+    this.evidenceCollector = input.evidenceCollector ?? null;
     this.productStore = input.productStore ?? null;
+    this.competitorCollector = input.competitorCollector ?? null;
     this.now = input.now ?? (() => new Date().toISOString());
   }
 
@@ -580,32 +700,22 @@ export class OwnerPipelineController {
     return { versions, currentGoal };
   }
 
-  private async persistFormedGoal(ownerKey: string, run: PipelineRunState) {
-    let savedGoal = await this.goalStore?.loadCurrent(ownerKey) ?? null;
-    if (this.goalStore && run.goal_formation.status === "VERIFIED" && !savedGoal) {
-      const formed: CurrentGoal = {
-        schema_version: CURRENT_GOAL_SCHEMA,
-        owner_key: ownerKey,
-        revision: run.goal_formation.revision,
-        source: "GOAL_AGENT",
-        invalidation: null,
-      };
-      if (!await this.goalStore.append(formed, null)) throw new Error("Текущая Цель изменилась. Обновите Dashboard.");
-      savedGoal = formed;
-    }
-    return savedGoal;
-  }
-
   async start(ownerKey: string, view: PipelineHistoricalView) {
-    const { versions } = await this.frozenInputVersions(ownerKey, view);
+    const { versions, currentGoal } = await this.frozenInputVersions(ownerKey, view);
+    if (!currentGoal?.revision.success_criterion) {
+      throw new Error("Сначала сохраните бизнес-цель, квалифицированный результат и измеримый критерий успеха.");
+    }
     return this.project(await this.orchestrator.start(ownerKey, versions), ownerKey);
   }
 
   async execute(ownerKey: string, runId: string, view: PipelineHistoricalView) {
-    if (!this.stageAgents) throw new Error("Production stage agents are not configured; deterministic substitution is forbidden.");
-    const [started, currentGoal] = await Promise.all([
+    if (!this.stageAgents || !this.evidenceCollector) {
+      throw new Error("Production stage agents and evidence collectors are not configured; deterministic substitution is forbidden.");
+    }
+    const [started, currentGoal, evidenceSeedProducts] = await Promise.all([
       this.orchestrator.current(ownerKey),
       this.goalStore?.loadCurrent(ownerKey) ?? null,
+      this.productStore?.loadCurrent(ownerKey) ?? null,
     ]);
     if (!started || started.run_id !== runId) throw new Error("Активный запуск изменился до начала исполнения.");
     if (started.status !== "ACTIVE") return this.project(started, ownerKey);
@@ -616,11 +726,12 @@ export class OwnerPipelineController {
         view,
         currentGoal,
         agents: this.stageAgents,
+        evidenceCollector: this.evidenceCollector,
+        evidenceSeedSnapshot: evidenceSeedProducts?.analytics_evidence_snapshot ?? null,
         onVerifiedProduct: this.productStore
           ? ({ run, product }) => saveVerifiedPipelineProduct({ store: this.productStore!, run, product, recordedAt: this.now() }).then(() => undefined)
           : undefined,
       });
-      await this.persistFormedGoal(ownerKey, completed);
       return this.project(completed, ownerKey);
     } catch (error) {
       const current = await this.orchestrator.current(ownerKey);
@@ -630,7 +741,7 @@ export class OwnerPipelineController {
           run_id: current.run_id,
           expected_version: current.version,
           reason_code: "PRODUCTION_EXECUTION_FAILED",
-          reason: "Production executor безопасно остановлен до внешней записи.",
+          reason: productionFailureReason(error),
         });
       }
       throw error;
@@ -638,8 +749,16 @@ export class OwnerPipelineController {
   }
 
   async startAndExecute(ownerKey: string, view: PipelineHistoricalView) {
-    if (!this.stageAgents) throw new Error("Production stage agents are not configured; deterministic substitution is forbidden.");
-    const { versions, currentGoal } = await this.frozenInputVersions(ownerKey, view);
+    if (!this.stageAgents || !this.evidenceCollector) {
+      throw new Error("Production stage agents and evidence collectors are not configured; deterministic substitution is forbidden.");
+    }
+    const [{ versions, currentGoal }, evidenceSeedProducts] = await Promise.all([
+      this.frozenInputVersions(ownerKey, view),
+      this.productStore?.loadCurrent(ownerKey) ?? null,
+    ]);
+    if (!currentGoal?.revision.success_criterion) {
+      throw new Error("Сначала сохраните бизнес-цель, квалифицированный результат и измеримый критерий успеха.");
+    }
     const started = await this.orchestrator.start(ownerKey, versions);
     try {
       const completed = await executeProductionPipeline({
@@ -648,11 +767,12 @@ export class OwnerPipelineController {
         view,
         currentGoal,
         agents: this.stageAgents,
+        evidenceCollector: this.evidenceCollector,
+        evidenceSeedSnapshot: evidenceSeedProducts?.analytics_evidence_snapshot ?? null,
         onVerifiedProduct: this.productStore
           ? ({ run, product }) => saveVerifiedPipelineProduct({ store: this.productStore!, run, product, recordedAt: this.now() }).then(() => undefined)
           : undefined,
       });
-      await this.persistFormedGoal(ownerKey, completed);
       return this.project(completed, ownerKey);
     } catch (error) {
       const current = await this.orchestrator.current(ownerKey);
@@ -661,7 +781,7 @@ export class OwnerPipelineController {
           run_id: current.run_id,
           expected_version: current.version,
           reason_code: "PRODUCTION_EXECUTION_FAILED",
-          reason: "Production executor безопасно остановлен до внешней записи.",
+          reason: productionFailureReason(error),
         });
       }
       throw error;
@@ -682,32 +802,42 @@ export class OwnerPipelineController {
     return explainCurrentResultQuestion(provenance, input.question, input.pairKey);
   }
 
-  async recordGoalCandidate(ownerKey: string, input: { runId: string; expectedVersion: number; candidate: GoalCandidate }) {
-    const current = await this.orchestrator.current(ownerKey);
-    if (!current || current.run_id !== input.runId) {
-      throw new Error("Активный запуск изменился. Обновите Dashboard.");
-    }
-    const run = await this.orchestrator.recordGoalCandidate({
-      run_id: input.runId,
-      expected_version: input.expectedVersion,
-      candidate: input.candidate,
-    });
-    await this.persistFormedGoal(ownerKey, run);
-    return this.project(run, ownerKey);
-  }
-
-  async correctGoal(ownerKey: string, input: { desiredOutcome: string; qualifiedAction: string }) {
+  async correctGoal(ownerKey: string, input: {
+    desiredOutcome: string;
+    qualifiedAction: string;
+    targetCount: number;
+    deadline: string;
+    maxResultCostRub: number;
+  }) {
     if (!this.goalStore) throw new Error("Хранилище текущей Цели недоступно.");
     const [run, currentGoal] = await Promise.all([
       this.orchestrator.current(ownerKey),
       this.goalStore.loadCurrent(ownerKey),
     ]);
-    if (run?.status === "ACTIVE") throw new Error("Остановите активный запуск перед исправлением Цели.");
-    if (!currentGoal) throw new Error("Сначала сформируйте проверенную Цель.");
+    if (run?.status === "ACTIVE") throw new Error("Остановите активный запуск перед изменением Цели.");
+    const successCriterion = {
+      target_count: input.targetCount,
+      deadline: input.deadline,
+      max_result_cost_rub: input.maxResultCostRub,
+    };
+    if (!currentGoal) {
+      const created = await createCurrentGoal({
+        owner_key: ownerKey,
+        desired_outcome: input.desiredOutcome,
+        qualified_action: input.qualifiedAction,
+        success_criterion: successCriterion,
+        created_at: this.now(),
+      });
+      if (!await this.goalStore.append(created, null)) {
+        throw new Error("Текущая Цель изменилась. Обновите Dashboard.");
+      }
+      return this.project(run, ownerKey);
+    }
     const result = await reviseCurrentGoal({
       current: currentGoal,
       desired_outcome: input.desiredOutcome,
       qualified_action: input.qualifiedAction,
+      success_criterion: successCriterion,
       corrected_at: this.now(),
       dependencies: run ? goalDependencies(run.input_versions) : [],
     });
@@ -715,6 +845,23 @@ export class OwnerPipelineController {
       && !await this.goalStore.append(result.current, currentGoal.revision.version)) {
       throw new Error("Текущая Цель изменилась. Обновите Dashboard.");
     }
+    return this.project(run, ownerKey);
+  }
+
+  async refreshCompetitors(ownerKey: string, input: { expectedStateRevision: number }) {
+    if (!this.productStore || !this.competitorCollector || !this.stageAgents) {
+      throw new Error("Публичная проверка конкурентов через Evidence Analyst не настроена.");
+    }
+    const run = await this.orchestrator.current(ownerKey);
+    if (run?.status === "ACTIVE") throw new Error("Дождитесь завершения текущего запуска перед обновлением конкурентов.");
+    await refreshCurrentPipelineCompetitorEvidence({
+      store: this.productStore,
+      ownerKey,
+      expectedStateRevision: input.expectedStateRevision,
+      collector: this.competitorCollector,
+      analyst: this.stageAgents.assessCompetitorEvidence,
+      refreshedAt: this.now(),
+    });
     return this.project(run, ownerKey);
   }
 

@@ -35,6 +35,13 @@ const obsoleteVisiblePhrases = [
   "Corrected terminal outcome",
   "Prepared corrected Human Decision Gate packet",
   "External writes performed",
+  "CAMPAIGN HYPOTHESIS + ПОЛНЫЙ CAMPAIGN DRAFT",
+  "EVIDENCE ANALYST",
+  "PUBLICATION REVIEW · БЕЗ ПУБЛИКАЦИИ",
+  "STRATEGY AGENT · PRIORITY BUSINESS INPUT",
+  "ПРОВЕРЕННАЯ GOAL REVISION",
+  "ТЕКУЩИЕ CAMPAIGN DRAFT",
+  "ДИАЛОГ С АГЕНТОМ",
 ];
 
 test("видимые тексты интерфейса не содержат прежнюю английскую терминологию", () => {
@@ -61,6 +68,8 @@ test("машинные состояния и серверные пояснени
   assert.equal(machineLabel("CONFIRMED_SUSPENDED"), "Остановка подтверждена");
   assert.equal(
     localizedText("Campaign Draft requires persisted official API evidence and exact account binding."),
-    "Черновик кампании требует сохранённых доказательств официального API и точной привязки аккаунта.",
+    "Черновик кампании требует сохранённых данных из официального программного интерфейса и точной привязки аккаунта.",
   );
+  assert.equal(machineLabel("AGENT_ACCEPTED"), "Принято системой");
+  assert.equal(localizedText("Campaign Hypothesis → Campaign Draft"), "гипотеза кампании → черновик кампании");
 });

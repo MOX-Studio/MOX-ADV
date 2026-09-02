@@ -527,11 +527,7 @@ export async function withWordstatProfileSession(options, work) {
   } finally {
     removeAbortListener();
   }
-  try {
-    await session.cleanup();
-  } catch (cleanupError) {
-    throw cleanupError;
-  }
+  await session.cleanup();
   if (workError) throw workError;
   return result;
 }

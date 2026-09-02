@@ -92,7 +92,7 @@ export type GirBoFinancialRecordInput = {
   currency: "RUB";
   provenance: {
     source_system: "GIR_BO_FNS";
-    access_channel: "OFFICIAL_SUBSCRIPTION_BULK" | "OFFICIAL_SIGNED_DOCUMENT";
+    access_channel: "OFFICIAL_SUBSCRIPTION_BULK" | "OFFICIAL_SIGNED_DOCUMENT" | "OFFICIAL_PUBLIC_UI";
     source_locator: string;
     source_file_name: string;
     source_hash_sha256: string;
@@ -500,7 +500,7 @@ function normalizeRecord(input: GirBoFinancialRecordInput, frame: FrozenFinancia
     fail("FINANCIAL_RECORD_PERIOD_INVALID", "Financial Evidence Record находится вне замороженного периода.");
   }
   const provenance = input.provenance;
-  if (provenance.source_system !== "GIR_BO_FNS" || !["OFFICIAL_SUBSCRIPTION_BULK", "OFFICIAL_SIGNED_DOCUMENT"].includes(provenance.access_channel)
+  if (provenance.source_system !== "GIR_BO_FNS" || !["OFFICIAL_SUBSCRIPTION_BULK", "OFFICIAL_SIGNED_DOCUMENT", "OFFICIAL_PUBLIC_UI"].includes(provenance.access_channel)
     || !/^sha256:[a-f0-9]{64}$/u.test(provenance.source_hash_sha256)) {
     fail("FINANCIAL_PROVENANCE_INVALID", "Финансовая запись требует официальный канал ГИР БО и SHA-256 происхождение.");
   }

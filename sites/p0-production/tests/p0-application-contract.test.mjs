@@ -724,6 +724,247 @@ test("authoritative application collects market evidence only for a Model revisi
   assert.equal(restarted.state.analytics_evidence_snapshot.snapshot_id, beforeRestart.active_snapshot_id);
 });
 
+test("fresh pipeline evidence collection reruns every read adapter without mutating the persisted application document", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "mox-p0-pipeline-evidence-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new JsonDurableStore(join(directory, "state.json"));
+  const base = adapters();
+  let phase = "prepare";
+  const reads = { context: 0, site: 0, market: 0, competitors: 0, financial: 0 };
+  let candidateScope = null;
+  const application = new P0Application({
+    store,
+    adapters: {
+      ...base,
+      now: () => phase === "prepare" ? "2026-08-21T10:00:00.000Z" : "2026-09-01T14:00:00.000Z",
+      async readContext(input) {
+        reads.context += 1;
+        const value = await base.readContext(input);
+        if (phase === "prepare") return value;
+        const fresh = structuredClone(value);
+        fresh.direct.observed_at = "2026-09-01T14:00:00.000Z";
+        fresh.direct.capability_snapshot.observed_at = "2026-09-01T14:00:00.000Z";
+        fresh.metrika.observed_at = "2026-09-01T14:00:00.000Z";
+        fresh.performance.provenance.observed_at = "2026-09-01T14:00:00.000Z";
+        return fresh;
+      },
+      async researchSite(url) {
+        reads.site += 1;
+        const site = await base.researchSite(url);
+        return phase === "prepare" ? site : {
+          ...site,
+          fetched_at: "2026-09-01T14:00:00.000Z",
+          title: "Свежий оффер компании",
+          description: "Актуальная услуга со стендом под ключ",
+          text_excerpt: "Свежий оффер компании: стенд под ключ от проектирования до монтажа.",
+          pages: [{
+            ...site.pages[0],
+            title: "Свежий оффер компании",
+            description: "Актуальная услуга со стендом под ключ",
+            text_excerpt: "Свежий оффер компании: стенд под ключ от проектирования до монтажа.",
+          }],
+        };
+      },
+      async readMarketEvidence() {
+        reads.market += 1;
+        return marketEvidenceInput();
+      },
+      async readCompetitorResearch(input) {
+        reads.competitors += 1;
+        candidateScope = structuredClone(input.candidateSet ?? null);
+        return null;
+      },
+      async readFinancialCompetitorIntelligence() {
+        reads.financial += 1;
+        return null;
+      },
+    },
+  });
+
+  let result = await application.command("owner", { action: "analyze_site", expected_revision: 0, url: "https://owner.example/" });
+  result = await application.command("owner", {
+    action: "confirm_context_goal",
+    expected_revision: result.revision,
+    confirmation: "CONFIRM_CONTEXT_GOAL",
+    goal: result.state.context_state.provisional_business_goal.value,
+  });
+  result = await application.command("owner", {
+    action: "save_business_model",
+    expected_revision: result.revision,
+    value: ownerModel(result.state),
+  });
+  const persistedSnapshotId = result.state.analytics_evidence_snapshot.snapshot_id;
+  const persistedModelRevisionId = result.state.business_model.owner_contract.model_revision_id;
+  phase = "refresh";
+  Object.keys(reads).forEach((key) => { reads[key] = 0; });
+
+  const snapshot = await application.collectCurrentAnalyticsEvidence("owner");
+
+  assert.deepEqual(reads, { context: 1, site: 1, market: 1, competitors: 1, financial: 1 });
+  assert.equal(candidateScope.schema_version, "p0-bounded-competitor-research-v1");
+  assert.equal(snapshot.generated_at, "2026-09-01T14:00:00.000Z");
+  assert.match(JSON.stringify(snapshot), /Свежий оффер компании/u);
+  assert.notEqual(snapshot.snapshot_id, persistedSnapshotId);
+  const persisted = JSON.parse((await store.load("owner")).value_json);
+  assert.equal(persisted.analytics_evidence_snapshot.snapshot_id, persistedSnapshotId);
+  assert.equal(persisted.business_model.owner_contract.model_revision_id, persistedModelRevisionId);
+});
+
+test("fresh pipeline evidence keeps public collection available when private provider consent is unavailable", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "mox-p0-public-refresh-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new JsonDurableStore(join(directory, "state.json"));
+  const base = adapters();
+  let preparing = true;
+  let siteReads = 0;
+  let marketReads = 0;
+  const application = new P0Application({
+    store,
+    adapters: {
+      ...base,
+      now: () => preparing ? "2026-08-21T10:00:00.000Z" : "2026-09-02T11:20:00.000Z",
+      async readContext(input) {
+        if (!preparing) throw new Error("Owner-confirmed Access Readiness is required before private provider reads.");
+        return base.readContext(input);
+      },
+      async researchSite(url) {
+        siteReads += 1;
+        const site = await base.researchSite(url);
+        return preparing ? site : {
+          ...site,
+          fetched_at: "2026-09-02T11:20:00.000Z",
+          title: "Свежая публичная страница без private provider consent",
+          pages: site.pages.map((page) => ({ ...page, fetched_at: "2026-09-02T11:20:00.000Z" })),
+        };
+      },
+      async readMarketEvidence() {
+        marketReads += 1;
+        return marketEvidenceInput();
+      },
+      async readCompetitorResearch() { return null; },
+      async readFinancialCompetitorIntelligence() { return null; },
+    },
+  });
+
+  let result = await application.command("owner", { action: "analyze_site", expected_revision: 0, url: "https://owner.example/" });
+  result = await application.command("owner", {
+    action: "confirm_context_goal",
+    expected_revision: result.revision,
+    confirmation: "CONFIRM_CONTEXT_GOAL",
+    goal: result.state.context_state.provisional_business_goal.value,
+  });
+  result = await application.command("owner", {
+    action: "save_business_model",
+    expected_revision: result.revision,
+    value: ownerModel(result.state),
+  });
+  const pipelineSeedSnapshot = structuredClone(result.state.analytics_evidence_snapshot);
+  const rowWithSeed = await store.load("owner");
+  const stateWithoutSeed = JSON.parse(rowWithSeed.value_json);
+  stateWithoutSeed.context_state = null;
+  stateWithoutSeed.site_analysis = null;
+  stateWithoutSeed.business_model = null;
+  stateWithoutSeed.analytics_evidence_snapshot = null;
+  for (const key of [
+    "product_focus",
+    "strategy_questionnaire",
+    "strategy_review",
+    "strategy",
+    "measurement_destination_readiness",
+    "landing_advisory_run",
+    "recommendation_set",
+    "draft",
+    "shortlist",
+    "package_review",
+    "human_decision_gate",
+    "package_execution",
+    "last_decision_invalidation",
+    "external_write_intent",
+    "campaign",
+    "recommendation_recalculation",
+    "last_cascade",
+  ]) stateWithoutSeed[key] = null;
+  stateWithoutSeed.analytics_evidence_lifecycle = {
+    schema_version: "p0-analytics-evidence-lifecycle-v1",
+    active_version: null,
+    active_snapshot_id: null,
+    versions: [],
+    pending_replacement: null,
+  };
+  assert.equal(await store.compareAndSwap("owner", rowWithSeed.revision, {
+    revision: rowWithSeed.revision + 1,
+    updated_at: "2026-09-02T11:19:00.000Z",
+    value_json: JSON.stringify(stateWithoutSeed),
+  }), true);
+  preparing = false;
+  siteReads = 0;
+  marketReads = 0;
+
+  const unavailableView = await application.query("owner");
+  assert.equal(unavailableView.context.direct.ready, false);
+  assert.equal(unavailableView.context.metrika.ready, false);
+  assert.equal(unavailableView.context_preflight.ready, false);
+  assert.match(unavailableView.context.direct.blockers.join(" "), /Access Readiness/u);
+
+  const snapshot = await application.collectCurrentAnalyticsEvidence("owner", pipelineSeedSnapshot);
+
+  assert.equal(siteReads, 1);
+  assert.equal(marketReads, 1);
+  assert.match(JSON.stringify(snapshot), /Свежая публичная страница без private provider consent/u);
+  assert.equal(snapshot.sources.find((source) => source.source_id === "direct").status, "UNAVAILABLE");
+  assert.equal(snapshot.sources.find((source) => source.source_id === "metrika").status, "UNAVAILABLE");
+  assert.match(snapshot.sources.find((source) => source.source_id === "direct").limitations.join(" "), /Access Readiness/u);
+  assert.match(snapshot.sources.find((source) => source.source_id === "metrika").limitations.join(" "), /Access Readiness/u);
+  assert.match(snapshot.snapshot_id, /^sha256:[a-f0-9]{64}$/u);
+  const persisted = JSON.parse((await store.load("owner")).value_json);
+  assert.equal(persisted.analytics_evidence_snapshot, null);
+});
+
+test("initial pipeline evidence collection starts from an explicit first-party HTTPS scope without legacy P0 state", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "mox-p0-initial-public-evidence-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new JsonDurableStore(join(directory, "state.json"));
+  const base = adapters();
+  let requestedSite = null;
+  const application = new P0Application({
+    store,
+    adapters: {
+      ...base,
+      now: () => "2026-09-02T12:10:00.000Z",
+      async readContext() {
+        throw new Error("Owner-confirmed Access Readiness is required before private provider reads.");
+      },
+      async researchSite(url) {
+        requestedSite = url;
+        const site = await base.researchSite(url);
+        return { ...site, url, fetched_at: "2026-09-02T12:10:00.000Z", pages: site.pages.map((page) => ({ ...page, url })) };
+      },
+      async readMarketEvidence() { return marketEvidenceInput(); },
+      async readCompetitorResearch() { return null; },
+      async readFinancialCompetitorIntelligence() { return null; },
+    },
+  });
+
+  await assert.rejects(
+    application.collectCurrentAnalyticsEvidence("owner"),
+    (error) => error.code === "P0_FIRST_PARTY_SITE_SCOPE_MISSING",
+  );
+  const snapshot = await application.collectCurrentAnalyticsEvidence(
+    "owner",
+    null,
+    "https://owner.example/research-start",
+  );
+
+  assert.equal(requestedSite, "https://owner.example/research-start");
+  assert.equal(snapshot.scope.company_host, "owner.example");
+  assert.equal(snapshot.sources.find((source) => source.source_id === "first-party-web").status !== "UNAVAILABLE", true);
+  assert.equal(snapshot.sources.find((source) => source.source_id === "direct").status, "UNAVAILABLE");
+  const persisted = JSON.parse((await store.load("owner")).value_json);
+  assert.equal(persisted.site_analysis, null);
+  assert.equal(persisted.business_model, null);
+  assert.equal(persisted.analytics_evidence_snapshot, null);
+});
+
 test("v16 migration and stale CAS conflict preserve analytics provenance and replacement semantics", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "mox-p0-analytics-lifecycle-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -2970,8 +3211,11 @@ test("publish preflight evaluates each of the exact nine business gates fail clo
     ["GOAL_STRATEGY", (input) => { input.strategy.answers.find((answer) => answer.field_id === "business_goal").value = ""; }],
     ["MODEL_ECONOMICS", (input) => { input.businessModel.owner_contract.economics.status = "MATERIAL_UNCERTAINTY"; }],
     ["EVIDENCE_FRESHNESS", (input) => { input.analyticsEvidenceSnapshot.confidence.freshness = "UNKNOWN"; }],
-    ["MARKET_PROVENANCE", (input) => { delete input.analyticsEvidenceSnapshot.market_evidence.cost.status; }],
-    ["MEASUREMENT", (input) => { input.measurementDestinationReadiness.measurement.status = "BLOCKED"; }],
+    ["MARKET_PROVENANCE", (input) => { input.analyticsEvidenceSnapshot.market_evidence.frequency.status = "UNAVAILABLE"; }],
+    ["MEASUREMENT", (input) => {
+      input.measurementDestinationReadiness.measurement.status = "BLOCKED";
+      input.measurementDestinationReadiness.measurement.checks.find((check) => check.code === "EXACT_BINDING").status = "FAIL";
+    }],
     ["DESTINATION", (input) => { input.measurementDestinationReadiness.destination.status = "BLOCKED"; }],
     ["CLAIMS_ASSETS", (input) => { input.selectedDrafts[0].publish_projection.brand_claims_contract.creative_family.assets[0].rights.status = "UNVERIFIED"; }],
     ["DIRECT_PROFILE", (input) => { input.recommendationSet.capability_profile.eligibility.eligible = false; }],
@@ -2984,6 +3228,49 @@ test("publish preflight evaluates each of the exact nine business gates fail clo
     assert.equal(projection.preflight.gates.find((gate) => gate.code === code).status, "BLOCKED", code);
     assert.equal(projection.preflight.status, "BLOCKED", code);
   }
+});
+
+test("publish preflight accepts accessible market evidence and exact Metrika binding without private cost or conversion maturity", async (t) => {
+  const value = await packageFixture(t);
+  const state = value.result.state;
+  const selected = state.recommendation_set.drafts.find((draft) => draft.shortlist_eligible && draft.visibility === "VISIBLE");
+  const input = {
+    selectedDrafts: [structuredClone(selected)],
+    strategy: structuredClone(state.strategy),
+    businessModel: structuredClone(state.business_model),
+    analyticsEvidenceSnapshot: structuredClone(state.analytics_evidence_snapshot),
+    recommendationSet: structuredClone(state.recommendation_set),
+    capabilitySnapshot: structuredClone(state.context_state.facts.direct.capability_snapshot),
+    measurementDestinationReadiness: structuredClone(state.measurement_destination_readiness),
+  };
+
+  input.analyticsEvidenceSnapshot.competitor_matrix = null;
+  input.analyticsEvidenceSnapshot.market_evidence.cost = {
+    status: "UNAVAILABLE",
+    compact_source: null,
+    as_of: null,
+    missing_or_conflict_reasons: ["NO_QUALIFIED_PRELAUNCH_COST_SOURCE"],
+  };
+  input.measurementDestinationReadiness.measurement.status = "BLOCKED";
+  input.measurementDestinationReadiness.measurement.checks = input.measurementDestinationReadiness.measurement.checks.map((check) => (
+    check.code === "EXACT_BINDING"
+      ? { ...check, status: "PASS" }
+      : check.code === "RECENT_REACHES"
+        ? { ...check, status: "FAIL" }
+        : check
+  ));
+
+  const projection = await buildPackageBusinessProjection(input);
+  const marketGate = projection.preflight.gates.find((gate) => gate.code === "MARKET_PROVENANCE");
+  const measurementGate = projection.preflight.gates.find((gate) => gate.code === "MEASUREMENT");
+  assert.equal(projection.preflight.passed, 9);
+  assert.equal(projection.preflight.status, "PASS");
+  assert.equal(marketGate.status, "PASS");
+  assert.equal(marketGate.label, "Открытые данные о спросе");
+  assert.match(marketGate.explanation, /Закрытые показатели конкурентов.*не блокируют/u);
+  assert.equal(measurementGate.status, "PASS");
+  assert.equal(measurementGate.label, "Привязка Метрики");
+  assert.match(measurementGate.explanation, /История достижений.*не блокируют/u);
 });
 
 test("every selected current Campaign revision freezes a complete honest Auction Protocol in exact authority and P1 lineage", async (t) => {

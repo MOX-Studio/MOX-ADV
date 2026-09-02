@@ -2,6 +2,7 @@ import { buildPublishProjection } from "./campaign-draft.ts";
 import { DIRECT_V501_DRAFT_FIELD_REGISTRY } from "./campaign-draft-fields.ts";
 import { fingerprintDirectProjection } from "./campaign-fanout.ts";
 import { D1PipelineRunStore } from "./pipeline-orchestrator-d1-store.ts";
+import { D1CurrentGoalStore } from "./goal-revision-d1-store.ts";
 import {
   PipelineOrchestrator,
   pipelineDigest,
@@ -192,33 +193,17 @@ async function discardedAttempt(
   };
 }
 
-/** Runs controlled agent candidates through the real durable orchestrator. */
+/** Runs controlled downstream agent products through the real durable orchestrator. */
 export async function completePipelineAcceptanceRun(db: D1Database, ownerKey: string) {
   const orchestrator = new PipelineOrchestrator({ store: new D1PipelineRunStore(db) });
   let run = await orchestrator.current(ownerKey);
   if (!run || run.status !== "ACTIVE") throw new Error("Pipeline acceptance fixture requires one active run.");
-  run = await orchestrator.recordGoalCandidate({
+  const currentGoal = await new D1CurrentGoalStore(db).loadCurrent(ownerKey);
+  if (!currentGoal?.revision.success_criterion) throw new Error("Pipeline acceptance fixture requires one complete owner Goal.");
+  run = await orchestrator.acceptGoalRevision({
     run_id: run.run_id,
     expected_version: run.version,
-    candidate: {
-      schema_version: "p0-goal-candidate-v1",
-      desired_outcome: STRATEGY.goal,
-      qualified_action: MODEL.qualified_result,
-      used_input_ids: ["business_input"],
-      provenance: [{
-        supports: "DESIRED_OUTCOME",
-        input_id: "business_input",
-        locator: "business_goal_decision.value",
-        evidence: "Сохранённый бизнес-вход задаёт заявки на участие",
-      }, {
-        supports: "QUALIFIED_ACTION",
-        input_id: "business_input",
-        locator: "business_model.qualified_outcome",
-        evidence: "Модель бизнеса задаёт отправленную заявку",
-      }],
-      known_constraints: [{ constraint: "Не учитывать вакансии и бесплатные билеты", input_ids: ["business_input"] }],
-      material_ambiguity: null,
-    },
+    revision: currentGoal.revision,
   });
   run = await orchestrator.advance({
     run_id: run.run_id,

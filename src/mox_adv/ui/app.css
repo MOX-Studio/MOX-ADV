@@ -2787,16 +2787,411 @@ input[type="checkbox"] {
   margin-top: 28px;
 }
 
-footer {
-  display: flex;
-  width: min(1420px, calc(100% - 76px));
-  align-items: center;
-  justify-content: space-between;
-  margin: 0 auto;
-  padding: 18px 0 24px;
-  border-top: 1px solid var(--line);
+/* Simplified desktop hierarchy: keep every control, reduce simultaneous noise. */
+body {
+  background: #f6f7f3;
+}
+
+.app-header {
+  grid-template-columns: 180px minmax(0, 1fr) 100px;
+  height: 64px;
+  padding: 0 32px;
+  background: rgba(255, 255, 252, 0.97);
+}
+
+.main-nav {
+  gap: 3px;
+}
+
+.main-nav > a,
+.nav-more > summary {
+  padding: 8px 11px;
+  border-radius: 7px;
   color: var(--muted);
-  font-size: 11px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+  list-style: none;
+  text-decoration: none;
+}
+
+.nav-more {
+  position: relative;
+}
+
+.nav-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.nav-more > summary::after {
+  margin-left: 6px;
+  content: "⌄";
+}
+
+.nav-more > summary:hover,
+.nav-more[open] > summary,
+.nav-more:has(a.is-active) > summary {
+  color: var(--ink);
+  background: #eef0ec;
+}
+
+.nav-more-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 10px);
+  right: 0;
+  display: grid;
+  width: 210px;
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-strong);
+  box-shadow: 0 16px 40px rgba(26, 42, 33, 0.14);
+}
+
+.main-nav .nav-more-menu a,
+.main-nav .nav-more-menu .nav-disabled {
+  margin: 0;
+  padding: 10px 11px;
+  border: 0;
+  border-radius: 7px;
+  font-size: 13px;
+}
+
+.main-nav .nav-more-menu .nav-disabled {
+  color: #9aa19c;
+}
+
+.service-state {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.page {
+  width: min(1320px, calc(100% - 64px));
+}
+
+.page-heading,
+.guide-head,
+.operator-console-head {
+  align-items: center;
+  padding-bottom: 20px;
+}
+
+.page-heading {
+  padding-top: 42px;
+}
+
+.page-heading h1,
+.operator-console-head h2,
+.guide-head h2 {
+  margin: 3px 0 5px;
+  font-size: 36px;
+  letter-spacing: -0.035em;
+}
+
+.page-heading p:last-child,
+.guide-head > p,
+.operator-console-head > p {
+  max-width: 500px;
+  font-size: 14px;
+}
+
+.overview-page {
+  min-height: 0;
+  padding-bottom: 48px;
+}
+
+.overview-status {
+  margin-top: 28px;
+}
+
+.overview-status > div {
+  min-height: 112px;
+  padding: 20px 24px;
+}
+
+.overview-status strong {
+  margin: 10px 0 3px;
+  font-size: 19px;
+}
+
+.overview-actions {
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.overview-actions a {
+  padding: 16px 18px;
+  background: transparent;
+}
+
+.shell {
+  grid-template-columns: 310px minmax(0, 1fr);
+  gap: 28px;
+  min-height: 0;
+  padding: 32px 0 38px;
+}
+
+.controls {
+  padding: 24px;
+  box-shadow: none;
+}
+
+.controls h1 {
+  font-size: 26px;
+}
+
+.mode-switch {
+  margin: 20px 0 12px;
+}
+
+.mode-context {
+  padding: 16px;
+}
+
+.mode-context p {
+  margin-bottom: 10px;
+}
+
+.source-details {
+  border-top: 1px solid var(--line);
+}
+
+.source-details summary {
+  padding: 11px 0 0;
+  color: var(--green-dark);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.source-list {
+  margin-top: 8px;
+}
+
+.controls > .run-button {
+  margin-top: 14px;
+}
+
+.workspace-head {
+  padding-bottom: 14px;
+}
+
+.workspace-head h2 {
+  font-size: 26px;
+}
+
+.pipeline {
+  padding: 16px 0;
+}
+
+.empty-state {
+  min-height: 220px;
+}
+
+.signal {
+  display: none;
+}
+
+.lab-panel,
+.recommendation-guide,
+.history-console,
+.operator-console,
+.workflow-console,
+.campaign-console,
+.evidence-console {
+  padding: 36px 0 44px;
+}
+
+.scenario-panel,
+.automation-panel {
+  min-height: 0;
+}
+
+.scenario-panel .panel-head,
+.automation-panel .panel-head {
+  padding-bottom: 16px;
+}
+
+.panel-head h3 {
+  font-size: 25px;
+}
+
+.panel-index {
+  display: none;
+}
+
+.scenario-fields,
+.threshold-editor {
+  gap: 14px;
+  padding: 20px 0 18px;
+}
+
+.advanced-metrics summary,
+.advanced-rules summary {
+  padding: 14px 0;
+}
+
+.derived-preview > div {
+  padding: 16px;
+}
+
+.automation-panel {
+  max-width: 760px;
+}
+
+.automation-panel > .interval-field {
+  margin: 24px 0;
+}
+
+.safety-note {
+  margin: 22px 0;
+  padding: 12px 14px;
+  background: transparent;
+}
+
+.guide-head,
+.operator-console-head {
+  padding-top: 0;
+}
+
+.trigger-rules-host {
+  margin-top: 28px;
+}
+
+.rule-row {
+  min-height: 68px;
+  padding: 10px 0;
+}
+
+.decision-rule-workspace {
+  gap: 30px;
+  margin-top: 34px;
+  padding: 24px 0;
+}
+
+.guide-actions {
+  padding: 16px 0;
+}
+
+.rule-reference {
+  margin-top: 18px;
+  border-top: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.rule-reference > summary {
+  padding: 18px 0;
+  color: var(--green-dark);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.rule-reference[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.rule-reference .matrix-heading {
+  margin-top: 28px;
+}
+
+.rule-reference .matrix-scroll {
+  margin-bottom: 28px;
+}
+
+.history-tabs {
+  margin-bottom: 24px;
+}
+
+.history-empty {
+  padding: 48px 0;
+}
+
+.authority-layout {
+  gap: 16px;
+  margin-top: 22px;
+}
+
+.authority-panel {
+  padding: 22px;
+}
+
+.campaign-source-switch {
+  grid-template-columns: 200px 230px minmax(0, 1fr);
+  margin-top: 18px;
+}
+
+.campaign-overview-bar {
+  gap: 18px;
+  padding: 16px 0;
+}
+
+.campaign-overview-bar strong {
+  font-size: 24px;
+}
+
+.campaign-workspace {
+  height: calc(100vh - 340px);
+  min-height: 610px;
+  border-bottom: 0;
+}
+
+.campaign-registry,
+.campaign-inspector {
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.campaign-registry {
+  padding: 24px 24px 32px 0;
+}
+
+.campaign-inspector {
+  padding: 24px 0 32px 28px;
+}
+
+.campaign-inspector-head {
+  position: sticky;
+  z-index: 5;
+  top: -24px;
+  min-height: 72px;
+  padding: 24px 0 16px;
+  background: #f6f7f3;
+}
+
+.campaign-registry-head h3,
+.campaign-inspector-head h3 {
+  font-size: 21px;
+}
+
+.campaign-table-wrap {
+  margin-top: 16px;
+}
+
+.campaign-launch-status {
+  gap: 22px;
+  padding: 16px 0;
+}
+
+.campaign-editor-section {
+  padding: 22px 0 24px;
+}
+
+.campaign-field-grid {
+  gap: 14px;
+  margin-top: 20px;
+}
+
+.campaign-subsection-head {
+  margin-top: 22px;
+}
+
+.evidence-console {
+  padding-top: 24px;
 }
 
 @media (prefers-reduced-motion: reduce) {

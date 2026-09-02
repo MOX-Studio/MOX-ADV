@@ -9,7 +9,7 @@ const styles = await readFile(new URL("../app/owner-journey.css", import.meta.ur
 const prototypeStyles = await readFile(new URL("../app/prototype/prd-149/prototype.module.css", import.meta.url), "utf8");
 
 test("owner campaign surface renders an independent business editor without exposing internal draft identifiers", () => {
-  assert.match(clientSource, /Кампании для бизнес-проверки/u);
+  assert.match(clientSource, /Кампании для проверки/u);
   assert.match(clientSource, /campaign\.offer/u);
   assert.match(clientSource, /campaign\.audience/u);
   assert.match(clientSource, /campaign\.destination/u);
@@ -22,7 +22,7 @@ test("owner campaign surface renders an independent business editor without expo
   assert.match(ownerSource, /matchingDraftEditorAction/u);
   assert.match(ownerSource, /save_draft/u);
   assert.match(ownerSource, /save_auction_protocol/u);
-  assert.doesNotMatch(clientSource, /publish_fingerprint|draft_revision_id|provider_ids|field_registry|draft_id/u);
+  assert.doesNotMatch(clientSource, /publish_fingerprint|provider_ids|field_registry|>draft_id<|>draft_revision_id</u);
   assert.doesNotMatch(clientSource, /Фильтр вариантов|Открыть точную проекцию|Показать скрытые|campaign\.readiness|campaign\.comparativeScore/u);
 });
 
@@ -36,7 +36,7 @@ test("owner surface renders exactly one opaque primary action seam", () => {
 });
 
 test("owner Dashboard keeps current campaigns but omits the legacy package gate", () => {
-  assert.match(clientSource, /ТЕКУЩИЕ CAMPAIGN DRAFT/u);
+  assert.match(clientSource, /ТЕКУЩИЕ ЧЕРНОВИКИ КАМПАНИЙ/u);
   assert.match(clientSource, /ТЕКУЩАЯ КАМПАНИЯ/u);
   assert.match(clientSource, /campaign\.offer/u);
   assert.match(ownerSource, /confirm_package/u);

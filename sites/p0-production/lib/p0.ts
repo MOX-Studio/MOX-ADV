@@ -39,11 +39,14 @@ import { ProductionCampaignPlaybookGovernance } from "./production-playbook-gove
 import { D1CampaignPlaybookGovernanceStore } from "./campaign-playbook-governance-d1-store.ts";
 import { D1CampaignPlaybookKnowledgeStore } from "./campaign-playbook-candidates-d1-store.ts";
 import { collectProductionCompetitorResearch } from "./production-competitor-research.ts";
+import { collectPublicCompetitorRefresh } from "./public-competitor-refresh-collector.ts";
+import type { PipelineCompetitorCollectorInput } from "./pipeline-competitor-refresh.ts";
 import {
   P0Application,
   type BusinessModel,
   type P0Context,
   type P0Document,
+  type SiteAnalysis,
 } from "./p0-application.ts";
 import { D1P0ApplicationStore as D1P0ApplicationStoreBase } from "./p0-application-d1-store.ts";
 import {
@@ -85,10 +88,9 @@ import {
   unavailableWordstatBatch,
   validateWordstatProviderScope,
   type CostObservation,
-  type DemandCostResearchPlan,
   type MarketEvidenceInput,
 } from "./market-evidence.ts";
-import { adaptCompleteWordstatUiBatch } from "./wordstat-ui-market-adapter.ts";
+import { collectHeadlessWordstatUiBatch } from "./wordstat-ui-client.ts";
 import {
   verifyDirectAccountBinding,
   verifyMetrikaCounterBinding,
@@ -501,57 +503,6 @@ async function readMetrika() {
   };
 }
 
-function wordstatUiDevice(device: DemandCostResearchPlan["seeds"][number]["device"]) {
-  return device === "all" ? "ALL"
-    : device === "desktop" ? "DESKTOP"
-      : device === "phone" ? "SMARTPHONE" : "TABLET";
-}
-
-async function collectHeadlessWordstatUiBatch(
-  researchPlan: DemandCostResearchPlan,
-  runtime: ReturnType<typeof runtimeEnv>,
-) {
-  const configuredUrl = cleanText(runtime.P0_WORDSTAT_BRIDGE_URL ?? "", 1_000);
-  const bridgeToken = cleanText(runtime.P0_WORDSTAT_BRIDGE_TOKEN ?? "", 1_000);
-  if (!configuredUrl || !bridgeToken) throw new Error("Headless Wordstat UI bridge is not configured.");
-  const bridgeUrl = new URL(configuredUrl);
-  if (bridgeUrl.protocol !== "http:" || bridgeUrl.hostname !== "127.0.0.1") {
-    throw new Error("Headless Wordstat UI bridge must use loopback HTTP.");
-  }
-  const endpoint = new URL("/collect", bridgeUrl);
-  const response = await fetch(endpoint, {
-    method: "POST",
-    redirect: "manual",
-    headers: {
-      Authorization: `Bearer ${bridgeToken}`,
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      run_id: `wordstat-ui-${crypto.randomUUID()}`,
-      plan_input: {
-        seeds: researchPlan.seeds.map((seed) => ({
-          seed_id: seed.seed_id,
-          exact_query: seed.phrase,
-          operator_profile: seed.operator_profile,
-        })),
-        scope: {
-          regions: researchPlan.scope.regions.map((region) => ({ provider_id: region.id, label: region.name })),
-          device: wordstatUiDevice(researchPlan.seeds[0].device),
-          dynamics: {
-            granularity: "MONTH",
-            from_date: researchPlan.scope.seasonality.from_date,
-            to_date: researchPlan.scope.seasonality.to_date,
-          },
-        },
-      },
-    }),
-  });
-  if (!response.ok) throw new Error(`Headless Wordstat UI bridge returned HTTP ${response.status}.`);
-  const payload = await response.json() as { batch?: unknown };
-  return adaptCompleteWordstatUiBatch(payload.batch, researchPlan);
-}
-
 async function readMarketEvidence({
   ownerKey,
   model,
@@ -625,7 +576,10 @@ async function readMarketEvidence({
   let wordstatBatch;
   try {
     if (providerScope.regionIds.length === 0) throw new Error("Wordstat UI requires an exact provider region.");
-    wordstatBatch = await collectHeadlessWordstatUiBatch(researchPlan, runtime);
+    wordstatBatch = await collectHeadlessWordstatUiBatch(researchPlan, {
+      P0_WORDSTAT_BRIDGE_URL: runtime.P0_WORDSTAT_BRIDGE_URL,
+      P0_WORDSTAT_BRIDGE_TOKEN: runtime.P0_WORDSTAT_BRIDGE_TOKEN,
+    });
   } catch (error) {
     wordstatBatch = await unavailableWordstatBatch(
       errorMessage(error),
@@ -931,10 +885,56 @@ async function researchSite(rawUrl: string) {
   });
 }
 
-async function readCompetitorResearch() {
-  const configured = runtimeEnv().P0_COMPETITOR_RESEARCH_JSON;
-  if (!configured) throw new Error("Bounded production competitor candidate set is not configured.");
-  return collectProductionCompetitorResearch(configured, {
+export async function productionPublicCompetitorRefresh(input: PipelineCompetitorCollectorInput) {
+  return collectPublicCompetitorRefresh(input, {
+    fetch,
+    resolveHostname,
+    now,
+    async readFinancialCompetitorIntelligence(value) {
+      const financialInput = await productionFinancialCompetitorIntelligence({
+        ownerKey: value.ownerKey,
+        model: value.model as BusinessModel,
+        site: value.site as SiteAnalysis,
+        generatedAt: value.generatedAt,
+      });
+      if (!financialInput) return null;
+      const dossier = await buildFinancialCompetitorIntelligence(financialInput);
+      if (!await verifyFinancialCompetitorIntelligence(dossier)) {
+        throw new Error("Financial Intelligence bridge returned a dossier that failed immutable verification.");
+      }
+      return dossier as unknown as Record<string, unknown>;
+    },
+  });
+}
+
+async function readCompetitorResearch(input: {
+  model: BusinessModel;
+  site: SiteAnalysis;
+  generatedAt: string;
+  candidateSet?: Record<string, unknown>;
+}) {
+  const configured = cleanText(runtimeEnv().P0_COMPETITOR_RESEARCH_JSON ?? "", 100_000);
+  const candidateSet = record(input.candidateSet);
+  const scoped = candidateSet.schema_version === "p0-bounded-competitor-research-v1"
+    ? JSON.stringify({
+        rule: candidateSet.competitor_set_rule,
+        geography: input.model.geography || "География не подтверждена",
+        device: "all",
+        candidates: Array.isArray(candidateSet.candidates)
+          ? candidateSet.candidates.map((value) => {
+              const candidate = record(value);
+              return {
+                competitor: candidate.competitor,
+                rationale: candidate.rationale,
+                exactDestinations: candidate.exact_destinations,
+              };
+            })
+          : [],
+      })
+    : "";
+  const researchConfig = configured || scoped;
+  if (!researchConfig) return null;
+  return collectProductionCompetitorResearch(researchConfig, {
     fetch,
     resolveHostname,
     now,
@@ -1434,7 +1434,8 @@ async function createExternalOutcome({
 export async function productionFinancialCompetitorIntelligence(input: {
   ownerKey: string;
   model: BusinessModel;
-  context: P0Context;
+  site: SiteAnalysis;
+  context?: P0Context;
   generatedAt: string;
 }): Promise<FinancialCompetitorIntelligenceInput | null> {
   const runtime = runtimeEnv();
@@ -1505,7 +1506,7 @@ const application = new P0Application({
       token: runtimeEnv().P0_DESTINATION_BRIDGE_TOKEN,
       fetcher: fetch,
     }),
-    ...(runtimeEnv().P0_COMPETITOR_RESEARCH_JSON ? { readCompetitorResearch } : {}),
+    readCompetitorResearch,
     readFinancialCompetitorIntelligence: productionFinancialCompetitorIntelligence,
     async readPlaybookReleases() {
       return [readP0CuratedPlaybookV1()];
@@ -1524,6 +1525,17 @@ const application = new P0Application({
     pollPackageItemOutcome,
   },
 });
+
+export async function productionPipelineEvidenceCollector(input: {
+  ownerKey: string;
+  seedSnapshot: Record<string, unknown> | null;
+}) {
+  return application.collectCurrentAnalyticsEvidence(
+    input.ownerKey,
+    input.seedSnapshot,
+    cleanText(runtimeEnv().P0_FIRST_PARTY_SITE_URL ?? "", 2_000),
+  );
+}
 
 async function coordinateOwnerAgent(key: string): Promise<P0AgentOwnerProjection> {
   try {

@@ -13,7 +13,7 @@ test("current query projection contains only the five-stage contract and no lega
 
   assert.equal(projected.pipeline.status, "NOT_STARTED");
   assert.deepEqual(projected.pipeline.stages.map((stage) => stage.label), [
-    "Цель кампании",
+    "Цели",
     "Сбор сведений",
     "Стратегия",
     "Кампании",
@@ -57,6 +57,7 @@ test("current action contract rejects every legacy action", () => {
   assert.equal(assertCurrentPipelineAction({ pipeline_action: "START" }), "START");
   assert.equal(assertCurrentPipelineAction({ pipeline_action: "STOP" }), "STOP");
   assert.equal(assertCurrentPipelineAction({ pipeline_action: "CORRECT_GOAL" }), "CORRECT_GOAL");
+  assert.equal(assertCurrentPipelineAction({ pipeline_action: "REFRESH_EVIDENCE" }), "REFRESH_EVIDENCE");
   assert.equal(assertCurrentPipelineAction({ pipeline_action: "EXPLAIN" }), "EXPLAIN");
   assert.equal(assertCurrentPipelineAction({ pipeline_action: "CORRECT_STRATEGY" }), "CORRECT_STRATEGY");
   assert.equal(assertCurrentPipelineAction({ pipeline_action: "EDIT_CAMPAIGN_PAIR" }), "EDIT_CAMPAIGN_PAIR");

@@ -26,6 +26,7 @@ import {
   BUSINESS_MODEL_FIELD_ORDER,
   BUSINESS_MODEL_SCHEMA,
   buildBusinessModelContract,
+  mergeBusinessModelContractEvidence,
   reviseBusinessModelContract,
   type BusinessModelContract,
   type BusinessModelFieldId,
@@ -505,13 +506,15 @@ export interface P0ApplicationAdapters {
     model: BusinessModel;
     site: SiteAnalysis;
     generatedAt: string;
+    candidateSet?: Record<string, unknown>;
   }): Promise<{
     competitor_candidate_set: Record<string, unknown>;
     competitor_observations: Array<Record<string, unknown>>;
-  }>;
+  } | null>;
   readFinancialCompetitorIntelligence?(input: {
     ownerKey: string;
     model: BusinessModel;
+    site: SiteAnalysis;
     context: P0Context;
     generatedAt: string;
   }): Promise<FinancialCompetitorIntelligenceInput | null>;
@@ -1864,6 +1867,249 @@ function directAccountBinding(state: P0Document): DirectAccountBinding | null {
   };
 }
 
+function verifiedSeedSiteUrl(seed: AnalyticsEvidenceBundle) {
+  const candidates = [
+    ...seed.evidence
+      .filter((item) => item.source_id === "first-party-web")
+      .map((item) => String(item.source_locator.url ?? "")),
+    ...seed.sources
+      .filter((item) => item.source_id === "first-party-web")
+      .map((item) => {
+        const host = String(item.scope.company_host ?? "").trim();
+        return host ? `https://${host}/` : "";
+      }),
+    seed.scope.company_host ? `https://${seed.scope.company_host}/` : "",
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      return normalizePublicHttpsUrl(candidate).toString();
+    } catch {
+      // A later candidate may still contain the verified first-party origin.
+    }
+  }
+  fail("P0_EVIDENCE_SEED_SITE_MISSING", "Current Evidence Snapshot не содержит разрешённый first-party HTTPS origin для нового сбора.");
+}
+
+function seedBusinessModelClaims(seed: AnalyticsEvidenceBundle) {
+  const claims = new Map<string, AnalyticsEvidenceBundle["claims"][number]>();
+  for (const claim of seed.claims.filter((item) => item.subject === "business_model")) {
+    const previous = claims.get(claim.predicate);
+    if (!previous || claim.classification === "owner_confirmed") claims.set(claim.predicate, claim);
+  }
+  return claims;
+}
+
+function seedClaimValue(claim: AnalyticsEvidenceBundle["claims"][number] | undefined) {
+  return claim?.normalized?.value ?? claim?.value ?? null;
+}
+
+function seedClaimText(claim: AnalyticsEvidenceBundle["claims"][number] | undefined) {
+  const value = seedClaimValue(claim);
+  return value === null || value === undefined ? "" : cleanText(String(value), 2_000);
+}
+
+async function businessModelFromEvidenceSeed(
+  seed: AnalyticsEvidenceBundle,
+  siteUrl: string,
+): Promise<BusinessModel> {
+  const claims = seedBusinessModelClaims(seed);
+  const evidenceById = new Map(seed.evidence.map((item) => [item.evidence_id, item]));
+  const fieldEvidence: BusinessModel["field_evidence"] = {};
+  for (const [field, claim] of claims) {
+    const linked = claim.evidence_ids.map((id) => evidenceById.get(id)).filter((item): item is NonNullable<typeof item> => Boolean(item));
+    const publicRecord = linked.find((item) => item.source_id === "first-party-web");
+    const ownerRecord = linked.find((item) => item.source_id === "owner-confirmed");
+    const sourceUrl = publicRecord ? String(publicRecord.source_locator.url ?? "") : "";
+    const quote = publicRecord?.raw.quote
+      ? cleanText(publicRecord.raw.quote, 4_000)
+      : ownerRecord ? seedClaimText(claim) : "";
+    fieldEvidence[field] = {
+      confidence: claim.classification === "owner_confirmed" ? "OWNER_CONFIRMED" : "MEDIUM",
+      source_url: sourceUrl,
+      quote,
+      ...(claim.classification === "owner_confirmed" ? {
+        owner_confirmed: true,
+        owner_confirmed_at: ownerRecord?.observed_at ?? seed.as_of,
+      } : {}),
+    };
+  }
+
+  const discovered: Parameters<typeof buildBusinessModelContract>[0]["discovered"] = {};
+  const ownerValues: Partial<Record<BusinessModelFieldId, unknown>> = {};
+  for (const field of BUSINESS_MODEL_FIELD_ORDER) {
+    const claim = claims.get(field);
+    if (!claim) continue;
+    const evidence = fieldEvidence[field];
+    discovered[field] = {
+      value: seedClaimValue(claim),
+      confidence: claim.classification === "owner_confirmed" ? "HIGH" : "MEDIUM",
+      source_url: evidence?.source_url ?? "",
+    };
+    if (claim.classification === "owner_confirmed") ownerValues[field] = seedClaimValue(claim);
+  }
+  const observedAt = seed.as_of || seed.generated_at;
+  let ownerContract = await buildBusinessModelContract({ discovered, observedAt });
+  if (Object.keys(ownerValues).length) {
+    ownerContract = await reviseBusinessModelContract({
+      previous: ownerContract,
+      values: ownerValues,
+      confirmedAt: observedAt,
+    });
+  }
+
+  const contractText = (field: BusinessModelFieldId) => {
+    const value = ownerContract.fields[field].value;
+    return value === null || value === undefined ? "" : cleanText(String(value), 2_000);
+  };
+  const contractNumber = (field: "average_sale_value_rub" | "gross_margin_percent" | "lead_to_sale_percent") => {
+    const value = ownerContract.fields[field].value;
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+  };
+  const product = seedClaimText(claims.get("product"));
+  const audience = seedClaimText(claims.get("audience")) || contractText("customer_context");
+  const value = seedClaimText(claims.get("value"));
+  const qualifiedResult = seedClaimText(claims.get("qualified_result")) || contractText("qualified_outcome");
+  const exclusions = seedClaimText(claims.get("exclusions")) || contractText("exclusions");
+  const catalogOffers = Array.isArray(seed.product_catalog?.offers) ? seed.product_catalog.offers : [];
+  const offerCandidates: OfferCandidateInput[] = catalogOffers.map((offer) => ({
+    label: offer.label,
+    offer: offer.material_axes.offer || offer.label,
+    audience: offer.material_axes.audience || audience,
+    value: offer.value_proposition || value,
+    qualified_outcome: offer.material_axes.qualified_outcome || qualifiedResult,
+    economics: offer.material_axes.economics,
+    destination: offer.material_axes.destination || siteUrl,
+    destination_status: offer.destination_status,
+    current_promotion: offer.current_promotion,
+    unresolved_facts: offer.unresolved_facts,
+    evidence_refs: offer.evidence_refs,
+    demand_cluster_ids: offer.demand_cluster_ids,
+  }));
+  const sources = [...new Set(Object.values(fieldEvidence).map((item) => item.source_url).filter(Boolean))];
+  return {
+    product,
+    audience,
+    value,
+    qualified_result: qualifiedResult,
+    exclusions,
+    qualified_outcome: contractText("qualified_outcome") || qualifiedResult,
+    customer_context: contractText("customer_context") || audience,
+    buying_context: contractText("buying_context"),
+    revenue_model: contractText("revenue_model"),
+    sales_cycle: contractText("sales_cycle"),
+    average_sale_value_rub: contractNumber("average_sale_value_rub"),
+    gross_margin_percent: contractNumber("gross_margin_percent"),
+    lead_to_sale_percent: contractNumber("lead_to_sale_percent"),
+    capacity: contractText("capacity"),
+    seasonality: contractText("seasonality"),
+    geography: contractText("geography"),
+    key_constraints: contractText("key_constraints"),
+    economics: ownerContract.economics.status === "CONFIRMED"
+      ? `Подтверждённая предельная стоимость квалифицированного результата: ${ownerContract.economics.target_result_cost_rub} ₽.`
+      : `Material Uncertainty: ${ownerContract.economics.limitation}`,
+    owner_contract: ownerContract,
+    source: "VERIFIED_PIPELINE_EVIDENCE_SEED",
+    assumptions: [...seed.material_uncertainties],
+    missing_questions: seed.gaps.filter((item) => item.code === "BUSINESS_MODEL_EVIDENCE_MISSING").map((item) => item.description),
+    research: {
+      agent: "VERIFIED_PIPELINE_EVIDENCE_SEED_V1",
+      pages_analyzed: Number(seed.sources.find((item) => item.source_id === "first-party-web")?.scope.pages_analyzed ?? 0),
+      sources,
+      completed_fields: [...claims.keys()],
+    },
+    offer_candidates: offerCandidates,
+    field_evidence: fieldEvidence,
+  };
+}
+
+function unavailablePrivateProviderResearchContext(
+  contextState: P0ContextState | null,
+  attemptedAt: string,
+  reason: string,
+  seedScope: AnalyticsEvidenceBundle["scope"] | null = null,
+): P0Context {
+  const seedHasPrivateScope = Boolean(
+    seedScope?.direct_client_login
+    || seedScope?.direct_client_id
+    || seedScope?.metrika_counter_id
+    || seedScope?.metrika_goal_id,
+  );
+  const accessProfile = contextState?.access_profile ?? {
+    path: seedHasPrivateScope ? "EXISTING_ADVERTISER" as const : "NEW_ADVERTISER" as const,
+    account_history: seedHasPrivateScope ? "AVAILABLE" as const : "UNAVAILABLE" as const,
+    evidence_scope: { direct: "UNAVAILABLE" as const, metrika: "UNAVAILABLE" as const, wordstat: "UNAVAILABLE" as const },
+    limitation: null,
+  };
+  const directFacts = contextState?.facts.direct;
+  const metrikaFacts = contextState?.facts.metrika;
+  const directAccount = directFacts?.account ?? seedScope?.direct_client_login ?? "";
+  const directClientId = directFacts?.client_id ?? seedScope?.direct_client_id ?? "";
+  const metrikaCounterId = metrikaFacts?.counter_id ?? seedScope?.metrika_counter_id ?? "";
+  const metrikaGoalId = metrikaFacts?.goal_id ?? seedScope?.metrika_goal_id ?? "";
+  const limitation = `Private provider reads were skipped at ${attemptedAt}: ${cleanText(reason, 500)}`;
+  return {
+    environment: "PRODUCTION",
+    test_scenario: false,
+    access_profile: {
+      ...accessProfile,
+      evidence_scope: {
+        ...accessProfile.evidence_scope,
+        direct: "UNAVAILABLE",
+        metrika: "UNAVAILABLE",
+      },
+      limitation,
+    },
+    direct: {
+      ready: false,
+      inventory_ready: false,
+      authority: "UNAVAILABLE",
+      access: "YANDEX_DIRECT_API_V501",
+      account: directAccount,
+      client_id: directClientId,
+      binding: { expected_account: directAccount, api_account: "", matched: false },
+      campaigns_total: null,
+      minimum_weekly_budget_rub: null,
+      observed_at: "",
+      capability_snapshot: {
+        schema_version: "direct-account-capability-snapshot-v1",
+        snapshot_id: "private-provider-read-unavailable",
+        source: "YANDEX_DIRECT_API_V501",
+        account: directAccount,
+        observed_at: attemptedAt,
+        api_version: "v501",
+        archived: "UNKNOWN",
+        currency: directFacts?.capability_snapshot.currency ?? "",
+        edit_campaigns_grant: "UNKNOWN",
+        available_campaign_types: [],
+        restrictions: [],
+        conditional_capabilities: [],
+      },
+      read_limitations: {
+        inventory_complete: false,
+        limited_by: "ACCESS_READINESS",
+        methods_read: [],
+        methods_not_read: ["OWNER_CONFIRMED_ACCESS_READINESS_REQUIRED"],
+        statistics_provisional_days: 3,
+      },
+      blockers: [limitation],
+    },
+    metrika: {
+      ready: false,
+      authority: "UNAVAILABLE",
+      access: "YANDEX_METRIKA_MANAGEMENT_AND_REPORTS_API",
+      counter_id: metrikaCounterId,
+      goal_id: metrikaGoalId,
+      binding: { expected_counter_id: metrikaCounterId, api_counter_id: "", matched: false },
+      goal_binding: { expected_goal_id: metrikaGoalId, api_goal_id: "", matched: false },
+      observed_at: "",
+      blockers: [limitation],
+    },
+    campaign_catalog: null,
+    performance: null,
+  };
+}
+
 function persistedDecisionContext(state: P0Document): P0Context {
   const facts = state.context_state?.facts;
   if (!facts) fail("P0_CONTEXT_STATE_MISSING", "Persisted Context facts отсутствуют для decision response.");
@@ -2362,6 +2608,67 @@ async function inferModel(site: SiteAnalysis, context: P0Context): Promise<Busin
     ]),
   };
   return model;
+}
+
+async function refreshModelEvidence(
+  persisted: BusinessModel,
+  site: SiteAnalysis,
+  context: P0Context,
+  refreshedAt: string,
+): Promise<BusinessModel> {
+  const fresh = await inferModel(site, context);
+  const ownerContract = await mergeBusinessModelContractEvidence({
+    fresh: fresh.owner_contract,
+    ownerConfirmed: persisted.owner_contract,
+    mergedAt: refreshedAt,
+  });
+  const merged = structuredClone(fresh);
+  merged.owner_contract = ownerContract;
+  for (const field of BUSINESS_MODEL_FIELD_ORDER) {
+    const contractField = ownerContract.fields[field];
+    merged[field] = contractField.value as never;
+    if (!contractField.owner_confirmed) continue;
+    const previousEvidence = persisted.field_evidence[field];
+    merged.field_evidence[field] = {
+      confidence: contractField.confidence,
+      source_url: contractField.provenance.source_url ?? "",
+      quote: contractField.provenance.kind === "OWNER_CONFIRMATION"
+        ? String(contractField.value ?? "")
+        : previousEvidence?.quote ?? "",
+      owner_confirmed: true,
+      owner_confirmed_at: contractField.provenance.observed_at ?? previousEvidence?.owner_confirmed_at,
+      owner_edited: previousEvidence?.owner_edited,
+    };
+  }
+  for (const field of ["product", "audience", "value", "qualified_result", "exclusions"] as const) {
+    const previousEvidence = persisted.field_evidence[field];
+    if (previousEvidence?.owner_confirmed !== true) continue;
+    merged[field] = persisted[field];
+    merged.field_evidence[field] = {
+      ...previousEvidence,
+      source_url: "",
+      quote: String(persisted[field] ?? ""),
+    };
+  }
+  if (merged.field_evidence.qualified_result?.owner_confirmed !== true) {
+    merged.qualified_result = String(ownerContract.fields.qualified_outcome.value ?? "");
+  }
+  if (merged.field_evidence.audience?.owner_confirmed !== true) {
+    merged.audience = String(ownerContract.fields.customer_context.value ?? "");
+  }
+  if (merged.field_evidence.exclusions?.owner_confirmed !== true) {
+    merged.exclusions = String(ownerContract.fields.exclusions.value ?? "");
+  }
+  merged.economics = ownerContract.economics.status === "CONFIRMED"
+    ? `Подтверждённая предельная стоимость квалифицированного результата: ${ownerContract.economics.target_result_cost_rub} ₽.`
+    : `Material Uncertainty: ${ownerContract.economics.limitation}`;
+  merged.source = "FRESH_SITE_RESEARCH_PLUS_OWNER_CONFIRMATION";
+  merged.assumptions = BUSINESS_MODEL_FIELD_ORDER.flatMap((field) => ownerContract.fields[field].assumption.statement
+    ? [`${field}: ${ownerContract.fields[field].assumption.statement}`]
+    : []);
+  merged.missing_questions = ownerContract.questions.map((item) => item.question);
+  merged.research.sources = [...new Set([...fresh.research.sources, "OWNER_CONFIRMATION"] )];
+  return merged;
 }
 
 function decodeDocument(row: P0StoredRow): Record<string, unknown> {
@@ -4348,11 +4655,18 @@ export class P0Application {
     return rows.slice(0, 50).map((row) => summarizeP0Revision(row, currentRevision));
   }
 
-  private async buildModelEvidence(ownerKey: string, site: SiteAnalysis, model: BusinessModel, context: P0Context, generatedAt: string) {
+  private async buildModelEvidence(
+    ownerKey: string,
+    site: SiteAnalysis,
+    model: BusinessModel,
+    context: P0Context,
+    generatedAt: string,
+    candidateSet?: Record<string, unknown>,
+  ) {
     const [marketEvidenceInput, competitorResearch, financialCompetitorIntelligenceInput] = await Promise.all([
       this.adapters.readMarketEvidence?.({ ownerKey, model, context, generatedAt }),
-      this.adapters.readCompetitorResearch?.({ model, site, generatedAt }),
-      this.adapters.readFinancialCompetitorIntelligence?.({ ownerKey, model, context, generatedAt }),
+      this.adapters.readCompetitorResearch?.({ model, site, generatedAt, candidateSet }),
+      this.adapters.readFinancialCompetitorIntelligence?.({ ownerKey, model, site, context, generatedAt }),
     ]);
     return buildAnalyticsEvidence({
       site: site as unknown as Record<string, unknown>,
@@ -4420,6 +4734,27 @@ export class P0Application {
     }
   }
 
+  private assertPersistedResearchBindings(state: P0Document, context: P0Context) {
+    if (!state.context_state) return;
+    const expected = state.context_state.facts;
+    const direct = record(context.direct);
+    const metrika = record(context.metrika);
+    const actual = {
+      directAccount: String(direct.account ?? ""),
+      directClientId: String(direct.client_id ?? ""),
+      metrikaCounterId: String(metrika.counter_id ?? ""),
+      metrikaGoalId: String(metrika.goal_id ?? ""),
+    };
+    if (
+      actual.directAccount !== expected.direct.account
+      || actual.directClientId !== expected.direct.client_id
+      || actual.metrikaCounterId !== expected.metrika.counter_id
+      || actual.metrikaGoalId !== expected.metrika.goal_id
+    ) {
+      fail("P0_CONTEXT_PREFLIGHT_CHANGED", "Подключения текущего research scope изменились. Повторите шаг «Контекст».");
+    }
+  }
+
   private writeReadiness(state: P0Document, context: P0Context, timestamp: string) {
     const configuration = this.adapters.externalWriteConfiguration();
     const blockers = [...configuration.blockers, ...contextPreflightBlockers(context, timestamp)];
@@ -4453,6 +4788,67 @@ export class P0Application {
     }
     const uniqueBlockers = [...new Set(blockers)];
     return { ready: uniqueBlockers.length === 0, blockers: uniqueBlockers };
+  }
+
+  async collectCurrentAnalyticsEvidence(
+    key: string,
+    seedSnapshotValue: Record<string, unknown> | null = null,
+    firstPartySiteUrl = "",
+  ): Promise<AnalyticsEvidenceBundle> {
+    const current = await this.load(key);
+    const state = current.state;
+    const rawSeed = seedSnapshotValue ?? state.analytics_evidence_snapshot;
+    let seed: AnalyticsEvidenceBundle | null = null;
+    if (rawSeed) {
+      const candidate = rawSeed as AnalyticsEvidenceBundle;
+      if (!await verifyAnalyticsEvidenceSnapshot(candidate)) {
+        fail("P0_EVIDENCE_SEED_INVALID", "Current Pipeline Evidence Snapshot не прошёл immutable verification.");
+      }
+      seed = structuredClone(candidate);
+    }
+    let configuredSiteUrl = "";
+    if (firstPartySiteUrl) {
+      try {
+        configuredSiteUrl = normalizePublicHttpsUrl(firstPartySiteUrl).toString();
+      } catch {
+        fail("P0_FIRST_PARTY_SITE_SCOPE_INVALID", "Настроенный first-party research scope должен быть публичным HTTPS URL.");
+      }
+    }
+    const siteUrl = state.site_analysis?.url
+      ?? (seed ? verifiedSeedSiteUrl(seed) : configuredSiteUrl);
+    if (!siteUrl) {
+      fail("P0_FIRST_PARTY_SITE_SCOPE_MISSING", "Свежий Analytics Evidence Snapshot требует явный first-party HTTPS scope, сохранённый Context или проверенный Pipeline seed.");
+    }
+    const collectedAt = this.adapters.now();
+    let context: P0Context;
+    try {
+      context = sanitizeContext(await this.adapters.readContext({ owner_key: key }));
+    } catch (error) {
+      context = unavailablePrivateProviderResearchContext(
+        state.context_state,
+        collectedAt,
+        errorMessage(error),
+        seed?.scope ?? null,
+      );
+    }
+    this.assertResearchContextPreflight(context, collectedAt);
+    this.assertPersistedResearchBindings(state, context);
+    const site = sanitizeSiteAnalysis(await this.adapters.researchSite(siteUrl));
+    const persistedModel = state.business_model
+      ?? (seed ? await businessModelFromEvidenceSeed(seed, siteUrl) : null);
+    const model = persistedModel
+      ? await refreshModelEvidence(persistedModel, site, context, collectedAt)
+      : await inferModel(site, context);
+    const previousMatrix = record((state.analytics_evidence_snapshot ?? seed)?.competitor_matrix);
+    const candidateSet = record(previousMatrix.candidate_set);
+    return this.buildModelEvidence(
+      key,
+      site,
+      model,
+      context,
+      collectedAt,
+      Object.keys(candidateSet).length ? candidateSet : undefined,
+    );
   }
 
   async exportP1Handoff(key: string): Promise<P0P1Handoff> {
@@ -4546,9 +4942,14 @@ export class P0Application {
   }
 
   async query(key: string) {
-    const [stored, rawContext] = await Promise.all([this.load(key), this.adapters.readContext({ owner_key: key })]);
-    const context = sanitizeContext(rawContext);
+    const stored = await this.load(key);
     const timestamp = this.adapters.now();
+    let context: P0Context;
+    try {
+      context = sanitizeContext(await this.adapters.readContext({ owner_key: key }));
+    } catch (error) {
+      context = unavailablePrivateProviderResearchContext(stored.state.context_state, timestamp, errorMessage(error));
+    }
     const viewState = structuredClone(stored.state);
     return {
       contract: contractMetadata("query"),

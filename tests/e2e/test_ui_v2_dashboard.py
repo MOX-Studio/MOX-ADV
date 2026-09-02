@@ -56,6 +56,13 @@ def fill_autopilot_safe_scenario(page: Page) -> None:
     page.locator("#scenario-baseline-conversions").fill("10")
 
 
+def click_dashboard_nav(page: Page, name: str) -> None:
+    link = page.get_by_role("link", name=name, exact=True)
+    if not link.is_visible():
+        page.locator(".nav-more summary").click()
+    link.click()
+
+
 class UiV2DashboardTests(unittest.TestCase):
     def test_temporary_public_demo_accepts_tunnel_origin_and_keeps_full_ui(
         self,
@@ -718,7 +725,7 @@ class UiV2DashboardTests(unittest.TestCase):
                     )
 
                     webvisor = page.locator(".main-nav .nav-disabled")
-                    self.assertEqual("Вебвизор", webvisor.inner_text())
+                    self.assertEqual("Вебвизор", webvisor.text_content())
                     self.assertEqual(
                         "SPAN", webvisor.evaluate("(node) => node.tagName")
                     )
@@ -763,7 +770,10 @@ class UiV2DashboardTests(unittest.TestCase):
                         ).is_visible()
                     )
                     self.assertEqual(7, page.locator(".main-nav a").count())
-                    self.assertEqual(8, page.locator(".main-nav > *").count())
+                    self.assertEqual(5, page.locator(".main-nav > *").count())
+                    self.assertTrue(
+                        page.locator(".nav-more summary").is_visible()
+                    )
                     self.assertEqual(
                         0,
                         page.get_by_role("link", name="Стратегия").count(),
@@ -788,7 +798,10 @@ class UiV2DashboardTests(unittest.TestCase):
                         "Контроль": ("/control", "Аварийная остановка"),
                     }
                     for link_name, (path, heading) in expected_pages.items():
-                        page.get_by_role("link", name=link_name, exact=True).click()
+                        link = page.get_by_role("link", name=link_name, exact=True)
+                        if not link.is_visible():
+                            page.locator(".nav-more summary").click()
+                        link.click()
                         self.assertEqual(f"{base_url}{path}", page.url)
                         self.assertTrue(
                             page.get_by_role(
@@ -803,7 +816,7 @@ class UiV2DashboardTests(unittest.TestCase):
                         )
 
                     webvisor = page.locator(".main-nav .nav-disabled")
-                    self.assertEqual("Вебвизор", webvisor.inner_text())
+                    self.assertEqual("Вебвизор", webvisor.text_content())
                     self.assertTrue(
                         webvisor.evaluate("(node) => node.matches(':last-child')")
                     )
@@ -958,11 +971,7 @@ class UiV2DashboardTests(unittest.TestCase):
                         ).count(),
                     )
 
-                    page.get_by_role(
-                        "link",
-                        name="История",
-                        exact=True,
-                    ).click()
+                    click_dashboard_nav(page, "История")
                     self.assertEqual(
                         "true",
                         page.get_by_role(
@@ -985,11 +994,7 @@ class UiV2DashboardTests(unittest.TestCase):
                         page.get_by_label("Сценарий наблюдения").count(),
                     )
 
-                    page.get_by_role(
-                        "link",
-                        name="Контроль",
-                        exact=True,
-                    ).click()
+                    click_dashboard_nav(page, "Контроль")
                     page.get_by_role(
                         "button",
                         name="Проверить весь тестовый цикл",
@@ -1064,11 +1069,7 @@ class UiV2DashboardTests(unittest.TestCase):
                     )
                     self.assertTrue(linked.ok)
 
-                    page.get_by_role(
-                        "link",
-                        name="История",
-                        exact=True,
-                    ).click()
+                    click_dashboard_nav(page, "История")
                     decisions_tab = page.get_by_role(
                         "tab",
                         name="История решений",
@@ -1273,11 +1274,7 @@ class UiV2DashboardTests(unittest.TestCase):
                         "HTML",
                         page.locator(".report-actions a").inner_text(),
                     )
-                    page.get_by_role(
-                        "link",
-                        name="История",
-                        exact=True,
-                    ).click()
+                    click_dashboard_nav(page, "История")
                     latest_reason = page.locator(
                         "#decision-history article"
                     ).first.inner_text()
@@ -1325,11 +1322,7 @@ class UiV2DashboardTests(unittest.TestCase):
                     ).wait_for()
                     page.get_by_text("Следующий запуск:", exact=False).wait_for()
 
-                    page.get_by_role(
-                        "link",
-                        name="История",
-                        exact=True,
-                    ).click()
+                    click_dashboard_nav(page, "История")
                     latest = page.locator("#decision-history article").first
                     latest.wait_for(timeout=10_000)
                     latest_text = latest.inner_text()

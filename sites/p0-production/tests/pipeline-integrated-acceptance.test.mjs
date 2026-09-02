@@ -7,6 +7,7 @@ import {
   pipelineAcceptanceHistoricalView,
 } from "../lib/pipeline-acceptance-fixture.ts";
 import { D1PipelineRunStore } from "../lib/pipeline-orchestrator-d1-store.ts";
+import { D1CurrentGoalStore } from "../lib/goal-revision-d1-store.ts";
 import { PipelineOrchestrator } from "../lib/pipeline-orchestrator.ts";
 import {
   OwnerPipelineController,
@@ -54,6 +55,7 @@ test("controlled cold-start inputs traverse the durable five-stage orchestrator 
   const db = d1Shim(database);
   const store = new D1PipelineRunStore(db);
   const controller = new OwnerPipelineController(store, {
+    goalStore: new D1CurrentGoalStore(db),
     newRunId: () => "pipeline-integrated-acceptance",
     now: (() => {
       let tick = 0;
@@ -61,6 +63,13 @@ test("controlled cold-start inputs traverse the durable five-stage orchestrator 
     })(),
   });
   const historical = await pipelineAcceptanceHistoricalView();
+  await controller.correctGoal("owner", {
+    desiredOutcome: "Получать квалифицированные заявки на участие",
+    qualifiedAction: "Отправленная заявка на участие",
+    targetCount: 30,
+    deadline: "2027-06-30",
+    maxResultCostRub: 30_000,
+  });
   const versions = await pipelineInputVersions(historical);
 
   assert.equal(versions.campaign_pair_checks.set_disposition, "CURRENT_PAIRS_AVAILABLE");
@@ -124,13 +133,28 @@ test("stop, new run, and a saved owner correction create new identities and froz
   const db = d1Shim(database);
   const ids = ["pipeline-before-correction", "pipeline-after-correction"];
   const controller = new OwnerPipelineController(new D1PipelineRunStore(db), {
+    goalStore: new D1CurrentGoalStore(db),
     newRunId: () => ids.shift(),
     now: () => "2026-09-01T12:00:00.000Z",
   });
   const before = await pipelineAcceptanceHistoricalView();
+  await controller.correctGoal("owner", {
+    desiredOutcome: "Получать квалифицированные заявки на участие",
+    qualifiedAction: "Отправленная заявка на участие",
+    targetCount: 30,
+    deadline: "2027-06-30",
+    maxResultCostRub: 30_000,
+  });
   const first = await controller.start("owner", before);
   const stopped = await controller.stop("owner", { runId: first.runId, expectedVersion: first.version });
   const after = await pipelineAcceptanceHistoricalView({ ownerGoal: "Получать квалифицированные заявки на переговоры" });
+  await controller.correctGoal("owner", {
+    desiredOutcome: "Получать квалифицированные заявки на переговоры",
+    qualifiedAction: "Назначенная встреча с менеджером",
+    targetCount: 30,
+    deadline: "2027-06-30",
+    maxResultCostRub: 30_000,
+  });
   const second = await controller.start("owner", after);
 
   assert.equal(stopped.status, "STOPPED");

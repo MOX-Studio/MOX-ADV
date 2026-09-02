@@ -4,6 +4,10 @@ import test from "node:test";
 
 const productionSource = await readFile(new URL("../app/P0Client.tsx", import.meta.url), "utf8");
 const prototypeSource = await readFile(new URL("../app/prototype/prd-149/PrototypeClient.tsx", import.meta.url), "utf8");
+const goalStageSummarySource = productionSource.slice(
+  productionSource.indexOf("function GoalStageSummary"),
+  productionSource.indexOf("function OwnerField"),
+);
 
 const sharedVisualClasses = [
   "prototype",
@@ -11,13 +15,9 @@ const sharedVisualClasses = [
   "brand",
   "activeNav",
   "pageA",
-  "hero",
-  "heroOutcome",
   "stageNav",
   "stageNavhorizontal",
   "ownerWorkspace",
-  "agentRail",
-  "automationMap",
   "artifact",
 ];
 
@@ -37,26 +37,43 @@ test("production stage cards switch the visible owner section without mutating w
   for (const stage of ["goal", "findings", "strategy", "campaigns", "review"]) {
     assert.match(productionSource, new RegExp(`activeStage === "${stage}"`, "u"));
   }
-  assert.match(productionSource, /function StageUnavailable/u);
-  assert.match(productionSource, /Просмотр этого раздела не меняет состояние и не выдаёт новых полномочий/u);
+  assert.doesNotMatch(productionSource, /function StageUnavailable|ЭТАП ЕЩЁ НЕ ОТКРЫТ/u);
 });
 
-test("production keeps the accepted Goal-only hero and never renders prototype labeling", () => {
-  assert.match(productionSource, /activeStage === "goal"[^\n]*<Hero/u);
+test("production starts with the stage navigation and omits the removed Goal hero", () => {
+  assert.doesNotMatch(productionSource, /function Hero|styles\.hero\b|styles\.heroOutcome\b/u);
   assert.doesNotMatch(productionSource, /prototypeFlag|ПРОТОТИП · ЦЕЛЕВОЕ СОСТОЯНИЕ/u);
 });
 
-test("production omits redundant status and outcome details", () => {
+test("Campaign Goal uses one atomic editor for the business goal, qualified result, and measurable criterion", () => {
+  for (const label of ["Бизнес-цель", "Квалифицированный результат", "Критерий успеха"]) {
+    assert.match(goalStageSummarySource, new RegExp(label, "u"));
+  }
+  for (const field of ["desired_outcome", "qualified_action", "target_count", "deadline", "max_result_cost_rub"]) {
+    assert.match(goalStageSummarySource, new RegExp(`name="${field}"`, "u"));
+  }
+  assert.match(goalStageSummarySource, /owner-goal-editor/u);
+  assert.match(goalStageSummarySource, /Изменить цель/u);
+  assert.match(goalStageSummarySource, /Сохранить и начать сбор сведений/u);
+  assert.match(goalStageSummarySource, /Требует уточнения/u);
+  const saveGoalIndex = productionSource.indexOf('pipeline_action: "CORRECT_GOAL"');
+  const startEvidenceIndex = productionSource.indexOf('pipeline_action: "START"', saveGoalIndex);
+  assert.ok(saveGoalIndex > -1 && startEvidenceIndex > saveGoalIndex);
+  assert.match(productionSource, /по цене не выше/u);
+  assert.doesNotMatch(goalStageSummarySource, /goalField|editingField|Границы результата|knownConstraints/u);
+  assert.doesNotMatch(productionSource, /GoalFormationSummary|GoalInterview|goal-agent|Рекомендация агента|Помочь сформулировать|Проверить на противоречия/u);
+  assert.doesNotMatch(productionSource, /ПРОВЕРЕННАЯ ВЕРСИЯ ЦЕЛИ|Цель кампании и модель бизнеса|Что требует пересборки|owner-goal-rebuild/u);
+});
+
+test("production omits redundant status and the removed top outcome summary", () => {
   for (const className of ["connectionState", "agentMessage", "railSnapshot", "safetyCard"]) {
     assert.doesNotMatch(productionSource, new RegExp(`styles\\.${className}\\b`, "u"));
   }
-  assert.doesNotMatch(productionSource, /<h2>\{projection\.businessOutcome\.headline\}<\/h2><p>\{projection\.businessOutcome\.summary\}<\/p>/u);
+  assert.doesNotMatch(productionSource, /owner-outcome|ТЕКУЩИЙ БИЗНЕС-РЕЗУЛЬТАТ/u);
 });
 
-test("automation map distinguishes forbidden launch from available Direct reads", () => {
-  for (const source of [productionSource, prototypeSource]) {
-    assert.match(source, /Запуск показов и расходов/u);
-    assert.match(source, /ЗАПРЕЩЁН В P0/u);
-    assert.doesNotMatch(source, />Показы и расходы<[^\n]*>НЕДОСТУПНО</u);
-  }
+test("prototype automation map distinguishes forbidden launch from available Direct reads", () => {
+  assert.match(prototypeSource, /Запуск показов и расходов/u);
+  assert.match(prototypeSource, /ЗАПРЕЩЁН В P0/u);
+  assert.doesNotMatch(prototypeSource, />Показы и расходы<[^\n]*>НЕДОСТУПНО</u);
 });

@@ -222,15 +222,24 @@ test("fails closed for compiler failures and for a corrupted persisted Draft", a
   const partialApplicability = structuredClone(completed);
   partialApplicability.pair.draft.applicability.pop();
   assert.equal(await projectCampaignPairDossier({ strategy: strategy(), result: partialApplicability }), null);
+
+  const reviewOnlyPair = structuredClone(completed);
+  delete reviewOnlyPair.pair.draft.applicability;
+  assert.equal(await projectCampaignPairDossier({ strategy: strategy(), result: reviewOnlyPair }), null);
+  assert.deepEqual(await projectCurrentCampaignDossiers({
+    campaign_strategy: { strategy: strategy() },
+    campaign_pairs: [reviewOnlyPair.pair],
+  }), []);
 });
 
 test("Dashboard renders the dossier only through the atomic pipeline property", async () => {
   const client = await readFile(new URL("../app/P0Client.tsx", import.meta.url), "utf8");
 
   assert.match(client, /projection\.pipeline\?\.campaignDossiers/u);
-  assert.match(client, /CAMPAIGN HYPOTHESIS \+ ПОЛНЫЙ CAMPAIGN DRAFT/u);
-  assert.match(client, /Campaign Strategy → Campaign Hypothesis → Campaign Draft/u);
-  assert.match(client, /Решение → evidence → точное поле/u);
+  assert.match(client, /ГИПОТЕЗА И ПОЛНЫЙ ЧЕРНОВИК КАМПАНИИ/u);
+  assert.match(client, /Стратегия → гипотеза → черновик кампании/u);
+  assert.match(client, /Ключевые решения стратегии/u);
+  assert.doesNotMatch(client, /owner-dossier-hypothesis|БИЗНЕС-СМЫСЛ|dossier\.hypothesis\.|DRAFT_FIELD_LABELS|draftFieldLabel|<span>Поле кампании<\/span>|item\.evidence\.map\(\(reference\)/u);
   assert.match(client, /dossier\.clientPreview\.combinations\.map/u);
   assert.match(client, /dossier\.directProjection\.fields\.map/u);
   assert.doesNotMatch(client, /campaignDossier\?\.hypothesis|campaignDossier\?\.clientPreview/u);

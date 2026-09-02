@@ -16,17 +16,22 @@
       </a>
       <nav class="main-nav" aria-label="Основная навигация">
         <a href="/overview" data-nav data-page-link="overview">Обзор</a>
-        <a href="/cycle" data-nav data-page-link="cycle">Запуск цикла</a>
+        <a href="/cycle" data-nav data-page-link="cycle" aria-label="Запуск цикла">Запуск</a>
+        <a href="/campaign" data-nav data-page-link="campaign" aria-label="Кампания">Кампании</a>
         <a href="/autopilot" data-nav data-page-link="autopilot">Автопилот</a>
-        <a href="/rules" data-nav data-page-link="rules">Правила</a>
-        <a href="/history" data-nav data-page-link="history">История</a>
-        <a href="/campaign" data-nav data-page-link="campaign">Кампания</a>
-        <a href="/control" data-nav data-page-link="control">Контроль</a>
-        <span class="nav-disabled" aria-disabled="true">Вебвизор</span>
+        <details class="nav-more">
+          <summary>Ещё</summary>
+          <div class="nav-more-menu">
+            <a href="/rules" data-nav data-page-link="rules">Правила</a>
+            <a href="/history" data-nav data-page-link="history">История</a>
+            <a href="/control" data-nav data-page-link="control">Контроль</a>
+            <span class="nav-disabled" aria-disabled="true">Вебвизор</span>
+          </div>
+        </details>
       </nav>
-      <div class="service-state" id="service-state">
+      <div class="service-state" id="service-state" aria-label="Система готова">
         <span class="state-dot" aria-hidden="true"></span>
-        <span>Система готова</span>
+        <span>Готово</span>
       </div>
     </header>
     <aside class="public-demo-banner" id="public-demo-banner" hidden>
@@ -1307,9 +1312,5 @@
       </a>
       <p class="automation-message" id="evidence-message" aria-live="polite"></p>
     </section>
-    <footer>
-      <span>MOX-ADV · операторский интерфейс</span>
-      <span>Директ + Метрика · единый цикл управления</span>
-    </footer>
   </body>
 </html>

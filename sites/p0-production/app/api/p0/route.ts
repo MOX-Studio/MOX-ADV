@@ -2,7 +2,9 @@ import { env, waitUntil } from "cloudflare:workers";
 import {
   operatorDiagnostics as productionOperatorDiagnostics,
   productionCampaignPlaybookGovernance,
+  productionPipelineEvidenceCollector,
   productionPipelineStageAgents,
+  productionPublicCompetitorRefresh,
   recoverOwnerState as productionRecoverOwnerState,
   userKey,
 } from "../../../lib/p0";
@@ -49,7 +51,9 @@ function pipelineController() {
   return new OwnerPipelineController(new D1PipelineRunStore(env.DB), {
     goalStore: new D1CurrentGoalStore(env.DB),
     stageAgents: productionPipelineStageAgents(),
+    evidenceCollector: productionPipelineEvidenceCollector,
     productStore: new D1PipelineCurrentProductStore(env.DB),
+    competitorCollector: productionPublicCompetitorRefresh,
   });
 }
 
@@ -64,11 +68,11 @@ async function canonicalOwnerResult(
 ) {
   const [current, historical, playbookGovernance] = await Promise.all([
     pipeline ? Promise.resolve(pipeline) : controller.current(key),
-    historicalView(key),
+    historicalView(key).catch(() => null),
     productionCampaignPlaybookGovernance().projection(),
   ]);
   return projectCurrentPipelineContract(current, {
-    historicalState: historical.state,
+    historicalState: historical?.state,
     playbookGovernance,
   });
 }
@@ -80,7 +84,7 @@ export async function GET(request: Request) {
   } catch (error) {
     return invalidLocalState(error)
       ? Response.json(recoveryRequired(), { status: 409 })
-      : Response.json(failure(), { status: 503 });
+      : Response.json(failure(error), { status: 503 });
   }
 }
 
@@ -109,7 +113,18 @@ export async function POST(request: Request) {
         pairKey: payload.pair_key,
       }));
     }
-    if (pipelineAction === "START") {
+    if (pipelineAction === "STOP") {
+      const current = await controller.current(key);
+      if (!current.active || !current.runId || current.version === null) {
+        throw new Error("Активный запуск для остановки не найден.");
+      }
+      const pipeline = await controller.stop(key, {
+        runId: current.runId,
+        expectedVersion: current.version,
+      });
+      return Response.json(await canonicalOwnerResult(key, controller, pipeline), { status: 201 });
+    }
+    if (pipelineAction === "START" || pipelineAction === "REFRESH_EVIDENCE") {
       const current = await controller.current(key);
       if (current.active) throw new Error("У владельца уже есть активный запуск.");
       const historical = await historicalView(key);
@@ -122,6 +137,15 @@ export async function POST(request: Request) {
       const pipeline = await controller.correctGoal(key, {
         desiredOutcome: String(payload.desired_outcome ?? ""),
         qualifiedAction: String(payload.qualified_action ?? ""),
+        targetCount: Number(payload.target_count),
+        deadline: String(payload.deadline ?? ""),
+        maxResultCostRub: Number(payload.max_result_cost_rub),
+      });
+      return Response.json(await canonicalOwnerResult(key, controller, pipeline), { status: 201 });
+    }
+    if (pipelineAction === "REFRESH_COMPETITOR_ANALYSIS") {
+      const pipeline = await controller.refreshCompetitors(key, {
+        expectedStateRevision: Number(payload.expected_state_revision),
       });
       return Response.json(await canonicalOwnerResult(key, controller, pipeline), { status: 201 });
     }

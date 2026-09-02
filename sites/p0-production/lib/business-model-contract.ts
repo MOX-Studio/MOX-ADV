@@ -223,6 +223,24 @@ export async function buildBusinessModelContract(input: {
   return seal({ fields, createdAt: input.observedAt, previousRevisionId: null });
 }
 
+export async function mergeBusinessModelContractEvidence(input: {
+  fresh: BusinessModelContract;
+  ownerConfirmed: BusinessModelContract;
+  mergedAt: string;
+}) {
+  const fields = structuredClone(input.fresh.fields);
+  for (const field of BUSINESS_MODEL_FIELD_ORDER) {
+    if (input.ownerConfirmed.fields[field].owner_confirmed) {
+      fields[field] = structuredClone(input.ownerConfirmed.fields[field]);
+    }
+  }
+  return seal({
+    fields,
+    createdAt: input.mergedAt,
+    previousRevisionId: input.ownerConfirmed.model_revision_id,
+  });
+}
+
 export async function reviseBusinessModelContract(input: {
   previous: BusinessModelContract;
   values: Partial<Record<BusinessModelFieldId, unknown>>;

@@ -1866,6 +1866,7 @@ export async function buildAnalyticsEvidence({
         ...(sampling.sampled === true ? ["Response is sampled; coverage is partial."] : []),
         ...(sampling.contains_sensitive_data === true ? ["Privacy limitation is attached; coverage is partial."] : []),
         ...(numberOr(sampling.data_lag) > 0 ? [`Provider data lag: ${numberOr(sampling.data_lag)} seconds.`] : []),
+        ...list(metrika.blockers).map(text).filter(Boolean),
       ],
       evidence_ids: sourceEvidence.metrika,
     }),

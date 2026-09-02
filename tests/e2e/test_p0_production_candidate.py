@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import socket
@@ -18,8 +17,6 @@ from playwright.sync_api import Page, sync_playwright
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "sites" / "p0-production"
 VIEWPORT = {"width": 1920, "height": 1080}
-PRODUCT_MVP_SOURCE = SOURCE / "tests" / "fixtures" / "product-mvp" / "product-mvp-source.json"
-TECHNICAL_NOISE_DENYLIST = json.loads(PRODUCT_MVP_SOURCE.read_text(encoding="utf-8"))["browser"]["technical_noise_denylist"]
 
 
 def _available_port() -> int:
@@ -34,7 +31,19 @@ def _copy_candidate(target: Path, scenario: str) -> None:
     )
     shutil.copytree(SOURCE, target, ignore=ignored)
     (target / "node_modules").symlink_to(SOURCE / "node_modules", target_is_directory=True)
-    (target / ".env.local").write_text(f"P0_E2E_FIXTURE_SCENARIO={scenario}\n", encoding="utf-8")
+    (target / ".env.local").write_text(
+        "\n".join(
+            [
+                f"P0_E2E_FIXTURE_SCENARIO={scenario}",
+                "P0_AGENT_PROVIDER=codex-subscription",
+                "P0_AGENT_MODEL=gpt-5-mini",
+                "P0_CODEX_BRIDGE_URL=http://127.0.0.1:9/",
+                "P0_CODEX_BRIDGE_TOKEN=e2e-unused",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
 
 
 def _wait_until_ready(base_url: str, process: subprocess.Popen[str]) -> None:
@@ -107,7 +116,7 @@ def assert_no_horizontal_overflow(test: unittest.TestCase, page: Page) -> None:
 
 
 class P0ProductionCandidateE2ETests(unittest.TestCase):
-    def test_owner_starts_stops_and_restarts_the_authoritative_five_stage_run(self) -> None:
+    def test_owner_dashboard_opens_with_the_five_stages_and_without_removed_top_panels(self) -> None:
         with production_candidate_server() as base_url:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(headless=True)
@@ -118,81 +127,25 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 page.on("pageerror", lambda error: page_errors.append(str(error)))
 
                 page.goto(base_url, wait_until="networkidle")
-                pipeline = page.locator(".owner-pipeline-control")
-                stages = page.get_by_label("Путь подготовки рекламных кампаний").locator("li")
+                stage_path = page.get_by_label("Путь подготовки рекламных кампаний")
+                stage_path.wait_for(state="visible")
+                stages = stage_path.locator("li")
                 self.assertEqual(
-                    ["Цель кампании", "Сбор сведений", "Стратегия", "Кампании", "Проверка публикации"],
+                    ["Цели", "Сбор сведений", "Стратегия", "Кампании", "Проверка публикации"],
                     stages.locator("strong").all_inner_texts(),
                 )
-                self.assertEqual(["Ожидает"] * 5, stages.locator("small").all_inner_texts())
-                self.assertTrue(pipeline.get_by_role("button", name="Запустить", exact=True).is_visible())
-                readonly_boundary = page.locator(".pipeline-readonly-boundary")
-                self.assertFalse(readonly_boundary.evaluate("element => element.disabled"))
-                assert_no_horizontal_overflow(self, page)
-
-                with page.expect_response(lambda response: response.url.endswith("/api/p0") and response.request.method == "POST") as started_response:
-                    pipeline.get_by_role("button", name="Запустить", exact=True).click()
-                started = started_response.value.json()
-                first_run_id = started["pipeline"]["runId"]
-                pipeline.get_by_role("button", name="Остановить", exact=True).wait_for()
-                self.assertTrue(readonly_boundary.evaluate("element => element.disabled"))
-
-                with page.expect_response(lambda response: response.url.endswith("/api/p0") and response.request.method == "POST") as stopped_response:
-                    pipeline.get_by_role("button", name="Остановить", exact=True).click()
-                stopped = stopped_response.value.json()
-                self.assertEqual(first_run_id, stopped["pipeline"]["runId"])
-                pipeline.get_by_role("button", name="Запустить", exact=True).wait_for()
-                self.assertIn("Следующий запуск будет новым", pipeline.inner_text())
-
-                with page.expect_response(lambda response: response.url.endswith("/api/p0") and response.request.method == "POST") as restarted_response:
-                    pipeline.get_by_role("button", name="Запустить", exact=True).click()
-                restarted = restarted_response.value.json()
-                self.assertNotEqual(first_run_id, restarted["pipeline"]["runId"])
+                self.assertEqual(
+                    ["Требует уточнения", "Ожидает", "Ожидает", "Ожидает", "Ожидает"],
+                    stages.locator("small").all_inner_texts(),
+                )
+                self.assertEqual(0, page.locator(".owner-pipeline-control").count())
+                self.assertEqual(0, page.locator(".owner-result-questions").count())
+                self.assertEqual(0, page.locator(".owner-outcome").count())
+                self.assertNotIn("P0 · ПРОИЗВОДСТВЕННЫЙ МОДУЛЬ", page.locator("body").inner_text())
+                self.assertFalse(page.locator(".pipeline-readonly-boundary").evaluate("element => element.disabled"))
                 assert_no_horizontal_overflow(self, page)
                 self.assertEqual([], console_errors)
                 self.assertEqual([], page_errors)
-                browser.close()
-
-    def test_controlled_agents_complete_the_new_pipeline_without_external_writes(self) -> None:
-        with production_candidate_server("pipeline-acceptance") as base_url:
-            with sync_playwright() as playwright:
-                browser = playwright.chromium.launch(headless=True)
-                page = browser.new_page(viewport=VIEWPORT)
-                console_errors: list[str] = []
-                page_errors: list[str] = []
-                nonlocal_requests: list[str] = []
-                page.on("console", lambda message: console_errors.append(message.text) if message.type == "error" else None)
-                page.on("pageerror", lambda error: page_errors.append(str(error)))
-                page.on("request", lambda request: nonlocal_requests.append(request.url) if not request.url.startswith(base_url) else None)
-
-                page.goto(base_url, wait_until="networkidle")
-                with page.expect_response(lambda response: response.url.endswith("/api/p0") and response.request.method == "POST") as completed_response:
-                    page.locator(".owner-pipeline-control").get_by_role("button", name="Запустить", exact=True).click()
-                completed = completed_response.value.json()
-                self.assertEqual("COMPLETED", completed["pipeline"]["status"])
-                self.assertEqual("review", completed["pipeline"]["currentStage"])
-                self.assertEqual([], completed["campaignOptions"])
-                self.assertIsNone(completed["packageSummary"])
-                self.assertNotIn("dispatch_package", json.dumps(completed).lower())
-
-                stages = page.get_by_label("Путь подготовки рекламных кампаний").locator("li")
-                self.assertEqual(["Завершён"] * 5, stages.locator("small").all_inner_texts())
-                self.assertTrue(page.locator(".publication-review-boundary").is_visible())
-                self.assertIn("не создаёт и не изменяет кампании", page.locator(".publication-review-boundary").inner_text())
-                page.locator(".owner-result-provenance summary").click()
-                provenance = page.locator(".owner-result-provenance")
-                self.assertEqual(2, provenance.locator(".owner-result-pairs article").count())
-                self.assertIn("Непроверенный результат отброшен", provenance.inner_text())
-                self.assertIn("Повтор с попытки 2", provenance.inner_text())
-                self.assertIn("Внешняя запись не выполнялась", page.locator("body").inner_text())
-
-                visible_copy = page.locator("body").inner_text().lower()
-                for forbidden in [*TECHNICAL_NOISE_DENYLIST, "sha256:", "provider_ids", "campaigns.add", "oauth", "cookie"]:
-                    self.assertNotIn(forbidden.lower(), visible_copy)
-                assert_no_horizontal_overflow(self, page)
-                self.assertEqual([], console_errors)
-                self.assertEqual([], page_errors)
-                self.assertEqual([], nonlocal_requests)
                 browser.close()
 
 

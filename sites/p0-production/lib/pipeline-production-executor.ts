@@ -25,14 +25,13 @@ type ProductionHistoricalView = {
   state: Record<string, unknown>;
 };
 
-function exactReference(
-  value: PipelineVersionReference | null,
-  code: string,
-  message: string,
-): PipelineVersionReference {
-  if (!value) throw new ProductionPipelineExecutionError(code, message);
-  return structuredClone(value);
-}
+export type ProductionPipelineEvidenceCollector = (input: {
+  ownerKey: string;
+  view: ProductionHistoricalView;
+  goal: PipelineVersionReference;
+  seed: PipelineVersionReference | null;
+  seedSnapshot: Record<string, unknown> | null;
+}) => Promise<Record<string, unknown>>;
 
 async function schemaReference(name: string): Promise<PipelineVersionReference> {
   const contract = { schema_version: `${name}-contract-v1`, validation: "DETERMINISTIC_CODE" };
@@ -57,24 +56,44 @@ async function pairSetReference(run: PipelineRunState): Promise<PipelineVersionR
   };
 }
 
-function evidenceReference(run: PipelineRunState) {
-  return exactReference(
-    run.input_versions.analytics_evidence_snapshot,
-    "EVIDENCE_COLLECTION_REQUIRED_INPUT_MISSING",
-    "Evidence Analyst не получил Analytics Evidence Snapshot, который можно собрать или безопасно переиспользовать.",
-  );
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+async function collectedEvidenceReference(snapshotValue: unknown): Promise<PipelineVersionReference> {
+  const snapshot = record(snapshotValue);
+  const schemaVersion = String(snapshot.schema_version ?? "").trim();
+  const revisionId = String(snapshot.snapshot_revision_id ?? snapshot.snapshot_id ?? "").trim();
+  if (!schemaVersion || !revisionId) {
+    throw new ProductionPipelineExecutionError(
+      "EVIDENCE_COLLECTION_OUTPUT_INVALID",
+      "Evidence collectors не вернули полный версионированный Analytics Evidence Snapshot.",
+    );
+  }
+  return {
+    schema_version: schemaVersion,
+    revision_id: revisionId,
+    digest: await pipelineDigest(snapshot),
+  };
 }
 
 async function campaignSeedReference(run: PipelineRunState) {
   const validation = run.input_versions.campaign_pair_checks;
-  if (validation.set_disposition !== "CURRENT_PAIRS_AVAILABLE"
-    || validation.required_request_package !== null
-    || run.input_versions.campaign_pairs.length < 1
-    || validation.pairs.some((pair) => pair.included && pair.violations.length > 0)
-    || validation.pairs.filter((pair) => pair.included).length !== run.input_versions.campaign_pairs.length) {
+  const coldStart = validation.set_disposition === "NO_CURRENT_PAIRS"
+    && validation.required_request_package === null
+    && run.input_versions.campaign_pairs.length === 0
+    && validation.pairs.length === 0;
+  const verifiedExistingPairs = validation.set_disposition === "CURRENT_PAIRS_AVAILABLE"
+    && validation.required_request_package === null
+    && run.input_versions.campaign_pairs.length > 0
+    && !validation.pairs.some((pair) => pair.included && pair.violations.length > 0)
+    && validation.pairs.filter((pair) => pair.included).length === run.input_versions.campaign_pairs.length;
+  if (!coldStart && !verifiedExistingPairs) {
     throw new ProductionPipelineExecutionError(
       "CAMPAIGN_DESIGN_REQUIRED_INPUT_MISSING",
-      "Campaign Design Agent не получил полный проверенный seed-набор для пересборки текущих пар.",
+      "Campaign Design Agent не получил ни проверенный текущий seed-набор, ни подтверждённый cold-start без текущих пар.",
     );
   }
   return pairSetReference(run);
@@ -122,6 +141,8 @@ export async function executeProductionPipeline(input: {
   view: ProductionHistoricalView;
   currentGoal?: CurrentGoal | null;
   agents: ProductionStageAgents;
+  evidenceCollector: ProductionPipelineEvidenceCollector;
+  evidenceSeedSnapshot?: Record<string, unknown> | null;
   onVerifiedProduct?: (input: { run: PipelineRunState; product: PipelineVerifiedProduct }) => Promise<void>;
 }) {
   if (input.run.status !== "ACTIVE" || input.run.current_stage !== "CAMPAIGN_GOAL") {
@@ -130,16 +151,16 @@ export async function executeProductionPipeline(input: {
       "Production executor requires a newly started Campaign Goal stage.",
     );
   }
-  const goalAgent = await input.agents.formGoal({
-    run: input.run,
-    view: input.view,
-    currentGoal: input.currentGoal ?? null,
-  });
-  let run = await input.orchestrator.recordGoalCandidate({
+  if (!input.currentGoal?.revision.success_criterion) {
+    throw new ProductionPipelineExecutionError(
+      "PRODUCTION_OWNER_GOAL_REQUIRED",
+      "Сначала сохраните бизнес-цель, квалифицированный результат и измеримый критерий успеха.",
+    );
+  }
+  let run = await input.orchestrator.acceptGoalRevision({
     run_id: input.run.run_id,
     expected_version: input.run.version,
-    candidate: goalAgent.candidate,
-    actor: goalAgent.actor,
+    revision: input.currentGoal.revision,
   });
   if (run.goal_formation.status !== "VERIFIED") {
     throw new ProductionPipelineExecutionError(
@@ -156,13 +177,22 @@ export async function executeProductionPipeline(input: {
     run,
     product: { stage: "CAMPAIGN_GOAL", value: structuredClone(run.goal_formation.revision) },
   });
-
-  const evidenceSeed = evidenceReference(run);
+  const evidenceSeed = run.input_versions.analytics_evidence_snapshot
+    ? structuredClone(run.input_versions.analytics_evidence_snapshot)
+    : null;
+  const collectedSnapshot = await input.evidenceCollector({
+    ownerKey: run.owner_key,
+    view: structuredClone(input.view),
+    goal: structuredClone(goalReference),
+    seed: structuredClone(evidenceSeed),
+    seedSnapshot: input.evidenceSeedSnapshot ? structuredClone(input.evidenceSeedSnapshot) : null,
+  });
+  const collectedEvidence = await collectedEvidenceReference(collectedSnapshot);
   const evidenceAgent = await input.agents.analyzeEvidence({
     run,
-    view: input.view,
     goal: goalReference,
-    evidence: evidenceSeed,
+    evidence: collectedEvidence,
+    snapshot: structuredClone(collectedSnapshot),
   });
   run = await input.orchestrator.advance({
     run_id: run.run_id,
@@ -173,7 +203,7 @@ export async function executeProductionPipeline(input: {
     attempt: await verifiedAttempt({
       run,
       stage: "EVIDENCE_COLLECTION",
-      inputs: [goalReference, run.input_versions.business_input],
+      inputs: [goalReference, run.input_versions.business_input, ...(evidenceSeed ? [evidenceSeed] : [])],
       evidence: evidenceAgent.evidence,
       output: evidenceAgent.output,
       checkId: evidenceAgent.check_id,
@@ -192,6 +222,7 @@ export async function executeProductionPipeline(input: {
     view: input.view,
     goal: goalReference,
     evidence: evidenceAgent.output,
+    evidenceSnapshot: structuredClone(collectedSnapshot),
   });
   run = await input.orchestrator.advance({
     run_id: run.run_id,
@@ -222,6 +253,7 @@ export async function executeProductionPipeline(input: {
     autonomousStrategy: strategyAgent.autonomous_strategy,
     strategy: strategyAgent.output,
     evidence: evidenceAgent.output,
+    evidenceSnapshot: structuredClone(collectedSnapshot),
     pairSet: await campaignSeedReference(run),
   });
   run = await input.orchestrator.advance({

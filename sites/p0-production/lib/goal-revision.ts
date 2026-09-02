@@ -13,10 +13,16 @@ export type GoalInputReference = {
 };
 
 export type GoalEvidenceReference = {
-  supports: "DESIRED_OUTCOME" | "QUALIFIED_ACTION";
+  supports: "DESIRED_OUTCOME" | "QUALIFIED_ACTION" | "SUCCESS_CRITERION";
   input_id: string;
   locator: string;
   evidence: string;
+};
+
+export type GoalSuccessCriterion = {
+  target_count: number;
+  deadline: string;
+  max_result_cost_rub: number;
 };
 
 export type GoalCandidateOption = {
@@ -32,6 +38,7 @@ export type GoalCandidate = {
   schema_version: typeof GOAL_CANDIDATE_SCHEMA;
   desired_outcome: string;
   qualified_action: string;
+  success_criterion?: GoalSuccessCriterion | null;
   used_input_ids: string[];
   provenance: GoalEvidenceReference[];
   known_constraints: Array<{
@@ -52,6 +59,7 @@ export type GoalRevision = {
   digest: string;
   desired_outcome: string;
   qualified_action: string;
+  success_criterion?: GoalSuccessCriterion | null;
   exact_inputs: GoalInputReference[];
   provenance: GoalEvidenceReference[];
   known_constraints: GoalCandidate["known_constraints"];
@@ -105,6 +113,26 @@ function normalizedText(value: unknown, label: string, maximum = 1_000) {
   return text;
 }
 
+function normalizedSuccessCriterion(value: unknown): GoalSuccessCriterion | null {
+  if (value === null || value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || !exactKeys(value, ["target_count", "deadline", "max_result_cost_rub"])) {
+    fail("GOAL_SUCCESS_CRITERION_INVALID", "Goal success criterion must contain target count, deadline, and maximum result cost.");
+  }
+  const criterion = value as GoalSuccessCriterion;
+  const targetCount = Number(criterion.target_count);
+  const maxResultCostRub = Number(criterion.max_result_cost_rub);
+  const deadline = String(criterion.deadline ?? "").trim();
+  const deadlineDate = /^\d{4}-\d{2}-\d{2}$/u.test(deadline) ? new Date(`${deadline}T00:00:00Z`) : null;
+  if (!Number.isSafeInteger(targetCount) || targetCount < 1
+    || !Number.isSafeInteger(maxResultCostRub) || maxResultCostRub < 1
+    || !deadlineDate || Number.isNaN(deadlineDate.getTime())
+    || deadlineDate.toISOString().slice(0, 10) !== deadline) {
+    fail("GOAL_SUCCESS_CRITERION_INVALID", "Goal success criterion values must be positive integers and one valid date.");
+  }
+  return { target_count: targetCount, deadline, max_result_cost_rub: maxResultCostRub };
+}
+
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
   if (!value || typeof value !== "object") return value;
@@ -142,7 +170,7 @@ function validateEvidence(value: unknown, availableInputs: Set<string>): GoalEvi
     fail("GOAL_PROVENANCE_INVALID", "Goal evidence must use the closed provenance schema.");
   }
   const evidence = value as GoalEvidenceReference;
-  if (!availableInputs.has(evidence.input_id) || !["DESIRED_OUTCOME", "QUALIFIED_ACTION"].includes(evidence.supports)) {
+  if (!availableInputs.has(evidence.input_id) || !["DESIRED_OUTCOME", "QUALIFIED_ACTION", "SUCCESS_CRITERION"].includes(evidence.supports)) {
     fail("GOAL_PROVENANCE_INVALID", "Goal evidence must support one typed field from the exact input set.");
   }
   return {
@@ -154,10 +182,12 @@ function validateEvidence(value: unknown, availableInputs: Set<string>): GoalEvi
 }
 
 function normalizeCandidate(candidate: GoalCandidate, exactInputs: GoalInputReference[]): GoalCandidate {
+  const candidateKeys = ["schema_version", "desired_outcome", "qualified_action", "used_input_ids", "provenance", "known_constraints", "material_ambiguity"];
+  if (candidate && typeof candidate === "object" && Object.hasOwn(candidate, "success_criterion")) candidateKeys.push("success_criterion");
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)
-    || !exactKeys(candidate, ["schema_version", "desired_outcome", "qualified_action", "used_input_ids", "provenance", "known_constraints", "material_ambiguity"])
+    || !exactKeys(candidate, candidateKeys)
     || candidate.schema_version !== GOAL_CANDIDATE_SCHEMA) {
-    fail("GOAL_CANDIDATE_INVALID", "Goal Agent candidate does not match the closed schema.");
+    fail("GOAL_CANDIDATE_INVALID", "Goal candidate does not match the closed schema.");
   }
   const availableInputs = validateInputReferences(exactInputs);
   if (!Array.isArray(candidate.used_input_ids) || candidate.used_input_ids.length < 1
@@ -196,6 +226,9 @@ function normalizeCandidate(candidate: GoalCandidate, exactInputs: GoalInputRefe
     known_constraints: knownConstraints,
     material_ambiguity: null,
   };
+  if (Object.hasOwn(candidate, "success_criterion")) {
+    normalized.success_criterion = normalizedSuccessCriterion(candidate.success_criterion);
+  }
   if (candidate.material_ambiguity === null) return normalized;
   const ambiguity = candidate.material_ambiguity;
   if (!ambiguity || typeof ambiguity !== "object" || Array.isArray(ambiguity)
@@ -284,6 +317,9 @@ export async function verifyGoalCandidate(input: {
       verified_at: verifiedAt,
     },
   };
+  if (Object.hasOwn(candidate, "success_criterion")) {
+    base.success_criterion = candidate.success_criterion ? structuredClone(candidate.success_criterion) : null;
+  }
   const materialDigest = await digest(revisionMaterial(base));
   return {
     status: "VERIFIED",
@@ -319,7 +355,9 @@ export async function verifyGoalFormationResult(value: GoalFormationResult) {
   }
   if (value?.status !== "VERIFIED" || !value.revision || !exactKeys(value, ["status", "revision"])) fail("GOAL_RESULT_INVALID", "Goal formation result is invalid.");
   const revision = value.revision;
-  if (!exactKeys(revision, ["schema_version", "contract_version", "goal_revision_id", "version", "digest", "desired_outcome", "qualified_action", "exact_inputs", "provenance", "known_constraints", "validation"])
+  const revisionKeys = ["schema_version", "contract_version", "goal_revision_id", "version", "digest", "desired_outcome", "qualified_action", "exact_inputs", "provenance", "known_constraints", "validation"];
+  if (Object.hasOwn(revision, "success_criterion")) revisionKeys.push("success_criterion");
+  if (!exactKeys(revision, revisionKeys)
     || revision.schema_version !== GOAL_REVISION_SCHEMA
     || revision.contract_version !== GOAL_REVISION_CONTRACT_VERSION
     || !IDENTIFIER.test(revision.goal_revision_id)
@@ -340,6 +378,9 @@ export async function verifyGoalFormationResult(value: GoalFormationResult) {
     known_constraints: revision.known_constraints,
     material_ambiguity: null,
   };
+  if (Object.hasOwn(revision, "success_criterion")) {
+    candidate.success_criterion = revision.success_criterion ? structuredClone(revision.success_criterion) : null;
+  }
   normalizeCandidate(candidate, revision.exact_inputs);
   if (!Number.isFinite(Date.parse(revision.validation.verified_at))) fail("GOAL_REVISION_INVALID", "GoalRevision verification time is invalid.");
   const { goal_revision_id: sealedId, digest: sealedDigest, ...base } = revision;

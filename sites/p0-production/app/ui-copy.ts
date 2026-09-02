@@ -4,6 +4,7 @@ const MACHINE_LABELS: Record<string, string> = {
   ACTIVE_APPROVED: "Активно и утверждено",
   ADVISORY_COMPLETE: "Рекомендации готовы",
   AGENT: "Агент",
+  AGENT_ACCEPTED: "Принято системой",
   APPROVED: "Утверждено",
   AVAILABLE: "Доступно",
   BLOCKED: "Заблокировано",
@@ -71,11 +72,13 @@ const MACHINE_LABELS: Record<string, string> = {
   SERVING_OFF: "Показы отключены",
   SUSPENDED: "Остановлено",
   SYSTEM: "Система",
+  STOPPED: "Остановлено",
   STRATEGY_BASELINE_FALLBACK: "Базовый вариант стратегии",
   SYSTEM_FAILED: "Системная ошибка",
   UNAVAILABLE: "Недоступно",
   UNCONFIRMED: "Не подтверждено",
   UNKNOWN: "Неизвестно",
+  VALID: "Проверено",
   VERIFIED: "Проверено",
   VISIBLE: "Видимо",
 };
@@ -111,17 +114,31 @@ export function deviceLabel(value: unknown) {
 }
 
 const PROSE_REPLACEMENTS: Array<[RegExp, string]> = [
+  [/Яндекс Wordstat · авторизованный интерфейс · интерфейс/giu, "Яндекс Wordstat · авторизованные данные"],
+  [/p0-campaign-creation-profile-v1\s*·\s*VALID/giu, "профиль кампании проверен"],
+  [/STRATEGY_BASELINE_FALLBACK/gu, "базовый вариант стратегии"],
   [/Нет material changes: нормализация не создала Draft revision\./giu, "Нет существенных изменений: нормализация не создала редакцию черновика кампании."],
   [/Создана новая immutable Draft revision/giu, "Создана новая неизменяемая редакция черновика кампании"],
   [/Comparative score changed through disclosed weighted dimensions\./giu, "Сравнительная оценка изменилась через раскрытые взвешенные измерения."],
   [/Demand unavailable, not zero/giu, "Спрос недоступен, но не равен нулю"],
   [/Resolve Direct evidence/giu, "Устраните пробел в доказательствах Яндекс Директа"],
-  [/AUTOTARGETING requires persisted official API and exact account eligibility evidence\./giu, "Автотаргетинг требует сохранённых доказательств официального API и допустимости точного аккаунта."],
-  [/Campaign Draft requires persisted official API evidence and exact account binding\./giu, "Черновик кампании требует сохранённых доказательств официального API и точной привязки аккаунта."],
-  [/Analytics Evidence Snapshot/giu, "снимок аналитических доказательств"],
+  [/AUTOTARGETING requires persisted official API and exact account eligibility evidence\./giu, "Автотаргетинг требует сохранённых данных из официального программного интерфейса и проверки выбранного аккаунта."],
+  [/Campaign Draft requires persisted official API evidence and exact account binding\./giu, "Черновик кампании требует сохранённых данных из официального программного интерфейса и точной привязки аккаунта."],
+  [/Analytics Evidence Snapshot/giu, "срез аналитических данных"],
+  [/Financial Competitor Intelligence/giu, "данные о конкурентах и ценах"],
+  [/Campaign Design Agent/giu, "система подготовки кампаний"],
+  [/Strategy Agent/giu, "система подготовки стратегии"],
+  [/Evidence Agent/giu, "система проверки данных"],
+  [/Campaign Playbook/giu, "база правил кампаний"],
+  [/Knowledge Steward/giu, "проверяющая система"],
   [/Campaign Strategy/giu, "стратегия кампании"],
+  [/Campaign Hypothesis/giu, "гипотеза кампании"],
   [/Campaign Drafts/giu, "черновики кампаний"],
   [/Campaign Draft/giu, "черновик кампании"],
+  [/\bDrafts\b/giu, "черновики"],
+  [/\bDraft\b/giu, "черновик"],
+  [/\bHypothesis\b/giu, "гипотеза"],
+  [/event-менеджер(?:ы|ами|ов)?/giu, "организаторы мероприятий"],
   [/Recommendation Set/giu, "набор рекомендаций"],
   [/LandingAdvisoryRun/giu, "запуск рекомендаций по посадочной странице"],
   [/Human Decision Gate/giu, "контрольное решение человека"],
@@ -140,6 +157,14 @@ const PROSE_REPLACEMENTS: Array<[RegExp, string]> = [
   [/required evidence gaps?/giu, "обязательные пробелы в доказательствах"],
   [/manual[- ]review/giu, "ручная проверка"],
   [/tool runs?/giu, "запуски инструментов"],
+  [/headless Playwright UI/giu, "интерфейс"],
+  [/headless Playwright/giu, "интерфейс"],
+  [/Яндекс Wordstat · авторизованный интерфейс · интерфейс/giu, "Яндекс Wordstat · авторизованные данные"],
+  [/Яндекс Wordstat · авторизованные данные · интерфейс/giu, "Яндекс Wordstat · авторизованные данные"],
+  [/Яндекс Wordstat · авторизованный интерфейс/giu, "Яндекс Wordstat · авторизованные данные"],
+  [/Популярные запросы Wordstat · интерфейс/giu, "Популярные запросы Wordstat · данные"],
+  [/подтверждено интерфейсом Wordstat/giu, "подтверждено данными Wordstat"],
+  [/official API/giu, "официальный программный интерфейс"],
   [/readback/giu, "обратная проверка"],
   [/lineage/giu, "происхождение"],
   [/fingerprints?/giu, "отпечатки"],
@@ -148,6 +173,9 @@ const PROSE_REPLACEMENTS: Array<[RegExp, string]> = [
   [/capability profile/giu, "профиль возможностей"],
   [/capability/giu, "возможность"],
   [/playbook/giu, "свод правил"],
+  [/release/giu, "версия"],
+  [/snapshot/giu, "срез данных"],
+  [/scope/giu, "область"],
   [/correction/giu, "исправление"],
   [/reconciliation/giu, "сверка"],
   [/moderation/giu, "модерация"],
@@ -169,6 +197,8 @@ const PROSE_REPLACEMENTS: Array<[RegExp, string]> = [
   [/changes?/giu, "изменения"],
   [/versioned/giu, "версионный"],
   [/revision/giu, "редакция"],
+  [/\bStrategy\b/gu, "стратегия"],
+  [/\bVALID\b/gu, "проверено"],
   [/status/giu, "состояние"],
   [/current/giu, "текущий"],
   [/exact/giu, "точный"],
@@ -178,6 +208,52 @@ const PROSE_REPLACEMENTS: Array<[RegExp, string]> = [
 
 export function localizedText(value: unknown) {
   return PROSE_REPLACEMENTS.reduce((text, [pattern, replacement]) => text.replace(pattern, replacement), String(value ?? ""));
+}
+
+const OWNER_FIELD_LABELS: Record<string, string> = {
+  ad_text: "Текст объявления",
+  ad_title: "Заголовок объявления",
+  advertised_offer: "Предложение",
+  audience: "Аудитория",
+  business_goal: "Цель бизнеса",
+  campaign_focus: "Что продвигаем",
+  campaign_name: "Название кампании",
+  core_message: "Главное сообщение",
+  exclusions: "Исключения",
+  geography: "География",
+  group_name: "Название группы",
+  keyword: "Ключевая фраза",
+  landing_page: "Посадочная страница",
+  measurement_goal: "Цель измерения",
+  negative_keywords: "Минус-слова",
+  offer: "Предложение",
+  period: "Период",
+  product: "Продукт",
+  qualified_result: "Целевое действие",
+  target_audience: "Аудитория",
+  target_result_cost: "Целевая стоимость результата",
+  weekly_budget: "Недельный бюджет",
+};
+
+export function ownerFieldLabel(value: unknown) {
+  const normalized = String(value ?? "").trim();
+  return OWNER_FIELD_LABELS[normalized] || localizedText(normalized.replaceAll("_", " "));
+}
+
+export function ownerDate(value: unknown) {
+  const normalized = String(value ?? "").trim();
+  const date = new Date(normalized);
+  return normalized && !Number.isNaN(date.getTime())
+    ? new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium", timeStyle: "short" }).format(date)
+    : normalized || "Не указано";
+}
+
+export function ownerValue(value: unknown) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    if (record.start_date || record.end_date) return `${String(record.start_date ?? "Не указано")} — ${String(record.end_date ?? "Не указано")}`;
+  }
+  return localizedText(Array.isArray(value) ? value.join(" · ") : String(value ?? "Не подтверждено"));
 }
 
 export function fieldRegistryLabel(value: unknown) {

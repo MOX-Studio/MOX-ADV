@@ -42,7 +42,11 @@ test("collects exact public competitor landings and preserves unavailable candid
       const url = String(input);
       fetched.push({ url, redirect: init?.redirect, credentials: init?.credentials });
       if (url === "https://alpha.example/branding") {
-        return new Response("<!doctype html><title>Брендинг</title><h1>Разработка бренда под ключ</h1>", {
+        return new Response(`<!doctype html>
+          <title>Актуальный брендинг для промышленных компаний</title>
+          <meta name="description" content="Стратегия и айдентика для производственного бизнеса">
+          <h1>Брендинг для промышленности</h1>
+          <p>Разрабатываем позиционирование и фирменный стиль. Стоимость — от 250 000 ₽.</p>`, {
           status: 200,
           headers: { "content-type": "text/html; charset=utf-8" },
         });
@@ -57,12 +61,38 @@ test("collects exact public competitor landings and preserves unavailable candid
   assert.equal(result.competitor_observations[0].matrix_row.competitor, "Альфа");
   assert.equal(result.competitor_observations[0].matrix_row.ad_visibility_sample.status, "UNAVAILABLE_NO_APPROVED_SOURCE");
   assert.equal(result.competitor_observations[0].matrix_row.ad_visibility_sample.observation_date, null);
-  assert.equal(result.competitor_observations[0].matrix_row.published_price.value, "от 1 000 000 ₽");
+  const row = result.competitor_observations[0].matrix_row;
+  assert.equal(row.observed_offer_message, "Стратегия и айдентика для производственного бизнеса");
+  assert.deepEqual(row.products_services, ["Брендинг для промышленности"]);
+  assert.match(result.competitor_observations[0].raw_quote, /Стоимость — от 250 000 ₽/u);
+  assert.deepEqual(row.published_price, { status: "PUBLISHED", value: "от 250 000 ₽" });
   assert.deepEqual(fetched.map((item) => item.url), [
     "https://alpha.example/branding",
     "https://beta.example/rebranding",
   ]);
   assert.equal(fetched.every((item) => item.redirect === "manual" && item.credentials === "omit"), true);
+});
+
+test("collects independent exact destinations concurrently within the network deadline", async () => {
+  let inFlight = 0;
+  let maximumInFlight = 0;
+  const result = await collectProductionCompetitorResearch(config(), {
+    async resolveHostname() { return ["93.184.216.34"]; },
+    async fetch() {
+      inFlight += 1;
+      maximumInFlight = Math.max(maximumInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      inFlight -= 1;
+      return new Response("<!doctype html><title>Услуга</title><h1>Комплексная услуга под ключ</h1>", {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    },
+    now: () => "2026-08-24T10:00:00.000Z",
+  });
+
+  assert.equal(result.competitor_observations.length, 2);
+  assert.equal(maximumInFlight, 2);
 });
 
 test("preserves a scoped public ad observation for competitor campaign prevalence", async () => {
@@ -119,13 +149,23 @@ test("preserves a scoped public ad observation for competitor campaign prevalenc
   assert.match(analysis.improvement_hypothesis, /квалифицированную заявку/u);
 });
 
-test("rejects an unbounded or incomplete production candidate configuration", () => {
+test("accepts a bounded candidate configuration without pre-filled page evidence", () => {
   const parsed = JSON.parse(config());
-  parsed.candidates[0].productsServices = [];
-  assert.throws(
-    () => parseProductionCompetitorResearchConfig(JSON.stringify(parsed)),
-    /products and services/u,
-  );
+  for (const candidate of parsed.candidates) {
+    delete candidate.productsServices;
+    delete candidate.observedOfferMessage;
+    delete candidate.evidenceQuote;
+    delete candidate.publishedPrice;
+  }
+  const result = parseProductionCompetitorResearchConfig(JSON.stringify(parsed));
+  assert.equal(result.candidates.length, 2);
+  assert.deepEqual(Object.keys(result.candidates[0]).sort(), [
+    "adVisibilitySample",
+    "campaignAnalysis",
+    "competitor",
+    "exactDestinations",
+    "rationale",
+  ]);
 });
 
 test("rejects public text that attempts to change instructions or invent hidden performance", () => {

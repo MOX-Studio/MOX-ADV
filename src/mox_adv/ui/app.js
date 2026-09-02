@@ -805,6 +805,15 @@ function showPage(page, pushHistory = false) {
 }
 
 function organizePages() {
+  if (elements.sourceList) {
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    details.className = "source-details";
+    setText(summary, "Источники и безопасность");
+    elements.sourceList.before(details);
+    details.append(summary, elements.sourceList);
+  }
+
   const triggerRules = document.querySelector(".automation-panel .rule-list");
   if (triggerRules && elements.triggerRulesHost) {
     elements.triggerRulesHost.append(triggerRules);
@@ -838,6 +847,20 @@ function organizePages() {
     secondaryFields.forEach((field) => fields.append(field));
     details.append(summary, fields);
     scenarioFields.append(details);
+  }
+
+  const matrixHeading = document.querySelector(".matrix-heading");
+  const matrixScroll = document.querySelector(".matrix-scroll");
+  if (matrixHeading && matrixScroll) {
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    const content = document.createElement("div");
+    details.className = "rule-reference";
+    content.className = "rule-reference-content";
+    setText(summary, "Справочник всех решений");
+    matrixHeading.before(details);
+    content.append(matrixHeading, matrixScroll);
+    details.append(summary, content);
   }
 }
 
@@ -4553,6 +4576,7 @@ elements.navigationLinks.forEach((link) => {
     const url = new URL(link.href, window.location.origin);
     if (url.origin !== window.location.origin) return;
     event.preventDefault();
+    link.closest("details")?.removeAttribute("open");
     showPage(pageFromPath(url.pathname), true);
   });
 });

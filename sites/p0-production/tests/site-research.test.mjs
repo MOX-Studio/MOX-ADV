@@ -190,6 +190,41 @@ test("competitor research uses an exact public-host allowlist, credential-free G
   assert.equal(networkCall.authorization, undefined);
 });
 
+test("competitor research aborts a slow network request at the configured deadline", { timeout: 1_000 }, async () => {
+  let receivedSignal;
+  const adapter = {
+    async resolveHostname() { return ["93.184.216.34"]; },
+    async fetch(_input, init) {
+      receivedSignal = init?.signal;
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => resolve(html("<p>Too late</p>")), 200);
+        init?.signal?.addEventListener("abort", () => {
+          clearTimeout(timer);
+          reject(init.signal.reason);
+        }, { once: true });
+      });
+    },
+    now: () => "2026-08-21T10:00:00.000Z",
+    limits: { requestTimeoutMs: 20 },
+  };
+
+  await assert.rejects(
+    researchAllowlistedPublicCompetitorPage(
+      "https://competitor.example/offer",
+      {
+        allowedHosts: ["competitor.example"],
+        policyId: "public-competitor-pages",
+        policyVersion: "1.0.0",
+        policyUrl: "https://competitor.example/robots.txt",
+        observationScope: "one public page",
+      },
+      adapter,
+    ),
+    (error) => error instanceof SiteResearchError && error.code === "SITE_REQUEST_TIMEOUT",
+  );
+  assert.equal(receivedSignal?.aborted, true);
+});
+
 test("competitor research rejects a host before DNS or fetch when it is absent from the exact allowlist", async () => {
   const adapter = transport({});
   await assert.rejects(

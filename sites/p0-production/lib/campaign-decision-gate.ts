@@ -541,11 +541,11 @@ export async function buildPackageBusinessProjection(input: {
   const confidence = record(input.analyticsEvidenceSnapshot.confidence);
   const evidenceRows = Array.isArray(input.analyticsEvidenceSnapshot.evidence)
     ? input.analyticsEvidenceSnapshot.evidence.map(record) : [];
-  const competitor = record(input.analyticsEvidenceSnapshot.competitor_matrix);
   const market = record(input.analyticsEvidenceSnapshot.market_evidence);
   const frequency = record(market.frequency);
-  const cost = record(market.cost);
   const measurement = record(input.measurementDestinationReadiness.measurement);
+  const measurementChecks = Array.isArray(measurement.checks) ? measurement.checks.map(record) : [];
+  const exactMeasurementBinding = measurementChecks.some((item) => item.code === "EXACT_BINDING" && item.status === "PASS");
   const destination = record(input.measurementDestinationReadiness.destination);
   const capabilityEligibility = record(input.recommendationSet.capability_profile.eligibility);
   const selectedLineageReady = input.selectedDrafts.every((draft) => draft.strategy_revision_id === strategyRevisionId);
@@ -564,12 +564,8 @@ export async function buildPackageBusinessProjection(input: {
     gate("GOAL_STRATEGY", "Цель и Strategy", Boolean(strategyRevisionId && strategyAnswerValue(input.strategy, "business_goal") && selectedLineageReady), "Бизнес-цель, Strategy и выбранные кампании относятся к одной точной редакции."),
     gate("MODEL_ECONOMICS", "Business Model и economics", Boolean(ownerContract.model_revision_id && economics.status === "CONFIRMED" && Number(economics.target_result_cost_rub) > 0), "Economics подтверждена точной Business Model и не выведена из одного положительного budget field."),
     gate("EVIDENCE_FRESHNESS", "Свежесть доказательств", Boolean(input.analyticsEvidenceSnapshot.snapshot_id && confidence.freshness !== "UNKNOWN" && evidenceRows.length && evidenceRows.every((item) => record(item.freshness).status !== "stale")), "Evidence Snapshot неизменяем и не содержит просроченных наблюдений в выбранной области."),
-    gate("MARKET_PROVENANCE", "Конкуренты, спрос и стоимость", Boolean(
-      ["AVAILABLE", "PARTIAL"].includes(String(competitor.status)) && Object.keys(record(competitor.candidate_set)).length
-      && ["AVAILABLE", "PARTIAL"].includes(String(frequency.status))
-      && cost.status === "AVAILABLE" && Boolean(cost.compact_source && cost.as_of)
-    ), "Конкурентные наблюдения, demand и comparable cost доступны и сохраняют источник, scope и дату; недоступность остаётся blocker, а не превращается в ноль."),
-    gate("MEASUREMENT", "Измерение", measurement.status === "READY", "Точный бизнес-результат измерим в подтверждённой области Метрики."),
+    gate("MARKET_PROVENANCE", "Открытые данные о спросе", ["AVAILABLE", "PARTIAL"].includes(String(frequency.status)), "Для ограниченного теста достаточно доступного подтверждённого среза спроса. Закрытые показатели конкурентов и отсутствующая сопоставимая стоимость не блокируют проверку и не подменяются прогнозом."),
+    gate("MEASUREMENT", "Привязка Метрики", exactMeasurementBinding, "Точный счётчик и существующая цель подтверждены официальным API Метрики. История достижений и зрелость цели оцениваются отдельно и не блокируют ограниченный тест."),
     gate("DESTINATION", "Посадочная", destination.status === "READY", "Посадочная готова для всех поддержанных device scopes выбранных кампаний."),
     gate("CLAIMS_ASSETS", "Утверждения и материалы", claimsReady, "Каждое публикуемое утверждение и material имеет evidence или rights provenance."),
     gate("DIRECT_PROFILE", "Точный профиль Direct", profileReady, "Выбран только frozen Campaign Creation Profile точного рекламного аккаунта."),

@@ -27,4 +27,4 @@ Use local development by default. Publish only when the user explicitly requests
 ### Integration interaction boundaries
 
 - Work with Yandex Direct and Yandex Metrica exclusively through their APIs; their browser-based personal cabinets are out of bounds.
-- Work with the local Dashboard at `http://127.0.0.1:8878/` exclusively through its UI using Playwright; direct Dashboard API calls and direct state manipulation are out of bounds.
+- Use only the local Dashboard at `http://127.0.0.1:19243/` for UI work and validation, exclusively through its UI using Playwright. Do not use other local Dashboard ports; direct Dashboard API calls and direct state manipulation are out of bounds.

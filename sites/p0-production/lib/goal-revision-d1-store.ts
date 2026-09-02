@@ -14,7 +14,7 @@ export async function ensureCurrentGoalTable(db: D1Database) {
 async function verifyCurrentGoal(value: CurrentGoal) {
   if (value.schema_version !== CURRENT_GOAL_SCHEMA
     || !value.owner_key
-    || !["GOAL_AGENT", "OWNER_CORRECTION"].includes(value.source)
+    || !["GOAL_AGENT", "OWNER_INPUT", "OWNER_CORRECTION"].includes(value.source)
     || value.revision.version < 1) {
     throw new Error("Current Goal record is invalid.");
   }
@@ -26,7 +26,11 @@ async function verifyCurrentGoal(value: CurrentGoal) {
 }
 
 export class D1CurrentGoalStore implements CurrentGoalStore {
-  constructor(private readonly db: D1Database) {}
+  private readonly db: D1Database;
+
+  constructor(db: D1Database) {
+    this.db = db;
+  }
 
   async loadCurrent(ownerKey: string) {
     await ensureCurrentGoalTable(this.db);

@@ -6,6 +6,7 @@ const DEFAULT_LIMITS = {
   maximumPages: 6,
   maximumRedirects: 4,
   maximumTotalBytes: 5_000_000,
+  requestTimeoutMs: 15_000,
 };
 const RESEARCH_TERMS = [
   "about", "product", "service", "solution", "particip", "partner", "price", "tariff",
@@ -23,6 +24,7 @@ type SiteResearchLimits = {
   maximumPages: number;
   maximumRedirects: number;
   maximumTotalBytes: number;
+  requestTimeoutMs: number;
 };
 
 export type SiteResearchDependencies = {
@@ -91,6 +93,7 @@ function exactLimits(input?: Partial<SiteResearchLimits>): SiteResearchLimits {
     maximumPages: Math.max(1, Math.min(6, Math.trunc(input?.maximumPages ?? DEFAULT_LIMITS.maximumPages))),
     maximumRedirects: Math.max(0, Math.min(4, Math.trunc(input?.maximumRedirects ?? DEFAULT_LIMITS.maximumRedirects))),
     maximumTotalBytes: Math.max(1, Math.min(5_000_000, Math.trunc(input?.maximumTotalBytes ?? DEFAULT_LIMITS.maximumTotalBytes))),
+    requestTimeoutMs: Math.max(10, Math.min(120_000, Math.trunc(input?.requestTimeoutMs ?? DEFAULT_LIMITS.requestTimeoutMs))),
   };
 }
 
@@ -119,6 +122,28 @@ async function assertPublicResolution(url: URL, resolveHostname: SiteResearchDep
   if (addresses.some((address) => !isPublicIpAddress(address))) {
     fail("SITE_TARGET_PRIVATE", "Сайт разрешается в локальный, частный или link-local адрес.");
   }
+}
+
+async function boundedBySignal<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) throw signal.reason;
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([operation, aborted]);
+  } finally {
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+  }
+}
+
+function rethrowRequestTimeout(error: unknown, signal: AbortSignal): never {
+  const name = error instanceof Error ? error.name : "";
+  if (signal.aborted || name === "AbortError" || name === "TimeoutError") {
+    fail("SITE_REQUEST_TIMEOUT", "Публичная страница не ответила в пределах безопасного лимита времени.");
+  }
+  throw error;
 }
 
 async function boundedText(response: Response, maximumBytes: number) {
@@ -166,17 +191,28 @@ async function fetchPage(
     if (exactAllowedDestinations && !exactAllowedDestinations.has(current.toString())) {
       fail("SITE_DESTINATION_NOT_ALLOWLISTED", "Public research URL отсутствует в exact destination allowlist.");
     }
-    await assertPublicResolution(current, dependencies.resolveHostname);
-    const response = await dependencies.fetch(current, {
-      method: "GET",
-      credentials: "omit",
-      referrerPolicy: "no-referrer",
-      headers: {
-        "User-Agent": "MOX-ADV-P0/1.0",
-        Accept: "text/html,application/xhtml+xml",
-      },
-      redirect: "manual",
-    });
+    const requestSignal = AbortSignal.timeout(limits.requestTimeoutMs);
+    try {
+      await boundedBySignal(assertPublicResolution(current, dependencies.resolveHostname), requestSignal);
+    } catch (error) {
+      rethrowRequestTimeout(error, requestSignal);
+    }
+    let response: Response;
+    try {
+      response = await boundedBySignal(dependencies.fetch(current, {
+        method: "GET",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+        headers: {
+          "User-Agent": "MOX-ADV-P0/1.0",
+          Accept: "text/html,application/xhtml+xml",
+        },
+        redirect: "manual",
+        signal: requestSignal,
+      }), requestSignal);
+    } catch (error) {
+      rethrowRequestTimeout(error, requestSignal);
+    }
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       await response.body?.cancel();
       if (exactAllowedDestinations) {
@@ -207,7 +243,13 @@ async function fetchPage(
     if (!/text\/html|application\/xhtml\+xml/iu.test(contentType)) {
       fail("SITE_CONTENT_UNSUPPORTED", "Страница не вернула HTML.");
     }
-    const { text: html, bytes } = await boundedText(response, remainingBytes);
+    let html: string;
+    let bytes: number;
+    try {
+      ({ text: html, bytes } = await boundedBySignal(boundedText(response, remainingBytes), requestSignal));
+    } catch (error) {
+      rethrowRequestTimeout(error, requestSignal);
+    }
     const title = extractMatches(html, /<title[^>]*>([\s\S]*?)<\/title>/giu, 1)[0] ?? "";
     const descriptions = extractMatches(
       html,
@@ -289,6 +331,7 @@ export async function researchAllowlistedPublicCompetitorPage(
     maximumPages: 1,
     maximumRedirects: dependencies.limits?.maximumRedirects,
     maximumTotalBytes: dependencies.limits?.maximumTotalBytes,
+    requestTimeoutMs: dependencies.limits?.requestTimeoutMs,
   });
   const result = await fetchPage(
     requested.toString(),

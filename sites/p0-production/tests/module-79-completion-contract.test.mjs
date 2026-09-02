@@ -20,14 +20,14 @@ test("the production query path is canonical and a started run remains observabl
 });
 
 
-test("the five-stage executor forms downstream products after Goal instead of requiring them before Goal", () => {
-  const goalIndex = executorSource.indexOf("input.agents.formGoal");
+test("the executor accepts the owner Goal before agent work starts at Evidence", () => {
+  const goalIndex = executorSource.indexOf("acceptGoalRevision");
   const evidenceIndex = executorSource.indexOf("input.agents.analyzeEvidence");
   const strategyIndex = executorSource.indexOf("input.agents.formStrategy");
   const designIndex = executorSource.indexOf("input.agents.designCampaigns");
   assert.ok(goalIndex > -1 && evidenceIndex > goalIndex && strategyIndex > evidenceIndex && designIndex > strategyIndex);
-  assert.doesNotMatch(executorSource, /PRODUCTION_STRATEGY_MISSING|PRODUCTION_CAMPAIGN_PAIRS_NOT_CURRENT/u);
-  assert.doesNotMatch(executorSource, /const prerequisites = await productionPrerequisites\([^)]*\);[\s\S]*formGoal/u);
+  assert.doesNotMatch(executorSource, /input\.agents\.formGoal|goal-agent|GOAL_AGENT/u);
+  assert.match(executorSource, /PRODUCTION_OWNER_GOAL_REQUIRED/u);
   assert.match(controllerSource, /async execute\(ownerKey/u);
 });
 
@@ -43,9 +43,9 @@ test("the current action contract exposes typed Strategy, pair, and Playbook act
 });
 
 
-test("the current Dashboard exposes provenance questions, reproducibility, preflight, and no redundant decision copy", () => {
-  assert.match(clientSource, /Спросить о текущем результате/u);
-  assert.match(clientSource, /Версии для воспроизводимости/u);
+test("the current Dashboard keeps reproducibility and preflight without the removed result-question panel", () => {
+  assert.doesNotMatch(clientSource, /Спросить о текущем результате|owner-result-questions|pipeline_action: "EXPLAIN"/u);
+  assert.match(clientSource, /Технические версии/u);
   assert.match(clientSource, /preflightGates/u);
   assert.doesNotMatch(clientSource, /Принять или отклонить точный пакет|Только отдельное подтверждение откроет черновики кампаний/u);
 });

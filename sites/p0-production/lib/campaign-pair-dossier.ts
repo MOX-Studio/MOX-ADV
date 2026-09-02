@@ -128,7 +128,7 @@ function hasCompleteShape(strategy: AutonomousCampaignStrategy, pair: CompiledCa
   const explicitDraftRevision = text(record(pair.draft).draft_revision_id);
   const draftRevision = explicitDraftRevision || text(lineage.draft_revision_id);
   const graph = record(pair.draft.local_graph);
-  const applicabilityPointers = pair.draft.applicability.map((item) => item.pointer).sort();
+  const applicabilityPointers = list(pair.draft.applicability).map(record).map((item) => text(item.pointer)).filter(Boolean).sort();
   const requiredPointers = DIRECT_PROFILE_APPLICABILITY_REGISTRY.fields.map((item) => item.pointer).sort();
   const requiredDimensions: CampaignStrategyDimensionId[] = [
     "advertised_offer", "target_audience", "qualified_result", "weekly_budget", "period",
