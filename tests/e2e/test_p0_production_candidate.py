@@ -15,7 +15,7 @@ from urllib.request import urlopen
 from playwright.sync_api import Page, sync_playwright
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = ROOT / "sites" / "p0-production"
+SOURCE = ROOT / "dashboard"
 VIEWPORT = {"width": 1920, "height": 1080}
 
 

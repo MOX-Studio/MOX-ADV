@@ -7,7 +7,7 @@ const ownerSource = await readFile(new URL("../lib/p0-owner-journey.ts", import.
 const ownerStyles = await readFile(new URL("../app/owner-journey.css", import.meta.url), "utf8");
 const analyticsStyles = await readFile(new URL("../app/analytics-summary.css", import.meta.url), "utf8");
 const globalStyles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
-const prototypeStyles = await readFile(new URL("../app/prototype/prd-149/prototype.module.css", import.meta.url), "utf8");
+const dashboardStyles = await readFile(new URL("../app/production-dashboard.module.css", import.meta.url), "utf8");
 
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
@@ -92,18 +92,18 @@ test("target result cost has an accessible definition and formula tooltip", () =
 });
 
 test("Dashboard typography uses a compact scale with a smaller top navigation", () => {
-  const sizes = [ownerStyles, analyticsStyles, globalStyles, prototypeStyles]
+  const sizes = [ownerStyles, analyticsStyles, globalStyles, dashboardStyles]
     .flatMap((stylesheet) => [...stylesheet.matchAll(/font-size:\s*(\d+)px/gu)].map((match) => Number(match[1])));
   assert.ok(sizes.length > 0);
   assert.deepEqual([...new Set(sizes)].sort((left, right) => left - right), [10, 11, 12, 13, 14, 15, 16]);
-  assert.match(prototypeStyles, /\.topbar nav a, \.topbar nav > span \{[^}]*font-size: 12px/u);
-  assert.match(prototypeStyles, /\.topbar nav i \{[^}]*font-size: 10px/u);
+  assert.match(dashboardStyles, /\.topbar nav a, \.topbar nav > span \{[^}]*font-size: 12px/u);
+  assert.match(dashboardStyles, /\.topbar nav i \{[^}]*font-size: 10px/u);
 });
 
 test("production Dashboard omits the campaign agent rail and uses the full workspace width", () => {
   assert.doesNotMatch(clientSource, /AgentRail|Контекст работы агента|Карта автоматизации/u);
   assert.match(clientSource, /styles\.ownerWorkspaceFull/u);
-  assert.match(prototypeStyles, /\.ownerWorkspace\.ownerWorkspaceFull \{ grid-template-columns: minmax\(0, 1fr\); \}/u);
+  assert.match(dashboardStyles, /\.ownerWorkspace\.ownerWorkspaceFull \{ grid-template-columns: minmax\(0, 1fr\); \}/u);
 });
 
 test("definition grids prevent label collisions and collapsed previews cannot leak content", () => {

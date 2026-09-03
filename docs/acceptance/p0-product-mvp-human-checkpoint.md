@@ -13,7 +13,7 @@ This script prepares checkpoint [#176](https://github.com/ElJeskos/MOX-ADV/issue
 
 ## Reproduce the prepared contour
 
-From `sites/p0-production/` run:
+From `dashboard/` run:
 
 ```bash
 npm run test:product-mvp

@@ -17,7 +17,7 @@ progress:
 
 ## Current focus
 
-Finish only P0 under `sites/p0-production/` through four business submodules:
+Finish only P0 under `dashboard/` through four business submodules:
 
 1. Data Collection and Analytics;
 2. Questionnaire and Formalization;

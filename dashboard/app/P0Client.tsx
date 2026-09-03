@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
-import styles from "./prototype/prd-149/prototype.module.css";
+import styles from "./production-dashboard.module.css";
 import AnalyticsSummaryDisclosure from "./AnalyticsSummaryDisclosure";
 import { localizedText, machineLabel, ownerDate, ownerFieldLabel, ownerValue } from "./ui-copy.ts";
 import type {
@@ -429,7 +429,7 @@ export default function P0Client() {
   }
 
   if (!projection) {
-    return <div className={styles.prototype}>
+    return <div className={styles.dashboard}>
       <Header />
       <main className={styles.pageA}><section className="owner-loading" aria-live="polite">
         <strong>{recovery ? "Нужен безопасный перезапуск подготовки" : "Загрузка дашборда"}</strong>
@@ -478,7 +478,7 @@ export default function P0Client() {
     window.requestAnimationFrame(() => document.getElementById("owner-stage-panel")?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }
 
-  return <div className={styles.prototype}>
+  return <div className={styles.dashboard}>
     <Header />
     <main className={styles.pageA} id="module">
       <StageNavigation projection={projection} selectedStage={activeStage} onStage={chooseStage} />
@@ -1336,9 +1336,9 @@ function GoalStageSummary({
     if (await onCorrect(event)) setEditing(false);
   }
 
-  return <section className="owner-stage-summary owner-goal-summary" aria-labelledby="owner-goal-summary-title" data-complete={criterionComplete}>
+  return <section className="owner-stage-summary owner-goal-summary" aria-label="Цель рекламной кампании" data-complete={criterionComplete}>
     <header className="owner-goal-summary-header">
-      <div><p className="owner-eyebrow">ЦЕЛЬ КАМПАНИИ</p><h2 id="owner-goal-summary-title">Что считаем успехом</h2></div>
+      <div><p className="owner-eyebrow">Цель рекламной кампании</p></div>
       <div><strong>{criterionComplete ? "Завершено" : currentGoal ? "Требует уточнения" : "Не заполнено"}</strong>{canCorrect && !editing && <button type="button" onClick={() => setEditing(true)}>Изменить цель</button>}</div>
     </header>
     {!editing ? <div className="owner-goal-cards">

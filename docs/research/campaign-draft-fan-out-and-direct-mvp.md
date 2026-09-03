@@ -33,16 +33,16 @@ Control — наблюдаемая конкурентная норма толь�
 
 ### 2.2. Текущий production-кандидат — что уже есть и чего нет
 
-Прочитаны `sites/p0-production/app/P0Client.tsx`, `lib/p0.ts`, `lib/campaign-draft.ts`, `lib/direct-write.ts`, `lib/direct-limits.ts`, `lib/ad-copy.ts` и API route.
+Прочитаны `dashboard/app/P0Client.tsx`, `lib/p0.ts`, `lib/campaign-draft.ts`, `lib/direct-write.ts`, `lib/direct-limits.ts`, `lib/ad-copy.ts` и API route.
 
 | Severity | Наблюдение в текущем коде | Следствие для fan-out ticket |
 |---|---|---|
-| **BLOCKER** | `P0Document` содержит одиночные `strategy`, `draft`, `campaign`; `DraftStep` редактирует одну phrase, одну group и одно ad (`sites/p0-production/app/P0Client.tsx`, `sites/p0-production/lib/p0.ts`). | Нет Recommendation Set, canvas, shortlist, package confirmation и per-Draft result.
-| **BLOCKER** | `DirectProjection` поддерживает ровно один `ad_group`, `keyword`, `ad`; sitelinks/autotargeting и массивы child objects отсутствуют (`sites/p0-production/lib/direct-write.ts`). | Exact projection не может выразить принятый fan-out/packing contract.
-| **BLOCKER** | `ensureNonServing` принимает `State=OFF` как достаточный барьер и не вызывает `Campaigns.suspend`; explicit `SUSPENDED` обеспечивается лишь после `Ads.moderate` (`sites/p0-production/lib/direct-write.ts`). | Это слабее принятого контракта `add → suspend → readback SUSPENDED` **до** child writes и оставляет ненужное окно риска.
-| **HIGH** | Strategy и Draft имеют только общий D1 `revision`; собственных immutable `strategy_revision_id`, `draft_revision_id`, input fingerprints и lineage нет (`sites/p0-production/lib/p0.ts`). | Нельзя доказать, из какой Strategy/evidence revision получен опубликованный Draft.
-| **HIGH** | Deduplication кампаний — только case-insensitive campaign name; object-graph/publish fingerprint отсутствует (`sites/p0-production/lib/campaign-draft.ts`, `lib/p0.ts`). | Одинаковый payload под разными именами может быть создан дважды.
-| **HIGH** | `buildPublishProjection` жёстко мапит три geography labels и генерирует `BidCeiling` как `weeklyBudget/100`; это локальная эвристика без связи с hypothesis/evidence (`sites/p0-production/lib/campaign-draft.ts`). | Fan-out обязан хранить источник каждого технического default и не выдавать эвристику за Strategy fact.
+| **BLOCKER** | `P0Document` содержит одиночные `strategy`, `draft`, `campaign`; `DraftStep` редактирует одну phrase, одну group и одно ad (`dashboard/app/P0Client.tsx`, `dashboard/lib/p0.ts`). | Нет Recommendation Set, canvas, shortlist, package confirmation и per-Draft result.
+| **BLOCKER** | `DirectProjection` поддерживает ровно один `ad_group`, `keyword`, `ad`; sitelinks/autotargeting и массивы child objects отсутствуют (`dashboard/lib/direct-write.ts`). | Exact projection не может выразить принятый fan-out/packing contract.
+| **BLOCKER** | `ensureNonServing` принимает `State=OFF` как достаточный барьер и не вызывает `Campaigns.suspend`; explicit `SUSPENDED` обеспечивается лишь после `Ads.moderate` (`dashboard/lib/direct-write.ts`). | Это слабее принятого контракта `add → suspend → readback SUSPENDED` **до** child writes и оставляет ненужное окно риска.
+| **HIGH** | Strategy и Draft имеют только общий D1 `revision`; собственных immutable `strategy_revision_id`, `draft_revision_id`, input fingerprints и lineage нет (`dashboard/lib/p0.ts`). | Нельзя доказать, из какой Strategy/evidence revision получен опубликованный Draft.
+| **HIGH** | Deduplication кампаний — только case-insensitive campaign name; object-graph/publish fingerprint отсутствует (`dashboard/lib/campaign-draft.ts`, `lib/p0.ts`). | Одинаковый payload под разными именами может быть создан дважды.
+| **HIGH** | `buildPublishProjection` жёстко мапит три geography labels и генерирует `BidCeiling` как `weeklyBudget/100`; это локальная эвристика без связи с hypothesis/evidence (`dashboard/lib/campaign-draft.ts`). | Fan-out обязан хранить источник каждого технического default и не выдавать эвристику за Strategy fact.
 | **MEDIUM** | Текущий профиль уже правильно использует `UNIFIED_CAMPAIGN`, `UNIFIED_AD_GROUP`, `WB_MAXIMUM_CLICKS`, `SERVING_OFF`, explicit keyword, `TextAd`, micros и currency-dictionary minimum. | Это подходящий baseline substrate, но не готовый multi-Draft contract.
 | **MEDIUM** | `save_strategy` обнуляет Draft, а business-model change обнуляет Strategy/Draft. | Fail-closed invalidation уже частично присутствует, но должна стать явной revision semantics, а не удалением lineage.
 
@@ -612,7 +612,7 @@ This document does not authorize those writes or implementation changes; current
 - `docs/research/wordstat-cost-and-long-tail-packing.md` — demand/cost/packing contract.
 - `docs/research/p0-open-source-research-contour.md` — official API-only trust boundary.
 - `docs/research/knowledge-library-and-playbook-promotion.md` — immutable hypothesis/playbook authority boundary.
-- `sites/p0-production/app/P0Client.tsx`, `sites/p0-production/lib/p0.ts`, `campaign-draft.ts`, `direct-write.ts`, `direct-limits.ts`, `ad-copy.ts` — actual current production-candidate behavior.
+- `dashboard/app/P0Client.tsx`, `dashboard/lib/p0.ts`, `campaign-draft.ts`, `direct-write.ts`, `direct-limits.ts`, `ad-copy.ts` — actual current production-candidate behavior.
 
 ### Kept — Yandex primary
 

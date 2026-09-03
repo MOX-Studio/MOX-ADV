@@ -3,14 +3,16 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const productionSource = await readFile(new URL("../app/P0Client.tsx", import.meta.url), "utf8");
-const prototypeSource = await readFile(new URL("../app/prototype/prd-149/PrototypeClient.tsx", import.meta.url), "utf8");
+const dashboardStyles = await readFile(new URL("../app/production-dashboard.module.css", import.meta.url), "utf8");
+const currentContractSource = await readFile(new URL("../lib/pipeline-current-contract.ts", import.meta.url), "utf8");
+const pipelineDashboardSource = await readFile(new URL("../lib/pipeline-owner-dashboard.ts", import.meta.url), "utf8");
 const goalStageSummarySource = productionSource.slice(
   productionSource.indexOf("function GoalStageSummary"),
   productionSource.indexOf("function OwnerField"),
 );
 
-const sharedVisualClasses = [
-  "prototype",
+const productionVisualClasses = [
+  "dashboard",
   "topbar",
   "brand",
   "activeNav",
@@ -21,12 +23,13 @@ const sharedVisualClasses = [
   "artifact",
 ];
 
-test("production Dashboard uses the accepted PRD-149 visual layer instead of a parallel reskin", () => {
-  assert.match(productionSource, /import styles from "\.\/prototype\/prd-149\/prototype\.module\.css"/u);
-  for (const className of sharedVisualClasses) {
-    assert.match(prototypeSource, new RegExp(`styles\\.${className}\\b`, "u"));
+test("production Dashboard owns its visual layer", () => {
+  assert.match(productionSource, /import styles from "\.\/production-dashboard\.module\.css"/u);
+  for (const className of productionVisualClasses) {
     assert.match(productionSource, new RegExp(`styles\\.${className}\\b`, "u"));
+    assert.match(dashboardStyles, new RegExp(`\\.${className}\\b`, "u"));
   }
+  assert.doesNotMatch(productionSource, /prototype\/prd-149|styles\.prototype\b/u);
   assert.doesNotMatch(productionSource, /owner-topbar|owner-hero|owner-workspace|owner-agent-rail/u);
 });
 
@@ -40,7 +43,7 @@ test("production stage cards switch the visible owner section without mutating w
   assert.doesNotMatch(productionSource, /function StageUnavailable|ЭТАП ЕЩЁ НЕ ОТКРЫТ/u);
 });
 
-test("production starts with the stage navigation and omits the removed Goal hero", () => {
+test("production starts with the stage navigation and omits a prototype Goal hero", () => {
   assert.doesNotMatch(productionSource, /function Hero|styles\.hero\b|styles\.heroOutcome\b/u);
   assert.doesNotMatch(productionSource, /prototypeFlag|ПРОТОТИП · ЦЕЛЕВОЕ СОСТОЯНИЕ/u);
 });
@@ -56,6 +59,7 @@ test("Campaign Goal uses one atomic editor for the business goal, qualified resu
   assert.match(goalStageSummarySource, /Изменить цель/u);
   assert.match(goalStageSummarySource, /Сохранить и начать сбор сведений/u);
   assert.match(goalStageSummarySource, /Требует уточнения/u);
+  assert.doesNotMatch(goalStageSummarySource, /Что считаем успехом/u);
   const saveGoalIndex = productionSource.indexOf('pipeline_action: "CORRECT_GOAL"');
   const startEvidenceIndex = productionSource.indexOf('pipeline_action: "START"', saveGoalIndex);
   assert.ok(saveGoalIndex > -1 && startEvidenceIndex > saveGoalIndex);
@@ -72,8 +76,11 @@ test("production omits redundant status and the removed top outcome summary", ()
   assert.doesNotMatch(productionSource, /owner-outcome|ТЕКУЩИЙ БИЗНЕС-РЕЗУЛЬТАТ/u);
 });
 
-test("prototype automation map distinguishes forbidden launch from available Direct reads", () => {
-  assert.match(prototypeSource, /Запуск показов и расходов/u);
-  assert.match(prototypeSource, /ЗАПРЕЩЁН В P0/u);
-  assert.doesNotMatch(prototypeSource, />Показы и расходы<[^\n]*>НЕДОСТУПНО</u);
+test("current production contract keeps publication and external writes denied", () => {
+  assert.match(currentContractSource, /внешняя запись, публикация и расходы не разрешены/u);
+  assert.doesNotMatch(currentContractSource, /"PUBLISH"|"DISPATCH_PACKAGE"|"CREATE_CAMPAIGN"/u);
+  assert.match(pipelineDashboardSource, /externalWrite: "DENIED"/u);
+  assert.match(pipelineDashboardSource, /publication: "NOT_AUTHORIZED"/u);
+  assert.match(pipelineDashboardSource, /impressions: 0/u);
+  assert.match(pipelineDashboardSource, /spendMicros: 0/u);
 });

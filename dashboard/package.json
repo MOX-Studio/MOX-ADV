@@ -14,7 +14,7 @@
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
     "test": "npm run test:contract && npm run test:e2e",
     "test:contract": "npm run build && node --test tests/*.test.mjs",
-    "test:e2e": "cd ../.. && PYTHONPATH=src python3 -m unittest -v tests.e2e.test_p0_production_candidate",
+    "test:e2e": "cd .. && PYTHONPATH=src python3 -m unittest -v tests.e2e.test_p0_production_candidate",
     "test:product-mvp": "npm run test:contract && npm run test:e2e",
     "test:package-selection": "node --test tests/package-selection-acceptance.test.mjs",
     "test:owner-decision": "node --test tests/package-owner-decision.test.mjs tests/package-owner-decision-ui.test.mjs tests/owner-decision-acceptance.test.mjs",

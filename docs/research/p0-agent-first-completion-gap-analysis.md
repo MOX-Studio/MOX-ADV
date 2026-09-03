@@ -1,14 +1,14 @@
 # P0 Agent-First Completion Gap Analysis
 
 **Date:** 2026-08-22
-**Scope:** Only the current P0 module, `sites/p0-production/`
+**Scope:** Only the current P0 module, `dashboard/`
 **Question:** What must be added so a neural agent can autonomously complete strategy and safe campaign creation in Yandex Direct, involving the owner only in critical scenarios?
 
 ## Executive conclusion
 
 The current P0 has a strong deterministic safety and persistence core, but it is not yet a complete neural-agent module.
 
-The largest gap is architectural: the production candidate labels deterministic extraction and rules as an “agent”, but there is no real model adapter or model/tool loop in `sites/p0-production/package.json`, `lib/p0.ts`, or `lib/p0-application.ts`. `inferModel()` and `lib/business-model.ts` infer business facts with fixed regular expressions and branching. This is useful validation logic, but it cannot autonomously investigate an unfamiliar business, formulate a research plan, resolve evidence gaps, compare strategic alternatives, or generate rich current-format creative assets.
+The largest gap is architectural: the production candidate labels deterministic extraction and rules as an “agent”, but there is no real model adapter or model/tool loop in `dashboard/package.json`, `lib/p0.ts`, or `lib/p0-application.ts`. `inferModel()` and `lib/business-model.ts` infer business facts with fixed regular expressions and branching. This is useful validation logic, but it cannot autonomously investigate an unfamiliar business, formulate a research plan, resolve evidence gaps, compare strategic alternatives, or generate rich current-format creative assets.
 
 The second critical gap is provider drift. P0 publishes a fixed `TEXT_AD` profile, while current Yandex documentation says new Text & Image ads in Unified Performance Campaigns are edit-only and creation through the API produces combinatorial ads. The current production profile must move to capability-gated `RESPONSIVE_AD`/combinatorial ads before live acceptance.
 
@@ -158,7 +158,7 @@ No skill has been installed. Installing a third-party skill is not necessary for
 
 The codebase already contains unusually strong foundations:
 
-- One revisioned application authority in `sites/p0-production/lib/p0-application.ts`.
+- One revisioned application authority in `dashboard/lib/p0-application.ts`.
 - Compare-and-swap state and immutable revision history in D1.
 - Content-addressed evidence, Draft and package lineage.
 - A fail-closed Yandex account/counter/goal binding preflight.
@@ -177,10 +177,10 @@ These are the trusted harness. They should not be replaced by model reasoning.
 
 **Evidence in the repository:**
 
-- `sites/p0-production/package.json` has no model provider dependency.
-- `sites/p0-production/lib/p0.ts` wires data adapters and Direct execution but no model adapter.
-- `inferModel()` in `sites/p0-production/lib/p0-application.ts` derives five business-model fields through fixed extractors.
-- `sites/p0-production/lib/business-model.ts` recognizes a narrow set of exhibition-oriented words and roles with regular expressions.
+- `dashboard/package.json` has no model provider dependency.
+- `dashboard/lib/p0.ts` wires data adapters and Direct execution but no model adapter.
+- `inferModel()` in `dashboard/lib/p0-application.ts` derives five business-model fields through fixed extractors.
+- `dashboard/lib/business-model.ts` recognizes a narrow set of exhibition-oriented words and roles with regular expressions.
 - `GPT_SITES_EVIDENCE_RESEARCH_V3` is a persisted label, not an observed model call.
 
 **Impact:** P0 can replay a highly specified path, but it cannot act as the autonomous campaign strategist described by the product.
@@ -189,7 +189,7 @@ These are the trusted harness. They should not be replaced by model reasoning.
 
 ### 2. The Direct ad profile is no longer current-complete
 
-`sites/p0-production/lib/campaign-draft-fields.ts` fixes the profile to `direct-v501-unified-search-explicit-text` and marks the ad type as `TEXT_AD`. Current Yandex documentation states:
+`dashboard/lib/campaign-draft-fields.ts` fixes the profile to `direct-v501-unified-search-explicit-text` and marks the ad type as `TEXT_AD`. Current Yandex documentation states:
 
 - Text & Image ads in Unified Performance Campaigns are edit-only from June 30.
 - New Text & Image ads created through the API are created as combinatorial ads.
@@ -203,7 +203,7 @@ Sources: [Yandex Direct Ad object](https://yandex.ru/dev/direct/doc/ru/objects/a
 
 ### 3. The production Direct audit is intentionally shallow
 
-`readContext()` in `sites/p0-production/lib/p0.ts` declares that only `Campaigns.get` is read. It explicitly lists these as not read:
+`readContext()` in `dashboard/lib/p0.ts` declares that only `Campaigns.get` is read. It explicitly lists these as not read:
 
 - `AdGroups.get`;
 - `Keywords.get`;

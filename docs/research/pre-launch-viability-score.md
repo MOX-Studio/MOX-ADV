@@ -22,7 +22,7 @@
 - [resolution #90](https://github.com/ElJeskos/MOX-ADV/issues/90#issuecomment-5369315828): versioned evidence snapshot, claim → record → raw provenance, отдельные blockers/confidence, честный `UNAVAILABLE`;
 - [resolution #91](https://github.com/ElJeskos/MOX-ADV/issues/91#issuecomment-5369104990): Wordstat — scoped lower bound спроса, cost — source-labelled range, отсутствие строки/источника не равно нулю;
 - [resolution #94](https://github.com/ElJeskos/MOX-ADV/issues/94#issuecomment-5369542106): finite fan-out, exact publish projection/fingerprint, structural hidden reasons, `EVIDENCE_GAP` не превращается в «слабый» Draft;
-- текущим `sites/p0-production/lib/campaign-fanout.ts`: Recommendation Set уже содержит immutable strategy/evidence lineage, visible/hidden dispositions и fingerprints, но числового score-контракта ещё нет.
+- текущим `dashboard/lib/campaign-fanout.ts`: Recommendation Set уже содержит immutable strategy/evidence lineage, visible/hidden dispositions и fingerprints, но числового score-контракта ещё нет.
 
 ### Нормативное утверждение
 
@@ -464,16 +464,16 @@ type ScoreResultV1 = {
 
 ## 12. Findings по текущей реализации
 
-1. **HIGH — score отсутствует:** `sites/p0-production/lib/campaign-fanout.ts` формирует deterministic Recommendation Set, lineage, exact projection fingerprints и structural visibility, но не рассчитывает viability dimensions/rank/uncertainty. Следующий implementation slice должен добавить отдельный pure scorer, а не смешивать score с compiler.
+1. **HIGH — score отсутствует:** `dashboard/lib/campaign-fanout.ts` формирует deterministic Recommendation Set, lineage, exact projection fingerprints и structural visibility, но не рассчитывает viability dimensions/rank/uncertainty. Следующий implementation slice должен добавить отдельный pure scorer, а не смешивать score с compiler.
 2. **HIGH — текущий capacity hide не score threshold:** тот же файл скрывает после `MAX_DRAFTS_PER_DELIVERY_BUCKET=3` как `HIDDEN:CAPACITY_LIMIT`. Это допустимая structural reason из #94, но её нельзя переименовать в низкий viability score.
 3. **MEDIUM — market evidence пока gap:** candidates имеют `market_evidence_status: "EVIDENCE_GAP"`; по принятой missing policy это не ноль и не автоматическое скрытие.
-4. **MEDIUM — current tests/build contract:** `sites/p0-production/package.json` запускает `npm run build && node --test tests/*.test.mjs`; будущие scorer tests следует добавить в существующий test surface, включая golden vectors и leakage/isolation cases.
+4. **MEDIUM — current tests/build contract:** `dashboard/package.json` запускает `npm run build && node --test tests/*.test.mjs`; будущие scorer tests следует добавить в существующий test surface, включая golden vectors и leakage/isolation cases.
 
 ---
 
 ## 13. Применение к production-кандидату
 
-Решение применено минимальным связным срезом к текущему `sites/p0-production`:
+Решение применено минимальным связным срезом к текущему `dashboard`:
 
 - `lib/campaign-viability.ts` реализует pure deterministic scorer семи dimensions, hard eligibility, midpoint + sensitivity bounds, rank/ties, conservative threshold, fingerprints и field-level delta;
 - `lib/campaign-fanout.ts` выпускает `campaign-recommendation-set-v2` с versioned score contract и scoring каждого eligible Draft, сохраняя structural hidden/publish blockers отдельно;

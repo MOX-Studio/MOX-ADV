@@ -3,6 +3,10 @@
 # Python-generated files
 __pycache__/
 *.py[cod]
+*.egg-info/
+.venv/
+.coverage
+.coverage.*
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -13,6 +17,12 @@ __pycache__/
 
 # Local temporary files
 .tmp/
+
+# Local visual-review captures
+/mox-adv-*.png
+/prd-149-*.png
+/wayfinder-*.png
+/mox-adv-overview-dom.json
 
 .env
 .env.*

@@ -27,9 +27,9 @@ No OAuth client ID, OAuth client secret, or manually issued Yandex OAuth token i
 
 The current production adapter is still the legacy v1 contract:
 
-- `sites/p0-production/lib/market-evidence.ts` sends `Authorization: Bearer ...` to `api.wordstat.yandex.net/v1/*` and requires both a token and a registered client ID.
-- `sites/p0-production/lib/yandex-access-readiness.ts` verifies the legacy `/v1/getRegionsTree` endpoint.
-- `sites/p0-production/lib/p0.ts` reads `YANDEX_WORDSTAT_OAUTH_TOKEN` and `YANDEX_WORDSTAT_CLIENT_ID`.
+- `dashboard/lib/market-evidence.ts` sends `Authorization: Bearer ...` to `api.wordstat.yandex.net/v1/*` and requires both a token and a registered client ID.
+- `dashboard/lib/yandex-access-readiness.ts` verifies the legacy `/v1/getRegionsTree` endpoint.
+- `dashboard/lib/p0.ts` reads `YANDEX_WORDSTAT_OAUTH_TOKEN` and `YANDEX_WORDSTAT_CLIENT_ID`.
 
 Modern credentials cannot be inserted into those fields honestly. The adapter and evidence provenance must first be migrated to Yandex Cloud Wordstat API v2. Proposed server-only variables:
 

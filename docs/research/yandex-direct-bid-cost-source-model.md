@@ -237,23 +237,23 @@ Owner Decision Gate нужен только для business-owned значени
 
 ### 9.1 Что уже соответствует контракту
 
-1. **[OK] `sites/p0-production/lib/campaign-strategy.ts`** — `StrategyPrelaunchCostDecision` разделяет CPC proxy и `target_result_cost`, всегда фиксирует `effectiveness_forecast: false`, запрещает подмену через `target_result_cost_used_as_keyword_cost: false`; состояния `QUALIFIED_RANGE`, `BOUNDED_TRAFFIC_FALLBACK`, `OWNER_ECONOMICS_EDIT_REQUIRED`, `COST_EVIDENCE_BLOCKED` раскрыты тестами.
-2. **[OK] `sites/p0-production/lib/campaign-viability.ts`** — owner-facing contract маркирует score как `COMPARATIVE PRELAUNCH PRIORITY / NOT A PREDICTION`, раскрывает cost scope, source, currency, VAT, sample и не использует CPC/target-result-cost ratio как прогноз.
-3. **[OK] `sites/p0-production/tests/campaign-strategy.test.mjs`** — покрыты qualified range, unavailable bounded fallback, economics edit и conflict fail-closed.
-4. **[OK] `sites/p0-production/tests/campaign-viability.test.mjs`** — покрыты optional unavailable cost как midpoint sensitivity, scope isolation, source/sample disclosure и запрет смешения keyword cost с target result cost.
-5. **[OK] `sites/p0-production/tests/fixtures/direct/keyword-bids.json`** — fixture корректно сохраняет `TrafficVolume`, `Bid`, `Price` в micros и exact IDs.
+1. **[OK] `dashboard/lib/campaign-strategy.ts`** — `StrategyPrelaunchCostDecision` разделяет CPC proxy и `target_result_cost`, всегда фиксирует `effectiveness_forecast: false`, запрещает подмену через `target_result_cost_used_as_keyword_cost: false`; состояния `QUALIFIED_RANGE`, `BOUNDED_TRAFFIC_FALLBACK`, `OWNER_ECONOMICS_EDIT_REQUIRED`, `COST_EVIDENCE_BLOCKED` раскрыты тестами.
+2. **[OK] `dashboard/lib/campaign-viability.ts`** — owner-facing contract маркирует score как `COMPARATIVE PRELAUNCH PRIORITY / NOT A PREDICTION`, раскрывает cost scope, source, currency, VAT, sample и не использует CPC/target-result-cost ratio как прогноз.
+3. **[OK] `dashboard/tests/campaign-strategy.test.mjs`** — покрыты qualified range, unavailable bounded fallback, economics edit и conflict fail-closed.
+4. **[OK] `dashboard/tests/campaign-viability.test.mjs`** — покрыты optional unavailable cost как midpoint sensitivity, scope isolation, source/sample disclosure и запрет смешения keyword cost с target result cost.
+5. **[OK] `dashboard/tests/fixtures/direct/keyword-bids.json`** — fixture корректно сохраняет `TrafficVolume`, `Bid`, `Price` в micros и exact IDs.
 
 ### 9.2 Findings
 
-1. **[BLOCKER] `sites/p0-production/lib/market-evidence.ts` — legacy Live 4 стоит первым в исполняемом `COST_PRECEDENCE`; `analytics-evidence.ts` повторяет этот порядок в provenance.** Текущая последовательность `LEGACY_LIVE4_SCENARIO → KEYWORDBIDS_V5_CURRENT_PROXY → DIRECT_HISTORY_OWN_EMPIRICAL` превращает условную документационную поверхность в предпочтительный production source без account-specific preflight. Проектное решение этого документа: удалить Live 4 из выбираемых P0 candidates или держать только в quarantined `UNAVAILABLE/UNVERIFIED_LEAD` до отдельной проверки. [v5 statistics](https://yandex.com/dev/direct/doc/en/best-practice/statistics) · [справочник v5](https://yandex.com/dev/direct/doc/en/concepts/about)
-2. **[HIGH] `sites/p0-production/lib/market-evidence.ts` — priority history/proxy не соответствует semantic-purpose policy.** Универсальный first-qualified precedence выбирает current auction proxy раньше фактической собственной history. Нужен decision-purpose discriminator: historical paid CPC → Reports history; current existing-keyword scenario → KeywordBids. Источники нельзя ранжировать одной шкалой для разных semantic types.
-3. **[HIGH] `sites/p0-production/lib/campaign-strategy.ts` — `semantic` всегда `KEYWORD_COST_PER_CLICK_AUCTION_PROXY`.** Qualified `DIRECT_HISTORY_OWN_EMPIRICAL` в тесте также получает auction-proxy semantic. Это смешивает `historical_cpc` и `auction_proxy`; поле должно наследовать строгий тип выбранного observation.
-4. **[HIGH] `sites/p0-production/lib/campaign-strategy.ts` — qualification слишком поверхностна.** `buildStrategyPrelaunchCostDecision` проверяет status/range/source/currency, но не валидирует обязательные phrase/query, geo, device, Search/Network, placement, strategy, period/season, VAT, sample adequacy и freshness. Она доверяет upstream object; контракт границы должен быть schema-validated или проверен invariant-ами.
-5. **[HIGH] `sites/p0-production/lib/campaign-strategy.ts` и `campaign-viability.ts` — cost conflict блокирует весь Draft/score.** Для конфигурации, не использующей CPC/ceiling, это шире необходимого. Должны отдельно блокироваться cost selection и cost-dependent economic configuration; structurally complete non-serving Draft остаётся reviewable.
-6. **[MEDIUM] `sites/p0-production/lib/analytics-evidence.ts` — фиксированная generic freshness 3/30 дней не выражает разные semantics.** Трёхдневное окно Direct относится к стабилизации Reports, а не к freshness `KeywordBids` auction proxy. Нужны отдельные policies: report maturity/correction и project TTL proxy.
-7. **[MEDIUM] `sites/p0-production/tests/analytics-evidence.test.mjs` — нет явного regression test, что Wordstat никогда не входит в cost candidates.** Текущие Wordstat tests проверяют unavailable frequency, но не cost-source denylist.
-8. **[MEDIUM] `sites/p0-production/tests/analytics-evidence.test.mjs` — нет прямого cross-source test для priority, no averaging и semantic preservation.** Нужны одновременно history + KeywordBids + legacy/external candidates с проверкой purpose-specific selection и rejection dispositions.
-9. **[MEDIUM] `sites/p0-production/tests/fixtures/direct/keyword-bids.json` — fixture не покрывает документированные null cases.** Нужны autotargeting, `RARELY_SERVED`, image-only/Search off и Network `SERVING_OFF/NETWORK_DEFAULT` cases, чтобы `null` оставался `UNAVAILABLE`, не `0`.
+1. **[BLOCKER] `dashboard/lib/market-evidence.ts` — legacy Live 4 стоит первым в исполняемом `COST_PRECEDENCE`; `analytics-evidence.ts` повторяет этот порядок в provenance.** Текущая последовательность `LEGACY_LIVE4_SCENARIO → KEYWORDBIDS_V5_CURRENT_PROXY → DIRECT_HISTORY_OWN_EMPIRICAL` превращает условную документационную поверхность в предпочтительный production source без account-specific preflight. Проектное решение этого документа: удалить Live 4 из выбираемых P0 candidates или держать только в quarantined `UNAVAILABLE/UNVERIFIED_LEAD` до отдельной проверки. [v5 statistics](https://yandex.com/dev/direct/doc/en/best-practice/statistics) · [справочник v5](https://yandex.com/dev/direct/doc/en/concepts/about)
+2. **[HIGH] `dashboard/lib/market-evidence.ts` — priority history/proxy не соответствует semantic-purpose policy.** Универсальный first-qualified precedence выбирает current auction proxy раньше фактической собственной history. Нужен decision-purpose discriminator: historical paid CPC → Reports history; current existing-keyword scenario → KeywordBids. Источники нельзя ранжировать одной шкалой для разных semantic types.
+3. **[HIGH] `dashboard/lib/campaign-strategy.ts` — `semantic` всегда `KEYWORD_COST_PER_CLICK_AUCTION_PROXY`.** Qualified `DIRECT_HISTORY_OWN_EMPIRICAL` в тесте также получает auction-proxy semantic. Это смешивает `historical_cpc` и `auction_proxy`; поле должно наследовать строгий тип выбранного observation.
+4. **[HIGH] `dashboard/lib/campaign-strategy.ts` — qualification слишком поверхностна.** `buildStrategyPrelaunchCostDecision` проверяет status/range/source/currency, но не валидирует обязательные phrase/query, geo, device, Search/Network, placement, strategy, period/season, VAT, sample adequacy и freshness. Она доверяет upstream object; контракт границы должен быть schema-validated или проверен invariant-ами.
+5. **[HIGH] `dashboard/lib/campaign-strategy.ts` и `campaign-viability.ts` — cost conflict блокирует весь Draft/score.** Для конфигурации, не использующей CPC/ceiling, это шире необходимого. Должны отдельно блокироваться cost selection и cost-dependent economic configuration; structurally complete non-serving Draft остаётся reviewable.
+6. **[MEDIUM] `dashboard/lib/analytics-evidence.ts` — фиксированная generic freshness 3/30 дней не выражает разные semantics.** Трёхдневное окно Direct относится к стабилизации Reports, а не к freshness `KeywordBids` auction proxy. Нужны отдельные policies: report maturity/correction и project TTL proxy.
+7. **[MEDIUM] `dashboard/tests/analytics-evidence.test.mjs` — нет явного regression test, что Wordstat никогда не входит в cost candidates.** Текущие Wordstat tests проверяют unavailable frequency, но не cost-source denylist.
+8. **[MEDIUM] `dashboard/tests/analytics-evidence.test.mjs` — нет прямого cross-source test для priority, no averaging и semantic preservation.** Нужны одновременно history + KeywordBids + legacy/external candidates с проверкой purpose-specific selection и rejection dispositions.
+9. **[MEDIUM] `dashboard/tests/fixtures/direct/keyword-bids.json` — fixture не покрывает документированные null cases.** Нужны autotargeting, `RARELY_SERVED`, image-only/Search off и Network `SERVING_OFF/NETWORK_DEFAULT` cases, чтобы `null` оставался `UNAVAILABLE`, не `0`.
 
 ---
 
@@ -331,10 +331,10 @@ cost_decision:
 
 ### Kept: local primary implementation and tests
 
-- `sites/p0-production/lib/analytics-evidence.ts` — current source precedence/evidence normalization for #262.
-- `sites/p0-production/lib/campaign-strategy.ts` — current owner-facing prelaunch cost decision for #263.
-- `sites/p0-production/lib/campaign-viability.ts` — current comparative score and eligibility behavior.
-- `sites/p0-production/tests/analytics-evidence.test.mjs`, `campaign-strategy.test.mjs`, `campaign-viability.test.mjs`, `tests/fixtures/direct/keyword-bids.json` — current asserted contract.
+- `dashboard/lib/analytics-evidence.ts` — current source precedence/evidence normalization for #262.
+- `dashboard/lib/campaign-strategy.ts` — current owner-facing prelaunch cost decision for #263.
+- `dashboard/lib/campaign-viability.ts` — current comparative score and eligibility behavior.
+- `dashboard/tests/analytics-evidence.test.mjs`, `campaign-strategy.test.mjs`, `campaign-viability.test.mjs`, `tests/fixtures/direct/keyword-bids.json` — current asserted contract.
 
 ### Dropped
 

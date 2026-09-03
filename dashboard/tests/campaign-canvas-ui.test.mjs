@@ -6,7 +6,7 @@ const clientSource = await readFile(new URL("../app/P0Client.tsx", import.meta.u
 const ownerSource = await readFile(new URL("../lib/p0-owner-journey.ts", import.meta.url), "utf8");
 const applicationSource = await readFile(new URL("../lib/p0-application.ts", import.meta.url), "utf8");
 const styles = await readFile(new URL("../app/owner-journey.css", import.meta.url), "utf8");
-const prototypeStyles = await readFile(new URL("../app/prototype/prd-149/prototype.module.css", import.meta.url), "utf8");
+const dashboardStyles = await readFile(new URL("../app/production-dashboard.module.css", import.meta.url), "utf8");
 
 test("owner campaign surface renders an independent business editor without exposing internal draft identifiers", () => {
   assert.match(clientSource, /Кампании для проверки/u);
@@ -58,11 +58,11 @@ test("safe continuation remains agent-owned while initial real creation needs a 
   assert.doesNotMatch(clientSource, /Проверить запланированный элемент|Повторить запрос|Сверить идентификаторы|Продолжить создание без запуска/u);
 });
 
-test("1920 desktop layout uses the accepted PRD-149 shell and fixed five-stage hierarchy", () => {
-  assert.match(prototypeStyles, /\.stageNavhorizontal \{[^}]*grid-template-columns: repeat\(5, 1fr\)/u);
-  assert.match(prototypeStyles, /\.ownerWorkspace \{[^}]*grid-template-columns: 280px minmax\(0, 1fr\)/u);
-  assert.match(prototypeStyles, /\.agentRail \{[^}]*position: sticky/u);
-  assert.match(prototypeStyles, /\.artifact \{[^}]*min-width: 0/u);
+test("1920 desktop layout uses the production shell and fixed five-stage hierarchy", () => {
+  assert.match(dashboardStyles, /\.stageNavhorizontal \{[^}]*grid-template-columns: repeat\(5, 1fr\)/u);
+  assert.match(dashboardStyles, /\.ownerWorkspace \{[^}]*grid-template-columns: 280px minmax\(0, 1fr\)/u);
+  assert.match(dashboardStyles, /\.ownerWorkspace\.ownerWorkspaceFull \{ grid-template-columns: minmax\(0, 1fr\); \}/u);
+  assert.match(dashboardStyles, /\.artifact \{[^}]*min-width: 0/u);
   assert.match(styles, /\.owner-main \{[^}]*min-width: 0/u);
   assert.match(styles, /\.owner-campaigns article \{[^}]*min-width: 0/u);
 });

@@ -2,7 +2,7 @@
 
 ## Назначение текущего milestone
 
-Текущий milestone завершает только модуль **P0 «Стратегия и создание рекламных кампаний»** в `sites/p0-production/`.
+Текущий milestone завершает только модуль **P0 «Стратегия и создание рекламных кампаний»** в `dashboard/`.
 
 P0 должен провести владельца бизнеса по одному связному пути:
 
@@ -54,7 +54,7 @@ P0 должен провести владельца бизнеса по одно
 
 Production candidate уже содержит сильный deterministic harness и пять принятых user-facing steps: `Контекст → Модель бизнеса → Стратегия кампании → Рекламные кампании → Подтверждение`.
 
-- один revisioned application contract в `sites/p0-production/lib/p0-application.ts`;
+- один revisioned application contract в `dashboard/lib/p0-application.ts`;
 - compare-and-swap state и история revisions;
 - evidence, Strategy, Draft и package lineage;
 - конечный Recommendation Set, score/rank, canvas, shortlist и package authority;
@@ -111,7 +111,7 @@ P0 получает product MVP verdict после детерминирован�
 - Owner-facing UI показывает вывод, рекомендацию, значение для бизнеса, требуемое решение, следующий шаг и outcome. IDs, hashes, schemas, API methods, payloads и journals остаются во внутренних redacted artifacts.
 - P0 не вызывает `Campaigns.resume`, не запускает показы и не начинает расход.
 - Текущий UI и E2E проектируются только для 1920×1080.
-- Работа ведётся только в `sites/p0-production/`, кроме общих contracts/tests/docs, необходимых этому модулю.
+- Работа ведётся только в `dashboard/`, кроме общих contracts/tests/docs, необходимых этому модулю.
 
 ## Владение planning-артефактом
 

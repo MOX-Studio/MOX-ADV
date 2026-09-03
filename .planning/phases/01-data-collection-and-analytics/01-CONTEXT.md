@@ -78,16 +78,16 @@ It excludes questionnaire UX, final Strategy synthesis, campaign canvas/projecti
 
 ## Existing seams to extend
 
-- `sites/p0-production/lib/p0-application.ts` — application authority, revisions and state transitions.
-- `sites/p0-production/lib/p0.ts` — composition point for model adapter, typed tools and provider adapters.
-- `sites/p0-production/lib/analytics-evidence.ts` — immutable evidence/provenance contract.
-- `sites/p0-production/lib/business-model.ts` — product/service inventory and business model.
-- `sites/p0-production/lib/market-evidence.ts` — Wordstat, cost and market evidence.
-- `sites/p0-production/lib/site-research.ts` — bounded first-party/public research.
-- `sites/p0-production/lib/yandex-context.ts` — exact account/counter/goal bindings.
-- `sites/p0-production/lib/landing-advisory.ts` — deterministic/neural destination findings.
-- `sites/p0-production/lib/campaign-playbook.ts` — curated official-source rules.
-- `sites/p0-production/db/schema.ts` — durable runs/checkpoints/observations/budgets.
+- `dashboard/lib/p0-application.ts` — application authority, revisions and state transitions.
+- `dashboard/lib/p0.ts` — composition point for model adapter, typed tools and provider adapters.
+- `dashboard/lib/analytics-evidence.ts` — immutable evidence/provenance contract.
+- `dashboard/lib/business-model.ts` — product/service inventory and business model.
+- `dashboard/lib/market-evidence.ts` — Wordstat, cost and market evidence.
+- `dashboard/lib/site-research.ts` — bounded first-party/public research.
+- `dashboard/lib/yandex-context.ts` — exact account/counter/goal bindings.
+- `dashboard/lib/landing-advisory.ts` — deterministic/neural destination findings.
+- `dashboard/lib/campaign-playbook.ts` — curated official-source rules.
+- `dashboard/db/schema.ts` — durable runs/checkpoints/observations/budgets.
 
 ## Phase exit criteria
 

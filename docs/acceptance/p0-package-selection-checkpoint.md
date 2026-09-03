@@ -11,7 +11,7 @@
 
 ## Воспроизведение
 
-Из `sites/p0-production/`:
+Из `dashboard/`:
 
 ```bash
 npm run test:package-selection
