@@ -76,7 +76,7 @@ test("Goal keeps one atomic editor and one compact measurable criterion", () => 
   for (const field of ["desired_outcome", "qualified_action", "target_count", "deadline", "max_result_cost_rub"]) {
     assert.match(clientSource, new RegExp(`name="${field}"`, "u"));
   }
-  assert.match(clientSource, /criterionComplete \? "Завершено" : currentGoal \? "Требует уточнения" : "Не заполнено"/u);
+  assert.doesNotMatch(clientSource, /criterionComplete \? "Завершено" : currentGoal \? "Требует уточнения" : "Не заполнено"/u);
   assert.match(clientSource, /Изменить цель[\s\S]*Сохранить и начать сбор сведений/u);
   assert.match(ownerStyles, /\.owner-goal-cards \{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/u);
   assert.match(ownerStyles, /\.owner-goal-editor-copy \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/u);

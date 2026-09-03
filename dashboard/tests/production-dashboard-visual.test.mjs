@@ -58,7 +58,7 @@ test("Campaign Goal uses one atomic editor for the business goal, qualified resu
   assert.match(goalStageSummarySource, /owner-goal-editor/u);
   assert.match(goalStageSummarySource, /Изменить цель/u);
   assert.match(goalStageSummarySource, /Сохранить и начать сбор сведений/u);
-  assert.match(goalStageSummarySource, /Требует уточнения/u);
+  assert.doesNotMatch(goalStageSummarySource, /criterionComplete \? "Завершено" : currentGoal \? "Требует уточнения" : "Не заполнено"/u);
   assert.doesNotMatch(goalStageSummarySource, /Что считаем успехом/u);
   const saveGoalIndex = productionSource.indexOf('pipeline_action: "CORRECT_GOAL"');
   const startEvidenceIndex = productionSource.indexOf('pipeline_action: "START"', saveGoalIndex);
