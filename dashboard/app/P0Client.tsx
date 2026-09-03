@@ -1339,7 +1339,7 @@ function GoalStageSummary({
   return <section className="owner-stage-summary owner-goal-summary" aria-label="Цель рекламной кампании" data-complete={criterionComplete}>
     <header className="owner-goal-summary-header">
       <div><p className="owner-eyebrow">Цель рекламной кампании</p></div>
-      <div><strong>{criterionComplete ? "Завершено" : currentGoal ? "Требует уточнения" : "Не заполнено"}</strong>{canCorrect && !editing && <button type="button" onClick={() => setEditing(true)}>Изменить цель</button>}</div>
+      {canCorrect && !editing && <button type="button" onClick={() => setEditing(true)}>Изменить цель</button>}
     </header>
     {!editing ? <div className="owner-goal-cards">
       <article className="owner-goal-card"><header><span>Бизнес-цель</span></header><strong>{desiredOutcome}</strong></article>

@@ -31,10 +31,6 @@
 .owner-stage-summary { margin-top: 18px; padding: 18px; border: 1px solid var(--owner-line); border-radius: 10px; background: #fbfdfb; }
 .owner-goal-summary[data-complete="false"] { border-color: #d7b979; background: #fffdf7; }
 .owner-goal-summary-header { display: flex; gap: 16px; justify-content: space-between; align-items: flex-start; }
-.owner-goal-summary-header h2 { margin: 5px 0 0; font-size: 14px; }
-.owner-goal-summary-header > div:last-child { display: flex; gap: 8px; align-items: center; }
-.owner-goal-summary-header > div:last-child > strong { padding: 7px 9px; border-radius: 999px; color: var(--owner-green-dark); background: var(--owner-soft); font-size: 12px; white-space: nowrap; }
-.owner-goal-summary[data-complete="false"] .owner-goal-summary-header > div:last-child > strong { color: #8a5619; background: #fff0d5; }
 .owner-goal-summary-header button { min-height: 34px; padding: 0 12px; border: 1px solid var(--owner-green); border-radius: 7px; color: var(--owner-green-dark); background: white; font-size: 12px; font-weight: 850; }
 .owner-goal-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
 .owner-goal-card { min-width: 0; padding: 13px; border: 1px solid var(--owner-line); border-radius: 8px; background: white; }
