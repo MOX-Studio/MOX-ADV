@@ -1,5 +1,9 @@
 import { buildAdText, buildAdTitle } from "./ad-copy.ts";
 import { buildPublishProjection } from "./campaign-draft.ts";
+import {
+  fingerprintLocalCampaignGenerationProjection,
+  isLocalCampaignGenerationProjection,
+} from "./campaign-generation-profile.ts";
 import { DIRECT_V501_DRAFT_FIELD_REGISTRY } from "./campaign-draft-fields.ts";
 import { evaluateBrandClaimsContract } from "./campaign-creation-profile.ts";
 import {
@@ -208,11 +212,122 @@ function phrase(...values: unknown[]) {
   return unique.join(" ");
 }
 
+const NON_COMMERCIAL_KEYWORD = /билет|посетител|ваканс|фото|программ|расписан|новост|итог|схем|скачать|реферат/iu;
+
+function brandTerm(...values: unknown[]) {
+  return values
+    .flatMap((value) => text(value).match(/[\p{L}\p{N}-]+/gu) ?? [])
+    .find((token) => token.length >= 3
+      && /\p{L}/u.test(token)
+      && token === token.toLocaleUpperCase("ru-RU")
+      && token !== token.toLocaleLowerCase("ru-RU")) ?? "";
+}
+
+function eventDemandLabel(offer: unknown, qualifiedResult: unknown) {
+  const context = keyText(`${text(offer)} ${text(qualifiedResult)}`);
+  const brand = brandTerm(offer, qualifiedResult);
+  if (!brand || !/стенд/iu.test(context)) return "";
+  if (/участ|экспонент/iu.test(context)) return `${brand} — участие со стендом`;
+  return `${brand} — стенд компании`;
+}
+
+function evidenceRows(frequency: Record<string, unknown>) {
+  const rows = [
+    ...(Array.isArray(frequency.unique_assigned_rows) ? frequency.unique_assigned_rows : []),
+    ...(Array.isArray(frequency.canonical_observations) ? frequency.canonical_observations : []),
+  ].map(record);
+  return [...new Map(rows.map((row) => [text(row.row_id) || `${keyText(row.phrase)}:${text(row.assigned_cluster_id)}`, row])).values()];
+}
+
+function selectDemandKeyword(input: {
+  frequency: Record<string, unknown>;
+  clusterIds: string[];
+  semanticKeys: unknown[];
+  advertisedOffer: unknown;
+  qualifiedResult: unknown;
+}) {
+  const clusterIds = new Set(input.clusterIds);
+  const brand = brandTerm(input.advertisedOffer, input.qualifiedResult);
+  const brandKey = keyText(brand);
+  const ranked = evidenceRows(input.frequency)
+    .map((row) => {
+      const candidate = keyText(row.phrase);
+      const words = candidate.split(/\s+/u).filter(Boolean);
+      const count = Number(row.count);
+      const score = (brandKey && candidate.includes(brandKey) ? 8 : 0)
+        + (/стенд/iu.test(candidate) ? 5 : 0)
+        + (/участ|экспонент/iu.test(candidate) ? 4 : 0)
+        + (/заяв|стоимост|цен|заказ|зарегистрир/iu.test(candidate) ? 2 : 0);
+      return { candidate, words, count: Number.isFinite(count) ? count : 0, score, clusterId: text(row.assigned_cluster_id) };
+    })
+    .filter((item) => clusterIds.has(item.clusterId)
+      && item.words.length >= 2
+      && item.words.length <= 7
+      && !NON_COMMERCIAL_KEYWORD.test(item.candidate))
+    .sort((left, right) => right.score - left.score
+      || right.count - left.count
+      || left.candidate.localeCompare(right.candidate, "ru-RU"));
+  if (ranked[0]?.score > 0) return ranked[0].candidate;
+
+  const context = keyText(`${text(input.advertisedOffer)} ${text(input.qualifiedResult)}`);
+  if (brand && /стенд/iu.test(context) && /участ|экспонент/iu.test(context)) {
+    return keyText(`${brand} участие со стендом`);
+  }
+  const semanticTerms = input.semanticKeys.flatMap((value) => {
+    const key = record(value);
+    return [key.product, key.need, key.offer];
+  });
+  return phrase(brand, ...semanticTerms, input.advertisedOffer, input.qualifiedResult);
+}
+
+function buildNegativeKeywords(strategy: Record<string, unknown>, advertisedOffer: unknown, qualifiedResult: unknown) {
+  const exclusions = keyText(strategyAnswerValue(strategy, "exclusions"));
+  const context = keyText(`${text(advertisedOffer)} ${text(qualifiedResult)}`);
+  const values = ["бесплатно", "вакансии"];
+  if (/выстав|стенд|участ|экспонент/iu.test(context)) values.push("посетитель", "билет");
+  const derived: Array<[RegExp, string]> = [
+    [/фото/iu, "фото"],
+    [/программ/iu, "программа выставки"],
+    [/регистрац.*посетител|посетител.*регистрац/iu, "регистрация посетителя"],
+    [/информационн.*материал/iu, "информационные материалы"],
+  ];
+  for (const [pattern, value] of derived) if (pattern.test(exclusions)) values.push(value);
+  return [...new Set(values)].join(", ");
+}
+
+function humanCampaignSubject(advertisedOffer: unknown, qualifiedResult: unknown) {
+  return eventDemandLabel(advertisedOffer, qualifiedResult) || buildAdTitle(advertisedOffer);
+}
+
+function humanGroupName(advertisedOffer: unknown, qualifiedResult: unknown, keyword: string) {
+  const eventLabel = eventDemandLabel(advertisedOffer, qualifiedResult);
+  if (eventLabel) return eventLabel;
+  const label = keyText(keyword || advertisedOffer).split(/\s+/u).filter(Boolean).slice(0, 7).join(" ");
+  return label ? `${label[0].toLocaleUpperCase("ru-RU")}${label.slice(1)}` : "Основной коммерческий спрос";
+}
+
+function primaryAdTitle(advertisedOffer: unknown, qualifiedResult: unknown) {
+  const brand = brandTerm(advertisedOffer, qualifiedResult);
+  const context = keyText(`${text(advertisedOffer)} ${text(qualifiedResult)}`);
+  if (brand && /стенд/iu.test(context)) return buildAdTitle(`Стенд компании на выставке ${brand}`);
+  return buildAdTitle(advertisedOffer);
+}
+
+function primaryAdText(coreMessage: unknown, advertisedOffer: unknown, qualifiedResult: unknown, participation: boolean) {
+  const brand = brandTerm(advertisedOffer, qualifiedResult, coreMessage);
+  const context = keyText(`${text(advertisedOffer)} ${text(qualifiedResult)} ${text(coreMessage)}`);
+  if (brand && /стенд/iu.test(context) && /формат|срок|бюджет/iu.test(context)) {
+    const candidate = `Обсудите формат стенда на ${brand}, сроки и бюджет. Оставьте заявку.`;
+    if (candidate.length <= 81) return candidate;
+  }
+  return buildAdText(coreMessage, advertisedOffer, participation);
+}
+
 function namedVariant(product: unknown, label: string, bucketOrdinal: number) {
   const base = text(product) || "Новая кампания";
   const bucket = bucketOrdinal > 1 ? ` · Пакет ${bucketOrdinal}` : "";
   const suffix = ` · ${label}${bucket}`;
-  return `${base.slice(0, Math.max(1, 255 - suffix.length)).trim()}${suffix}`;
+  return `${base.slice(0, Math.max(1, 120 - suffix.length)).trim()}${suffix}`;
 }
 
 function matrixCompetitiveControlBasis(evidence: Record<string, unknown> | null | undefined) {
@@ -402,8 +517,8 @@ function editableDraft(
   strategy: Record<string, unknown>,
   family: PlaybookChangedFamily | null,
   shortLabel: string,
-  clusterLabel: string,
   bucketOrdinal: number,
+  demand: { frequency: Record<string, unknown>; clusterIds: string[]; semanticKeys: unknown[] },
 ) {
   const advertisedOffer = strategyAnswerValue(strategy, "advertised_offer") || model.product;
   const targetAudience = strategyAnswerValue(strategy, "target_audience") || model.audience;
@@ -417,20 +532,20 @@ function editableDraft(
       : family === "MESSAGE_OFFER"
         ? `${coreMessage}. ${advertisedOffer}`
         : coreMessage;
-  const keyword = family === "QUALIFIED_ACTION"
-    ? phrase(advertisedOffer, qualifiedResult)
-    : family === "AUDIENCE_SPECIFICITY"
-      ? phrase(advertisedOffer, targetAudience)
-      : family === "MESSAGE_OFFER"
-        ? phrase(advertisedOffer, coreMessage)
-        : phrase(advertisedOffer);
+  const keyword = selectDemandKeyword({
+    frequency: demand.frequency,
+    clusterIds: demand.clusterIds,
+    semanticKeys: demand.semanticKeys,
+    advertisedOffer,
+    qualifiedResult,
+  });
   return {
-    campaign_name: namedVariant(advertisedOffer, shortLabel, bucketOrdinal),
-    group_name: clusterLabel,
+    campaign_name: namedVariant(humanCampaignSubject(advertisedOffer, qualifiedResult), shortLabel, bucketOrdinal),
+    group_name: humanGroupName(advertisedOffer, qualifiedResult, keyword),
     keyword,
-    negative_keywords: "бесплатно, вакансии, посетитель, билет",
-    ad_title: buildAdTitle(advertisedOffer),
-    ad_text: buildAdText(adMessage, advertisedOffer, participation),
+    negative_keywords: buildNegativeKeywords(strategy, advertisedOffer, qualifiedResult),
+    ad_title: primaryAdTitle(advertisedOffer, qualifiedResult),
+    ad_text: primaryAdText(adMessage, advertisedOffer, qualifiedResult, participation),
   };
 }
 
@@ -503,6 +618,7 @@ function withoutForbiddenFingerprintFields(value: unknown): unknown {
 }
 
 export async function fingerprintDirectProjection(projection: Record<string, unknown>) {
+  if (isLocalCampaignGenerationProjection(projection)) return fingerprintLocalCampaignGenerationProjection(projection);
   const direct = projection.direct && typeof projection.direct === "object" && !Array.isArray(projection.direct)
     ? projection.direct as Record<string, unknown>
     : {};
@@ -969,11 +1085,17 @@ export async function buildCampaignRecommendationSet({
       });
     }
     const clusterIds = (bucket.demand_cluster_ids as string[]).map(text).sort();
-      const clusterLabel = clusterIds.length ? `Demand pack: ${clusterIds.join(", ")}` : "Demand evidence gap";
       const materialKey = materialKeysByFingerprint.get(text(bucket.delivery_key_fingerprint)) ?? strategyDeliveryKey;
       const materialStrategy = strategyForMaterialCampaign(strategy, materialKey);
+      const groupedClusters = demandClusters.filter((cluster) => clusterIds.includes(text(cluster.cluster_id)));
+      const semanticKeys = groupedClusters.map((cluster) => cluster.semantic_key ?? null).filter(Boolean);
       const shortLabel = variantLabel(null, controlBasis.kind);
-      const editable = editableDraft(model, materialStrategy, selectedContentRule?.changed_family ?? null, shortLabel, clusterLabel, bucketIndex + 1);
+      const editable = editableDraft(model, materialStrategy, selectedContentRule?.changed_family ?? null, shortLabel, bucketIndex + 1, {
+        frequency,
+        clusterIds,
+        semanticKeys,
+      });
+      const clusterLabel = editable.group_name;
       const identityInput = {
         strategy_revision_id: strategyRevisionId,
         material_campaign_key_fingerprint: bucket.delivery_key_fingerprint,
@@ -988,8 +1110,6 @@ export async function buildCampaignRecommendationSet({
       const hypothesisId = `campaign-hypothesis-${identitySuffix}`;
       const hypothesisRevisionId = `${hypothesisId}-r1`;
       const futureCampaignId = `future-campaign-${identitySuffix}`;
-      const groupedClusters = demandClusters.filter((cluster) => clusterIds.includes(text(cluster.cluster_id)));
-      const semanticKeys = groupedClusters.map((cluster) => cluster.semantic_key ?? null).filter(Boolean);
       const currentHypothesis = {
         schema_version: "campaign-hypothesis-v1",
         hypothesis_id: hypothesisId,

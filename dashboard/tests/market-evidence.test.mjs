@@ -71,7 +71,7 @@ test("builds a bounded typed multi-seed demand and comparable-cost research plan
   assert.ok(plan.seeds.some((item) => item.dimension === "NON_BRAND"));
   assert.equal(new Set(plan.seeds.map((item) => item.phrase.toLocaleLowerCase("ru-RU"))).size, plan.seeds.length);
   const offerSeed = plan.seeds.find((item) => item.dimension === "OFFER_LANGUAGE");
-  assert.equal(offerSeed.phrase, "MOX Expo участие со стендом в промышленной выставке");
+  assert.equal(offerSeed.phrase, "MOX Expo участие со стендом в промышленной");
   assert.deepEqual(offerSeed.formulation_provenance, [
     { dimension: "OFFER_LANGUAGE", input_index: 0, source_phrase: "MOX Expo участие со стендом в промышленной выставке" },
   ]);
@@ -81,21 +81,62 @@ test("builds a bounded typed multi-seed demand and comparable-cost research plan
     { dimension: "BRAND", input_index: 0, source_phrase: "MOX Expo" },
   ]);
   assert.equal(plan.dimensions.find((item) => item.dimension === "BRAND").status, "PLANNED");
-  assert.equal(plan.dimensions.find((item) => item.dimension === "BRAND").formulation_count, 1);
+  assert.equal(plan.dimensions.find((item) => item.dimension === "BRAND").formulation_count, 2);
   assert.deepEqual(plan.seeds.find((item) => item.dimension === "CUSTOMER_PROBLEM").formulation_provenance, [
     { dimension: "CUSTOMER_PROBLEM", input_index: 0, source_phrase: "Найти новых оптовых покупателей" },
   ]);
-  assert.deepEqual(plan.seeds.find((item) => item.dimension === "HIGH_INTENT_ACTION").formulation_provenance, [
+  const intentSeed = plan.seeds.find((item) => item.dimension === "HIGH_INTENT_ACTION");
+  assert.deepEqual(intentSeed.formulation_provenance, [
     { dimension: "HIGH_INTENT_ACTION", input_index: 0, source_phrase: "Оставить заявку на участие" },
   ]);
-  assert.equal(plan.seeds.find((item) => item.dimension === "NON_BRAND").phrase, "участие со стендом в промышленной выставке");
+  assert.match(intentSeed.phrase, /заявк.*участ.*стенд/iu);
+  assert.ok(intentSeed.relevance_tokens.includes("стенд"));
+  assert.equal(intentSeed.relevance_tokens.includes("заявк"), false);
+  assert.equal(plan.seeds.find((item) => item.dimension === "NON_BRAND").phrase, "участие со стендом в промышленной");
   assert.deepEqual(plan.exclusions, ["бесплатно", "вакансии"]);
   assert.deepEqual(plan.scope.regions, [{ id: 213, name: "Москва" }]);
   assert.deepEqual(plan.scope.devices, ["all"]);
   assert.equal(plan.scope.seasonality.business_context, "Основной спрос за три месяца до выставки");
   assert.equal(plan.quota.planned_provider_calls, plan.seeds.length * 3);
+  assert.equal(plan.quota.maximum_seed_formulations, 8);
+  assert.equal(plan.quota.maximum_expansion_seed_formulations, 20);
+  assert.equal(plan.quota.maximum_verification_seed_formulations, 8);
+  assert.equal(plan.quota.maximum_ui_surface_reads, 104);
   assert.ok(plan.quota.planned_provider_calls <= plan.quota.maximum_provider_calls);
   assert.ok(plan.seeds.every((item) => item.region_ids[0] === 213 && item.device === "all"));
+});
+
+test("builds short search-language seeds instead of concatenating business prose", async () => {
+  const plan = await buildDemandCostResearchPlan({
+    generatedAt: "2026-09-03T10:00:00.000Z",
+    offerLanguage: "Участие со стендом в международной промышленной выставке Стать партнёром",
+    customerProblems: [
+      "Инвесторы, руководители компаний и представители органов власти",
+      "Регион-партнер представляет экономические возможности и привлекает инвестиции",
+    ],
+    highIntentActions: ["Отправленная заявка на участие через форму сайта"],
+    brandTerms: ["ИННОПРОМ"],
+    exclusions: [],
+    regionIds: [225],
+    regionNames: ["Россия"],
+    device: "all",
+    seasonality: "",
+    dynamicsFromDate: "2024-09-01",
+    dynamicsToDate: "2026-08-31",
+  });
+
+  assert.ok(plan.seeds.length >= 6);
+  assert.ok(plan.seeds.every((item) => item.phrase.split(/\s+/u).length <= 8));
+  assert.ok(plan.seeds.some((item) => item.phrase.toLocaleLowerCase("ru-RU") === "участие со стендом"));
+  assert.ok(plan.seeds.some((item) => item.phrase === "ИННОПРОМ"));
+  assert.ok(plan.seeds.some((item) => /иннопром.*участие со стендом/iu.test(item.phrase)));
+  const intentSeed = plan.seeds.find((item) => item.dimension === "HIGH_INTENT_ACTION");
+  assert.match(intentSeed.phrase, /заявк.*участ.*стенд/iu);
+  assert.ok(intentSeed.relevance_tokens.some((token) => /стенд|выстав/iu.test(token)));
+  assert.ok(intentSeed.relevance_tokens.every((token) => !/заявк|участ/iu.test(token)));
+  assert.ok(plan.seeds.every((item) => !/инвесторы.*участие со стендом/iu.test(item.phrase)));
+  assert.ok(plan.seeds.every((item) => !/регион-партнер.*участие со стендом/iu.test(item.phrase)));
+  assert.ok(plan.seeds.every((item) => !/через форму сайта/iu.test(item.phrase)));
 });
 
 test("qualifies comparable Direct candidates only from one complete audit before cost reads", async () => {
@@ -306,7 +347,7 @@ test("official Wordstat adapter preserves method, operator, region, device and o
   assert.doesNotMatch(JSON.stringify(result), /fixture-secret|fixture-client|Authorization/iu);
 });
 
-test("normalizes Wordstat rows and sums each uniquely assigned row once as a scoped lower bound", async () => {
+test("normalizes Wordstat rows and sums each uniquely assigned row once without claiming a unique-demand lower bound", async () => {
   const fixtures = {
     "/v1/topRequests": await jsonFixture("top-requests"),
     "/v1/dynamics": await jsonFixture("dynamics"),
@@ -321,18 +362,18 @@ test("normalizes Wordstat rows and sums each uniquely assigned row once as a sco
 
   const frequency = await buildScopedDemandEvidence(batch, clusters);
   assert.equal(frequency.status, "AVAILABLE");
-  assert.deepEqual(frequency.observed_unique_count, { value: 67, semantics: "LOWER_BOUND_OBSERVED_TOP_ROWS" });
+  assert.deepEqual(frequency.observed_unique_count, { value: 80, semantics: "SUM_OBSERVED_PHRASE_FREQUENCIES" });
   assert.equal(frequency.canonical_observation_schema, "wordstat-canonical-observation-v1");
-  assert.equal(frequency.canonical_observations.length, 3);
+  assert.equal(frequency.canonical_observations.length, 4);
   assert.deepEqual(frequency.canonical_observations, frequency.unique_assigned_rows);
-  assert.equal(frequency.unique_assigned_rows.length, 3);
-  assert.equal(frequency.coverage.returned_rows, 8);
+  assert.equal(frequency.unique_assigned_rows.length, 4);
+  assert.equal(frequency.coverage.returned_rows, 10);
   assert.equal(frequency.coverage.excluded_unique_rows, 1);
   assert.equal(frequency.excluded_rows[0].reason_code, "RELEVANCE_RULE_NO_MATCH");
   assert.equal(frequency.excluded_rows[0].classifier_version, "demand-relevance-rules-v1");
-  assert.equal(new Set(frequency.canonical_observations.map((observation) => observation.observation_id)).size, 3);
+  assert.equal(new Set(frequency.canonical_observations.map((observation) => observation.observation_id)).size, 4);
   assert.ok(frequency.canonical_observations.every((observation) => observation.observation_id === observation.row_id));
-  assert.equal(frequency.clusters.reduce((sum, cluster) => sum + cluster.observed_unique_count.value, 0), 67);
+  assert.equal(frequency.clusters.reduce((sum, cluster) => sum + cluster.observed_unique_count.value, 0), 80);
   assert.ok(frequency.unique_assigned_rows.every((row) => row.provenance.call_ids.length === 2));
   assert.ok(frequency.unique_assigned_rows.every((row) => row.method === "top_requests"));
   assert.ok(frequency.unique_assigned_rows.every((row) => row.region_names[0] === "Москва" && row.device === "desktop"));
@@ -344,7 +385,7 @@ test("normalizes Wordstat rows and sums each uniquely assigned row once as a sco
   assert.equal(frequency.scopes[0].call_coverage.complete, true);
   assert.deepEqual(frequency.scopes[0].call_coverage.unavailable_seed_ids, []);
   assert.equal(frequency.seed_matched_row_counts.find((item) => item.seed_id === "seed-participation").value, 19);
-  assert.equal(frequency.semantics.lower_bound, true);
+  assert.equal(frequency.semantics.lower_bound, false);
   assert.equal(frequency.seasonality.status, "AVAILABLE");
   assert.equal(frequency.seasonality.scopes[0].latest_complete_share, 0.000017);
   assert.equal(frequency.seasonality.scopes[0].historical_same_period_median_share, 0.000011);
@@ -378,7 +419,7 @@ test("keeps incomparable operator/region/device scopes separate instead of addin
   assert.equal(frequency.status, "PARTIAL");
   assert.equal(frequency.observed_unique_count.value, null);
   assert.equal(frequency.scopes.length, 2);
-  assert.deepEqual(frequency.scopes.map((scope) => scope.observed_unique_count.value), [67, 67]);
+  assert.deepEqual(frequency.scopes.map((scope) => scope.observed_unique_count.value), [80, 80]);
   const crossScopedCluster = frequency.clusters.find((cluster) => cluster.cluster_id === "cluster-participation");
   assert.equal(crossScopedCluster.observed_unique_count.value, null);
   assert.equal(crossScopedCluster.scopes.length, 2);
@@ -660,7 +701,7 @@ test("a partial multi-seed response keeps the available lower bound and names th
 
   const frequency = await buildScopedDemandEvidence(batch, clusters);
   assert.equal(frequency.status, "PARTIAL");
-  assert.equal(frequency.observed_unique_count.value, 67);
+  assert.equal(frequency.observed_unique_count.value, 80);
   assert.equal(frequency.scopes.length, 1);
   assert.equal(frequency.scopes[0].status, "PARTIAL");
   assert.equal(frequency.scopes[0].call_coverage.complete, false);
@@ -688,7 +729,7 @@ test("a missing non-frequency call keeps canonical demand as a partial lower bou
 
   const frequency = await buildScopedDemandEvidence(batch, clusters);
   assert.equal(frequency.status, "PARTIAL");
-  assert.equal(frequency.observed_unique_count.value, 67);
+  assert.equal(frequency.observed_unique_count.value, 80);
   assert.equal(frequency.scopes[0].status, "AVAILABLE");
   assert.equal(frequency.seasonality.status, "UNAVAILABLE");
   assert.ok(frequency.gaps.some((gap) => gap.code === "WORDSTAT_RESPONSE_PARTIAL"));
@@ -718,7 +759,7 @@ test("validates Wordstat scope and batch quota before any provider request", asy
     collectOfficialWordstatBatch({
       token: "fixture-secret",
       clientId: "fixture-client",
-      seeds: Array.from({ length: 9 }, (_, index) => ({ ...seed, seed_id: `seed-${index}` })),
+      seeds: Array.from({ length: 21 }, (_, index) => ({ ...seed, seed_id: `seed-${index}` })),
     }, async () => {
       quotaRequests += 1;
       return response({});

@@ -23,7 +23,7 @@ import {
 } from "./p0-curated-playbook-v1.ts";
 import { pipelineDigest } from "./pipeline-orchestrator.ts";
 import {
-  ProductionMethodologyAgent,
+  type ProductionMethodologyAgent,
   type MethodologyOutcomeReference,
 } from "./methodology-agent.ts";
 
@@ -108,13 +108,13 @@ async function baselineActivation(delegation: KnowledgeStewardDelegation): Promi
 export class ProductionCampaignPlaybookGovernance {
   private readonly knowledge: D1CampaignPlaybookKnowledgeStore;
   private readonly governance: D1CampaignPlaybookGovernanceStore;
-  private readonly methodology: ProductionMethodologyAgent;
+  private readonly methodology: ProductionMethodologyAgent | null;
   private readonly now: () => string;
 
   constructor(
     knowledge: D1CampaignPlaybookKnowledgeStore,
     governance: D1CampaignPlaybookGovernanceStore,
-    methodology: ProductionMethodologyAgent,
+    methodology: ProductionMethodologyAgent | null,
     now: () => string = () => new Date().toISOString(),
   ) {
     this.knowledge = knowledge;
@@ -203,6 +203,7 @@ export class ProductionCampaignPlaybookGovernance {
     const releases = await this.governance.loadReleases();
     const current = releases.at(-1);
     if (!current) throw new Error("Methodology Agent requires one exact current Playbook release.");
+    if (!this.methodology) throw new Error("Методологию формирует управляющий Codex; встроенный агент удалён.");
     const candidate = await this.methodology.propose({
       outcomes,
       current_playbook: { release_id: current.release_id, release_version: current.release_version, content_digest: current.content_digest },

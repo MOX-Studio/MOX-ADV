@@ -5,7 +5,7 @@ import test from "node:test";
 const productionSource = await readFile(new URL("../app/P0Client.tsx", import.meta.url), "utf8");
 const dashboardStyles = await readFile(new URL("../app/production-dashboard.module.css", import.meta.url), "utf8");
 const currentContractSource = await readFile(new URL("../lib/pipeline-current-contract.ts", import.meta.url), "utf8");
-const pipelineDashboardSource = await readFile(new URL("../lib/pipeline-owner-dashboard.ts", import.meta.url), "utf8");
+const pipelineProductsSource = await readFile(new URL("../lib/pipeline-current-products.ts", import.meta.url), "utf8");
 const goalStageSummarySource = productionSource.slice(
   productionSource.indexOf("function GoalStageSummary"),
   productionSource.indexOf("function OwnerField"),
@@ -37,7 +37,7 @@ test("production stage cards switch the visible owner section without mutating w
   assert.match(productionSource, /useState<OwnerJourneyStageId \| null>/u);
   assert.match(productionSource, /<StageNavigation projection=\{projection\} selectedStage=\{activeStage\} onStage=\{chooseStage\}/u);
   assert.match(productionSource, /<button[\s\S]*aria-pressed=\{selectedStage === stage\.id\}[\s\S]*aria-controls="owner-stage-panel"/u);
-  for (const stage of ["goal", "findings", "strategy", "campaigns", "review"]) {
+  for (const stage of ["goal", "findings", "strategy", "campaigns"]) {
     assert.match(productionSource, new RegExp(`activeStage === "${stage}"`, "u"));
   }
   assert.doesNotMatch(productionSource, /function StageUnavailable|ЭТАП ЕЩЁ НЕ ОТКРЫТ/u);
@@ -56,13 +56,14 @@ test("Campaign Goal uses one atomic editor for the business goal, qualified resu
     assert.match(goalStageSummarySource, new RegExp(`name="${field}"`, "u"));
   }
   assert.match(goalStageSummarySource, /owner-goal-editor/u);
-  assert.match(goalStageSummarySource, /Изменить цель/u);
-  assert.match(goalStageSummarySource, /Сохранить и начать сбор сведений/u);
+  assert.match(goalStageSummarySource, /Редактировать/u);
+  assert.match(goalStageSummarySource, /Сохранить цель/u);
   assert.doesNotMatch(goalStageSummarySource, /criterionComplete \? "Завершено" : currentGoal \? "Требует уточнения" : "Не заполнено"/u);
   assert.doesNotMatch(goalStageSummarySource, /Что считаем успехом/u);
   const saveGoalIndex = productionSource.indexOf('pipeline_action: "CORRECT_GOAL"');
   const startEvidenceIndex = productionSource.indexOf('pipeline_action: "START"', saveGoalIndex);
-  assert.ok(saveGoalIndex > -1 && startEvidenceIndex > saveGoalIndex);
+  assert.ok(saveGoalIndex > -1);
+  assert.equal(startEvidenceIndex, -1, "saving Goal must not start an agent or a collection");
   assert.match(productionSource, /по цене не выше/u);
   assert.doesNotMatch(goalStageSummarySource, /goalField|editingField|Границы результата|knownConstraints/u);
   assert.doesNotMatch(productionSource, /GoalFormationSummary|GoalInterview|goal-agent|Рекомендация агента|Помочь сформулировать|Проверить на противоречия/u);
@@ -79,8 +80,8 @@ test("production omits redundant status and the removed top outcome summary", ()
 test("current production contract keeps publication and external writes denied", () => {
   assert.match(currentContractSource, /внешняя запись, публикация и расходы не разрешены/u);
   assert.doesNotMatch(currentContractSource, /"PUBLISH"|"DISPATCH_PACKAGE"|"CREATE_CAMPAIGN"/u);
-  assert.match(pipelineDashboardSource, /externalWrite: "DENIED"/u);
-  assert.match(pipelineDashboardSource, /publication: "NOT_AUTHORIZED"/u);
-  assert.match(pipelineDashboardSource, /impressions: 0/u);
-  assert.match(pipelineDashboardSource, /spendMicros: 0/u);
+  assert.match(pipelineProductsSource, /external_write: "DENIED"/u);
+  assert.match(pipelineProductsSource, /publication: "NOT_AUTHORIZED"/u);
+  assert.match(pipelineProductsSource, /impressions: 0/u);
+  assert.match(pipelineProductsSource, /spend_micros: 0/u);
 });

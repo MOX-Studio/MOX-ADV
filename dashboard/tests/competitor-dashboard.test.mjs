@@ -1,135 +1,119 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-
 import { projectCompetitorAnalysisForDashboard } from "../lib/competitor-dashboard.ts";
-import { buildFinancialCompetitorIntelligence } from "../lib/financial-competitor-intelligence.ts";
-import { buildPublicCompetitorAnalysis } from "../lib/public-competitor-analysis.ts";
+import { COMPETITOR_ASSESSMENT_SCHEMA } from "../lib/competitor-comparison.ts";
 
-const generatedAt = "2026-09-01T12:00:00.000Z";
-const model = {
-  product: "Участие со стендом в выставке ИННОПРОМ",
-  audience: "Промышленные компании",
-  value: "Организовать участие со стендом под ключ",
-  qualified_result: "Заявка на участие со стендом",
-  exclusions: "Продажа входных билетов",
+const scope = {
+  goal_revision_id: "goal-participation",
+  desired_outcome: "Заявки на участие в промышленной выставке",
+  qualified_action: "Компания готова обсудить участие со стендом",
+  advertised_offer: "Участие в промышленной выставке",
+  target_audience: "Промышленные компании",
   geography: "Россия",
-  offer_candidates: [{ label: "Участие со стендом в ИННОПРОМ" }],
-};
-const site = {
-  url: "https://expo.innoprom.com/",
-  title: "ИННОПРОМ",
-  description: "Главная промышленная выставка России",
-  text_excerpt: "Участие в выставке со стендом",
+  first_party_host: "our-expo.example",
 };
 
-test("projects competitor offers and latest BFO values as separate Dashboard evidence", async () => {
-  const publicAnalysis = await buildPublicCompetitorAnalysis({ model, site, generatedAt });
-  assert.ok(publicAnalysis);
-  const financial = await buildFinancialCompetitorIntelligence(publicAnalysis.financialInput);
-  const configured = JSON.parse(publicAnalysis.competitorResearchConfig);
-  const matrix = {
-    status: "AVAILABLE",
-    candidate_set: {
-      candidates: configured.candidates.map((candidate) => ({
-        competitor: candidate.competitor,
-        rationale: candidate.rationale,
-        exact_destinations: candidate.exactDestinations,
-      })),
-    },
-    rows: configured.candidates.map((candidate) => ({
-      competitor: candidate.competitor,
-      observed_offer_message: candidate.observedOfferMessage,
-      published_price: candidate.publishedPrice,
-      exact_landing: candidate.exactDestinations[0],
-    })),
-    limitations: ["Сравнение относится только к ограниченному набору."],
-  };
-
-  const projection = projectCompetitorAnalysisForDashboard({
-    competitor_matrix: matrix,
-    financial_competitor_intelligence: financial,
-    competitor_assessment: {
-      relations: configured.candidates.map((candidate) => ({
-        competitor: candidate.competitor,
-        relation: candidate.competitor.includes("Formika") ? "SUBSTITUTE_COMPETITOR" : "DIRECT_COMPETITOR",
-        evidence_url: candidate.exactDestinations[0],
-      })),
-    },
-  });
-
-  assert.equal(projection.status, "PARTIAL");
-  assert.equal(projection.competitorStatus, "AVAILABLE");
-  assert.equal(projection.financialStatus, "PARTIAL");
-  assert.equal(projection.candidateCount, 4);
-  assert.equal(projection.observedOfferCount, 4);
-  assert.deepEqual(projection.competitors.map((competitor) => ({
-    name: competitor.name,
-    status: competitor.observationStatus,
-    relation: competitor.competitiveRelation,
-  })), [
-    { name: "ИННОПРОМ / Formika Event", status: "OBSERVED", relation: "SUBSTITUTE_COMPETITOR" },
-    { name: "MKE EXPO", status: "OBSERVED", relation: "DIRECT_COMPETITOR" },
-    { name: "R2GROUP", status: "OBSERVED", relation: "DIRECT_COMPETITOR" },
-    { name: "STL EXPO", status: "OBSERVED", relation: "DIRECT_COMPETITOR" },
-  ]);
-  assert.match(projection.summary, /4 из 4 конкурентных предложений/u);
-  assert.deepEqual(projection.financialProfiles.map((profile) => ({
-    name: profile.name,
-    year: profile.reportingYear,
-    revenueRub: profile.revenueRub,
-    netProfitRub: profile.netProfitRub,
-  })), [
-    { name: "ООО «ФОРМИКА ИВЕНТ»", year: 2025, revenueRub: "1525361000", netProfitRub: "488617000" },
-    { name: "ООО «МКЕ»", year: 2025, revenueRub: "261896000", netProfitRub: "24426000" },
-    { name: "ООО «Р2ГРУПП»", year: 2024, revenueRub: "119391000", netProfitRub: "38057000" },
-    { name: "ООО «СТЛ ЭКСПО»", year: 2025, revenueRub: "359010000", netProfitRub: "1027000" },
-  ]);
-  assert.equal(projection.financialProfiles[0].role, "COMPANY_COMPETITOR");
-  assert.match(projection.financialProfiles[0].bfoUrl, /^https:\/\/bo\.nalog\.gov\.ru\/organizations-card\//u);
-  assert.match(projection.financialProfiles[0].rusprofileUrl, /^https:\/\/www\.rusprofile\.ru\//u);
-});
-
-test("distinguishes unobserved candidates from confirmed public offers", () => {
-  const projection = projectCompetitorAnalysisForDashboard({
+function snapshot() {
+  const offers = [
+    ["Industry Expo", "https://industry-expo.example/participation", "Участие в промышленной выставке", "DIRECT_COMPETITOR"],
+    ["Industrial Meetings", "https://meetings.example/participation", "Деловые встречи производителей с покупателями", "SUBSTITUTE_COMPETITOR"],
+    ["Stand Contractor", "https://stands.example/build", "Застройка стендов для выставок", "NOT_COMPETITOR"],
+    ["Our Expo", "https://our-expo.example/participation", "Наше участие в выставке", "DIRECT_COMPETITOR"],
+  ];
+  return {
     competitor_matrix: {
-      candidate_set: {
-        candidates: [
-          { competitor: "MKE EXPO", rationale: "Candidate", exact_destinations: ["https://mkeexpo.ru/innoprom"] },
-          { competitor: "R2GROUP", rationale: "Candidate", exact_destinations: ["https://r2group.ru/innoprom"] },
-          { competitor: "STL EXPO", rationale: "Candidate", exact_destinations: ["https://stlexpo.ru/uslugi/stendy-dlya-innoprom"] },
-        ],
-      },
-      rows: [
-        { competitor: "MKE EXPO", observed_offer_message: "Offer", exact_landing: "https://mkeexpo.ru/innoprom" },
-        { competitor: "R2GROUP", observed_offer_message: "Offer", exact_landing: "https://r2group.ru/innoprom" },
-      ],
+      status: "AVAILABLE",
+      candidate_set: { candidates: offers.map(([competitor, url]) => ({ competitor, rationale: "Initial candidate, relevance not yet established", exact_destinations: [url] })) },
+      rows: offers.map(([competitor, exact_landing, observed_offer_message]) => ({ competitor, exact_landing, observed_offer_message, observation_date: "2026-09-07T10:00:00Z", published_price: { status: "NOT_PUBLISHED", value: null } })),
+    },
+    competitor_assessment: {
+      schema_version: COMPETITOR_ASSESSMENT_SCHEMA,
+      comparison_scope: structuredClone(scope),
+      analyst: { actor_type: "AGENT", role: "EVIDENCE_ANALYST" },
+      relations: offers.map(([competitor, evidence_url, offer, relation]) => ({ competitor, evidence_url, relation, rationale: `Assessed purchase: ${offer}` })),
     },
     competitor_observations: [{
-      observed_at: "2026-09-01T11:58:00.000Z",
-      raw_quote: "MKE EXPO — проектирование и строительство стендов для ИННОПРОМ.",
-      scope: { observation_scope: "Exact public landing for MKE EXPO" },
-      limitations: ["Только указанная публичная страница."],
-      matrix_row: { competitor: "MKE EXPO" },
+      matrix_row: { competitor: "Industry Expo" }, observed_at: "2026-09-07T10:00:00Z", raw_quote: "Участие в промышленной выставке",
+      scope: { observation_scope: "Exact public participation page" }, limitations: ["Публичные сведения"],
     }],
-    financial_competitor_intelligence: { capability_status: "UNAVAILABLE" },
-  });
+  };
+}
 
-  assert.equal(projection.observedOfferCount, 2);
-  assert.match(projection.summary, /2 из 3 конкурентных предложений/u);
-  assert.deepEqual(projection.competitors.map((competitor) => competitor.observationStatus), ["OBSERVED", "OBSERVED", "UNAVAILABLE"]);
-  assert.equal(projection.competitors[0].observedAt, "2026-09-01T11:58:00.000Z");
-  assert.match(projection.competitors[0].evidenceQuote, /проектирование и строительство/u);
-  assert.equal(projection.competitors[0].observationScope, "Exact public landing for MKE EXPO");
-  assert.deepEqual(projection.competitors[0].limitations, ["Только указанная публичная страница."]);
-  assert.equal(projection.competitors[2].observedOffer, "");
-  assert.equal(projection.competitors[2].observedAt, null);
+test("shows only current evidence-bound competing offers, excluding contractors and the advertiser itself", () => {
+  const result = projectCompetitorAnalysisForDashboard(snapshot(), scope);
+  assert.deepEqual(result.competitors.map((item) => item.name), ["Industry Expo", "Industrial Meetings"]);
+  assert.equal(result.candidateCount, 2);
+  assert.equal(result.observedOfferCount, 2);
+  assert.equal(result.competitorStatus, "AVAILABLE");
+  assert.match(result.summary, /2 из 2/u);
+  assert.match(result.competitors[0].rationale, /Assessed purchase/u);
+  assert.equal(result.competitors[0].observedAt, "2026-09-07T10:00:00Z");
+  assert.equal(result.competitors[0].evidenceQuote, "Участие в промышленной выставке");
+  assert.equal(result.competitors[0].observationScope, "Exact public participation page");
+  assert.deepEqual(result.competitors[0].limitations, ["Публичные сведения"]);
 });
 
-test("keeps unavailable evidence explicit instead of presenting zero competitors", () => {
-  const projection = projectCompetitorAnalysisForDashboard({});
-  assert.equal(projection.status, "UNAVAILABLE");
-  assert.equal(projection.candidateCount, 0);
-  assert.equal(projection.observedOfferCount, 0);
-  assert.deepEqual(projection.competitors, []);
-  assert.deepEqual(projection.financialProfiles, []);
+test("unassessed, legacy and stale comparisons never make a configured candidate a confirmed competitor", () => {
+  for (const change of [
+    (value) => { delete value.competitor_assessment; },
+    (value) => { value.competitor_assessment.schema_version = "p0-pipeline-competitor-assessment-v1"; },
+    (value) => { value.competitor_assessment.comparison_scope.goal_revision_id = "previous-goal"; },
+    (value) => { value.competitor_assessment.comparison_scope.advertised_offer = "Застройка стендов"; },
+  ]) {
+    const value = snapshot();
+    change(value);
+    const result = projectCompetitorAnalysisForDashboard(value, scope);
+    assert.deepEqual(result.competitors, []);
+    assert.equal(result.competitorStatus, "UNAVAILABLE");
+    assert.match(result.summary, /пока не подтверждены/u);
+  }
+  assert.deepEqual(projectCompetitorAnalysisForDashboard(snapshot()).competitors, []);
+});
+
+test("requires the exact observed allowlisted page for every admitted competitive relation", () => {
+  for (const change of [
+    (value) => { value.competitor_assessment.relations[0].evidence_url = "https://unrelated.example/"; },
+    (value) => { value.competitor_matrix.rows = value.competitor_matrix.rows.filter((item) => item.competitor !== "Industry Expo"); },
+    (value) => { value.competitor_matrix.candidate_set.candidates[0].exact_destinations = []; },
+    (value) => { value.competitor_assessment.relations.push(value.competitor_assessment.relations[0]); },
+  ]) {
+    const value = snapshot();
+    change(value);
+    const result = projectCompetitorAnalysisForDashboard(value, scope);
+    assert.deepEqual(result.competitors.map((item) => item.name), ["Industrial Meetings"]);
+    assert.equal(result.observedOfferCount, 1);
+  }
+});
+
+test("financial profiles require a verified legal relationship to an admitted competitor", () => {
+  const value = snapshot();
+  value.financial_competitor_intelligence = {
+    capability_status: "PARTIAL",
+    legal_perimeter: { accepted_entities: [
+      { entity_id: "expo", evidence: [{ evidence_kind: "BRAND_OR_PRODUCT_RELATION", status: "VERIFIED", source_locator: "https://industry-expo.example/legal" }] },
+      { entity_id: "contractor", evidence: [{ evidence_kind: "BRAND_OR_PRODUCT_RELATION", status: "VERIFIED", source_locator: "https://stands.example/legal" }] },
+    ] },
+    profiles: [
+      { entity_id: "expo", legal_name: "ООО Выставка", role: "COMPETITOR", observations: [{ metric: "REVENUE", status: "AVAILABLE", value_rub: "100000", reporting_year: 2025, record_id: "r1" }] },
+      { entity_id: "contractor", legal_name: "ООО Подрядчик", role: "COMPETITOR", observations: [] },
+    ],
+    accepted_records: [{ record_id: "r1", entity_id: "expo", provenance: { source_locator: "https://bo.nalog.gov.ru/organizations-card/123" } }],
+  };
+  const result = projectCompetitorAnalysisForDashboard(value, scope);
+  assert.deepEqual(result.financialProfiles.map((item) => item.name), ["ООО Выставка"]);
+  assert.equal(result.financialStatus, "PARTIAL");
+  assert.equal(result.financialProfiles[0].revenueRub, "100000");
+  assert.equal(result.financialProfiles[0].reportingYear, 2025);
+  assert.match(result.financialProfiles[0].bfoUrl, /bo\.nalog\.gov\.ru/u);
+});
+
+test("all rejected candidates produce an honest empty state, not a zero-competition market claim", () => {
+  const value = snapshot();
+  value.competitor_assessment.relations.forEach((item) => { item.relation = "NOT_COMPETITOR"; });
+  const result = projectCompetitorAnalysisForDashboard(value, scope);
+  assert.equal(result.status, "UNAVAILABLE");
+  assert.equal(result.candidateCount, 0);
+  assert.equal(result.observedOfferCount, 0);
+  assert.deepEqual(result.competitors, []);
+  assert.match(result.summary, /пока не подтверждены/u);
 });

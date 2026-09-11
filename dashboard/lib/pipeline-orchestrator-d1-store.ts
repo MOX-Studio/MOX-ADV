@@ -1,6 +1,5 @@
 import {
   PIPELINE_ORCHESTRATOR_CONTRACT,
-  PIPELINE_ORCHESTRATOR_VERSION,
   assertPipelineRunState,
   verifyPipelineAuditTrail,
   verifyPipelineRunState,
@@ -52,7 +51,7 @@ function parse(row: PipelineRunRow | null) {
     if (persisted.current_stage !== "CAMPAIGN_GOAL") {
       throw new Error("Legacy pipeline passed Campaign Goal without a verifiable GoalRevision.");
     }
-    persisted.contract = { name: PIPELINE_ORCHESTRATOR_CONTRACT, version: PIPELINE_ORCHESTRATOR_VERSION };
+    persisted.contract = { name: PIPELINE_ORCHESTRATOR_CONTRACT, version: "1.2.0" };
     persisted.goal_formation = { status: "PENDING" };
   }
   const state = persisted as PipelineRunState;
@@ -69,9 +68,9 @@ export class D1PipelineRunStore implements PipelineRunStore {
 
   private async verifyState(state: PipelineRunState | null) {
     if (!state) return null;
-    await verifyPipelineRunState(state);
+    const current = await verifyPipelineRunState(state);
     await verifyPipelineAuditTrail(await this.loadAudit(state.run_id), state);
-    return state;
+    return current;
   }
 
   async load(runId: string) {

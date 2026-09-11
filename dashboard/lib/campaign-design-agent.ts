@@ -8,9 +8,10 @@ import {
 } from "./direct-projection-compiler.ts";
 import type { DirectCapabilitySnapshot } from "./campaign-fanout.ts";
 import type { DirectProjection } from "./direct-write.ts";
+import { isLocalCampaignGenerationProjection, type LocalCampaignGenerationProjection } from "./campaign-generation-profile.ts";
 
 export const CAMPAIGN_DESIGN_AGENT_CONTRACT = "mox-adv.p0.campaign-design-agent";
-export const CAMPAIGN_DESIGN_AGENT_VERSION = "1.0.0";
+export const CAMPAIGN_DESIGN_AGENT_VERSION = "1.1.0";
 export const CAMPAIGN_HYPOTHESIS_SCHEMA = "p0-campaign-hypothesis-v1";
 export const COMPILED_CAMPAIGN_PAIR_SCHEMA = "p0-compiled-campaign-pair-v1";
 
@@ -35,7 +36,7 @@ export type CampaignHypothesis = {
 
 export type CampaignDesignCandidate = {
   hypothesis: CampaignHypothesis;
-  projection: DirectProjection;
+  projection: DirectProjection | LocalCampaignGenerationProjection;
 };
 
 export type CampaignDesignEvidenceRequest = {
@@ -50,6 +51,7 @@ export type CampaignDesignStrategyDefect = {
 
 export type CampaignDesignModelResult =
   | { kind: "CANDIDATE"; candidate: CampaignDesignCandidate }
+  | { kind: "CONTENT_REJECTED"; violations: CampaignDesignViolation[] }
   | CampaignDesignEvidenceRequest
   | CampaignDesignStrategyDefect;
 
@@ -218,7 +220,11 @@ function validateCandidate(
       message: "Campaign Draft must identify the exact Strategy and Campaign Hypothesis revisions.",
     });
   }
-  if (request.confirmed_cost.status === "UNAVAILABLE") {
+  if (isLocalCampaignGenerationProjection(candidate?.projection)) {
+    if (candidate.projection.local_review.strategy_weekly_budget_rub !== Number(strategyDimension(request.strategy, "weekly_budget"))) {
+      violations.push({ source: "CAMPAIGN_DESIGN_AGENT", code: "STRATEGY_BUDGET_BINDING_INVALID", pointer: "/projection/local_review/strategy_weekly_budget_rub", message: "Campaign allocation must be bounded by the exact accepted Strategy budget." });
+    }
+  } else if (request.confirmed_cost.status === "UNAVAILABLE") {
     const expectedBudgetMicros = Number(strategyDimension(request.strategy, "weekly_budget")) * 1_000_000;
     const campaign = record(record(candidate?.projection).direct).campaign;
     const bidding = record(record(record(campaign).UnifiedCampaign).BiddingStrategy);
@@ -276,7 +282,7 @@ export async function runCampaignDesignPipeline(input: {
   strategy: AutonomousCampaignStrategy;
   analytics_evidence: { snapshot_id: string; evidence_ids: string[] };
   confirmed_cost: { status: "AVAILABLE" | "UNAVAILABLE"; evidence_ref: string | null };
-  capability_snapshot: DirectCapabilitySnapshot;
+  capability_snapshot: DirectCapabilitySnapshot | null;
   allowed_landing_hosts: string[];
   applicability_proofs: DirectFieldApplicabilityProof[];
   model: CampaignDesignModel;
@@ -325,6 +331,13 @@ export async function runCampaignDesignPipeline(input: {
       validateIssueResult(result);
       return { status: "STRATEGY_DEFECT", strategy_defect: result };
     }
+    if (result.kind === "CONTENT_REJECTED") {
+      if (!result.violations.length || result.violations.some((item) => !text(item.code) || !text(item.message))) {
+        throw new CampaignDesignPipelineError("CAMPAIGN_DESIGN_RESULT_INVALID", "Content rejection requires a consolidated violation package.");
+      }
+      repairViolations = result.violations;
+      continue;
+    }
     if (result.kind !== "CANDIDATE" || !result.candidate) throw new CampaignDesignPipelineError("CAMPAIGN_DESIGN_RESULT_INVALID", "Campaign Design Agent result does not match the closed contract.");
     const compiled = await compileCandidate(result.candidate, request, compilerInput);
     if (compiled.draft && compiled.violations.length === 0) {
@@ -356,4 +369,43 @@ export async function runCampaignDesignPipeline(input: {
     repairViolations = compiled.violations;
   }
   return { status: "TECHNICAL_FAILURE", violations: repairViolations };
+}
+
+/** Compile one supplied campaign. The caller owns reasoning and any repair; no model is invoked. */
+export async function compileCampaignCandidate(input: {
+  strategy: AutonomousCampaignStrategy;
+  analytics_evidence: { snapshot_id: string; evidence_ids: string[] };
+  confirmed_cost: { status: "AVAILABLE" | "UNAVAILABLE"; evidence_ref: string | null };
+  capability_snapshot: DirectCapabilitySnapshot | null;
+  allowed_landing_hosts: string[];
+  applicability_proofs: DirectFieldApplicabilityProof[];
+  candidate: CampaignDesignCandidate;
+}): Promise<Readonly<CompiledCampaignPair>> {
+  const defect = strategyDefect(input.strategy);
+  if (defect) throw Object.assign(new Error("Стратегия требует исправления."), { code: "STRATEGY_DEFECT", violations: defect.defects });
+  if (!text(input.analytics_evidence.snapshot_id) || !input.analytics_evidence.evidence_ids.length) throw new Error("Отсутствуют проверенные сведения.");
+  const request: CampaignDesignRequest = {
+    contract: { name: CAMPAIGN_DESIGN_AGENT_CONTRACT, version: CAMPAIGN_DESIGN_AGENT_VERSION },
+    attempt: 1, strategy: clone(input.strategy), analytics_evidence: clone(input.analytics_evidence),
+    confirmed_cost: clone(input.confirmed_cost), violations: [],
+    authority: { external_read: false, persistence: false, publication: false, spend: false },
+  };
+  const compiled = await compileCandidate(input.candidate, request, {
+    capability_snapshot: input.capability_snapshot, allowed_landing_hosts: input.allowed_landing_hosts,
+    applicability_proofs: input.applicability_proofs,
+  });
+  if (!compiled.draft || compiled.violations.length) throw Object.assign(new Error("Кампания не прошла проверку."), { code: "CAMPAIGN_CONTENT_INVALID", violations: compiled.violations });
+  const identity = {
+    hypothesis: input.candidate.hypothesis, publish_fingerprint: compiled.draft.publish_fingerprint,
+    strategy_revision_id: input.strategy.strategy_revision_id, analytics_evidence_snapshot_id: input.analytics_evidence.snapshot_id,
+  };
+  return deepFreeze({
+    schema_version: COMPILED_CAMPAIGN_PAIR_SCHEMA,
+    pair_revision_id: `campaign-pair:${(await digest(identity)).slice(7, 31)}`,
+    hypothesis: clone(input.candidate.hypothesis), draft: compiled.draft,
+    strategy_revision_id: input.strategy.strategy_revision_id, analytics_evidence_snapshot_id: input.analytics_evidence.snapshot_id,
+    design: { model_id: "codex", attempts: 1, repair_violations: [] },
+    economics: { confirmed_cost_status: input.confirmed_cost.status, budget_limited: true,
+      weekly_budget: Number(strategyDimension(input.strategy, "weekly_budget")), effectiveness_forecast: false },
+  });
 }

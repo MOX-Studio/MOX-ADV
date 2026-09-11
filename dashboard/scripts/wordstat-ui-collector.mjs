@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, rename, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 export const WORDSTAT_COLLECTION_PLAN_SCHEMA = "wordstat-ui-collection-plan-v1";
 export const WORDSTAT_OBSERVATION_BATCH_SCHEMA = "wordstat-ui-observation-batch-v1";
@@ -14,7 +15,7 @@ export const WORDSTAT_BATCH_STATUSES = Object.freeze([
   "UNAVAILABLE",
 ]);
 
-const MAXIMUM_SEEDS = 8;
+const MAXIMUM_SEEDS = 20;
 const MINIMUM_READ_INTERVAL_MS = 3_000;
 const RETRY_DELAYS_MS = Object.freeze([10_000, 30_000]);
 const RETRYABLE_FAILURES = new Set(["TRANSIENT_NETWORK", "LOAD_TIMEOUT", "TABLE_INCOMPLETE"]);
@@ -121,7 +122,7 @@ function positiveInteger(value, label) {
 export function buildWordstatCollectionPlan(input) {
   if (!input || typeof input !== "object" || !Array.isArray(input.seeds)
     || input.seeds.length === 0 || input.seeds.length > MAXIMUM_SEEDS) {
-    throw new WordstatCollectionError("PLAN_LIMIT_EXCEEDED", "Wordstat collection requires between one and eight formulations.");
+    throw new WordstatCollectionError("PLAN_LIMIT_EXCEEDED", "Wordstat collection requires between one and twenty formulations per phase.");
   }
   const seedIds = new Set();
   const seeds = input.seeds.map((seed, index) => {
@@ -162,6 +163,13 @@ export function buildWordstatCollectionPlan(input) {
   const fromDate = isoDate(input.scope?.dynamics?.from_date, "scope.dynamics.from_date");
   const toDate = isoDate(input.scope?.dynamics?.to_date, "scope.dynamics.to_date");
   if (fromDate > toDate) throw new WordstatCollectionError("PLAN_INVALID", "Wordstat dynamics date range is invalid.");
+  const requestedSurfaces = input.surfaces ?? WORDSTAT_SURFACES;
+  if (!Array.isArray(requestedSurfaces) || requestedSurfaces.length === 0
+    || requestedSurfaces.some((surface) => !WORDSTAT_SURFACES.includes(surface))
+    || new Set(requestedSurfaces).size !== requestedSurfaces.length) {
+    throw new WordstatCollectionError("PLAN_INVALID", "Wordstat collection surfaces must be a unique non-empty supported subset.");
+  }
+  const surfaces = WORDSTAT_SURFACES.filter((surface) => requestedSurfaces.includes(surface));
   const body = {
     schema_version: WORDSTAT_COLLECTION_PLAN_SCHEMA,
     seeds,
@@ -170,8 +178,8 @@ export function buildWordstatCollectionPlan(input) {
       device,
       dynamics: Object.freeze({ granularity: "MONTH", from_date: fromDate, to_date: toDate }),
     }),
-    surfaces: WORDSTAT_SURFACES,
-    limits: Object.freeze({ maximum_seeds: MAXIMUM_SEEDS, parallel_queries: 1 }),
+    surfaces: Object.freeze(surfaces),
+    limits: Object.freeze({ maximum_seeds: MAXIMUM_SEEDS, maximum_surface_reads: MAXIMUM_SEEDS * WORDSTAT_SURFACES.length, parallel_queries: 1 }),
   };
   return Object.freeze({ ...body, plan_digest: digest(body) });
 }
@@ -360,6 +368,28 @@ async function throttleRead(clock, wait, previousReadAt) {
   if (remaining > 0) await wait(remaining);
 }
 
+async function abortableRead(operation, signal) {
+  if (!signal) return operation();
+  const stopped = () => Object.assign(new Error("Wordstat collection was cancelled."), { code: "STOPPED" });
+  if (signal.aborted) throw stopped();
+  let onAbort;
+  const aborted = new Promise((_resolve, reject) => {
+    onAbort = () => reject(stopped());
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() => {
+        if (signal.aborted) throw stopped();
+        return operation();
+      }),
+      aborted,
+    ]);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+}
+
 function statusFor({ terminalState, observations, plannedCount }) {
   if (terminalState) return terminalState;
   if (observations.length === plannedCount) return "COMPLETE";
@@ -391,7 +421,7 @@ export async function collectAndSaveWordstatBatch(input) {
   }
   const now = input.now ?? (() => new Date().toISOString());
   const clock = input.clock ?? Date.now;
-  const wait = input.wait ?? ((milliseconds) => new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds)));
+  const wait = input.wait ?? ((milliseconds) => delay(milliseconds, undefined, { signal: input.signal }));
   const collectorVersion = normalizedText(input.collectorVersion);
   const parserVersion = normalizedText(input.uiParserVersion);
   const runId = safeIdentifier(input.runId, "runId");
@@ -409,17 +439,17 @@ export async function collectAndSaveWordstatBatch(input) {
 
   try {
     collection: for (const seed of plan.seeds) {
-      for (const surface of WORDSTAT_SURFACES) {
+      for (const surface of plan.surfaces) {
         let completed = false;
         for (let attempt = 1; attempt <= 3; attempt += 1) {
-          if (attempt > 1) await wait(RETRY_DELAYS_MS[attempt - 2]);
-          await throttleRead(clock, wait, previousReadAt);
-          previousReadAt = clock();
           let result;
           try {
-            result = await input.driver.readSurface({ plan, seed, surface, attempt, signal: input.signal });
+            if (attempt > 1) await abortableRead(() => wait(RETRY_DELAYS_MS[attempt - 2]), input.signal);
+            await abortableRead(() => throttleRead(clock, wait, previousReadAt), input.signal);
+            previousReadAt = clock();
+            result = await abortableRead(() => input.driver.readSurface({ plan, seed, surface, attempt, signal: input.signal }), input.signal);
           } catch (error) {
-            const failure = failureFrom(error);
+            const failure = input.signal?.aborted ? { state: "UNAVAILABLE", code: "STOPPED" } : failureFrom(error);
             result = { state: failure.state, failure_code: failure.code };
           }
           if (result?.state !== "COMPLETE") {
@@ -514,7 +544,7 @@ export async function collectAndSaveWordstatBatch(input) {
       failures.push({
         code: "CLEANUP_FAILED",
         affected_seed_ids: plan.seeds.map((seed) => seed.seed_id),
-        affected_surfaces: [...WORDSTAT_SURFACES],
+        affected_surfaces: [...plan.surfaces],
         attempt: 1,
         retry_after_seconds: null,
       });
@@ -533,7 +563,7 @@ export async function collectAndSaveWordstatBatch(input) {
     plan_digest: plan.plan_digest,
     batch_started_at: batchStartedAt,
     batch_finished_at: batchFinishedAt,
-    status: statusFor({ terminalState, observations, plannedCount: plan.seeds.length * WORDSTAT_SURFACES.length }),
+    status: statusFor({ terminalState, observations, plannedCount: plan.seeds.length * plan.surfaces.length }),
     observations,
     failures,
     cleanup_status: cleanupStatus,

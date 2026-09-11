@@ -74,16 +74,16 @@ test("bounded candidate set requires rationale and a finite exact-destination al
   assert.equal(value.competitor_set_rule.includes("прямых поставщика"), true);
   assert.deepEqual(value.candidates[0].exact_destinations, ["https://alpha.example/participate"]);
 
-  assert.throws(
-    () => createBoundedCompetitorCandidateSet({
+  assert.equal(
+    createBoundedCompetitorCandidateSet({
       rule: "Все конкуренты",
-      candidates: Array.from({ length: 11 }, (_, index) => ({
+      candidates: Array.from({ length: 31 }, (_, index) => ({
         competitor: `Конкурент ${index}`,
         rationale: "Сопоставимое предложение",
         exactDestinations: [`https://competitor-${index}.example/offer`],
       })),
-    }),
-    (error) => error instanceof BoundedCompetitorResearchError && error.code === "COMPETITOR_CANDIDATE_SET_UNBOUNDED",
+    }).candidates.length,
+    31,
   );
   assert.throws(
     () => createBoundedCompetitorCandidateSet({

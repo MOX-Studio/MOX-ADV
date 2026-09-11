@@ -1,0 +1,388 @@
+.portfolio,.strategy,.research{color:#302b30;min-width:0;font-size:14px;line-height:1.6}
+.portfolio h1{font-size:25px;margin:0}.header{display:flex;justify-content:space-between;align-items:center;gap:24px;margin:0 0 18px}.header h2{font-size:22px;margin:0}.header>div:last-child{text-align:right}.header>div:last-child>strong{font-size:18px}.header p{margin:7px 0 0}.header small,.portfolio small,.strategy small,.research small{display:block;color:#7d7280;font-size:12px;margin-top:5px;line-height:1.5}.summary{color:#716572;font-size:13px}
+.approach{font-size:19px;line-height:1.55;margin:0 0 24px;max-width:1000px}.selectionRationale{font-size:14px;line-height:1.6;color:#514551;margin:10px 0 16px;overflow-wrap:anywhere}.budgetStatement{border-left:3px solid #91aa97;padding:12px 18px;margin:24px 0;background:#f5f8f5}.budgetStatement>strong{font-size:16px}.budgetStatement p{margin:5px 0 0;color:#625866;font-size:13px}
+.campaigns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px;align-items:start;margin:22px 0}.campaign{border:1px solid #e7e0e7;border-radius:10px;background:#fff;min-width:0;overflow-wrap:anywhere}.campaign:only-child{grid-column:1/-1}.campaignHeader{display:flex;align-items:start;justify-content:space-between;gap:22px;padding:20px 22px 0}.campaignHeader h2{font-size:18px;line-height:1.4;margin:0}.campaignHeader small{font-size:12px}.campaignBudget{text-align:right;flex-shrink:0}.campaignBudget b{font-size:16px;white-space:nowrap}.campaignBudget small{max-width:140px;font-size:11px}.campaignBody{padding:0 22px 18px}.campaignRole{font-size:13px;line-height:1.55;margin:14px 0 8px;color:#665c69}.campaignCondition{font-size:13px;line-height:1.5;color:#765c3a;background:#fff9eb;padding:9px 12px;border-radius:5px}.group{border-top:1px solid #e7e0e7;padding-top:17px;margin-top:18px}.groupHeader{display:flex;align-items:baseline;justify-content:space-between;gap:16px}.groupHeader h3{font-size:14px;line-height:1.5;margin:0}.groupHeader>span{color:#817282;font-size:12px;white-space:nowrap}.groupRole{font-size:12px;line-height:1.6;color:#716572;margin:6px 0 12px}
+.ad{border:1px solid #e8e2e8;border-radius:7px;background:#fcfbfc;min-width:0;padding:15px 16px;margin:12px 0}.ad:last-child{margin-bottom:0}.adStamp{display:flex;gap:12px;justify-content:space-between;color:#806b53;font-size:11px;margin:0 0 8px;line-height:1.4}.creative{display:flex;gap:16px;align-items:start;min-width:0}.creative>div{min-width:0}.creative img{width:200px;max-width:40%;height:auto;object-fit:contain;border-radius:5px;flex-shrink:0}.creative small{margin:0;font-size:11px}.creative h4{font-size:17px;line-height:1.45;color:#215aa0;margin:4px 0 6px;font-weight:600}.creative p{font-size:14px;line-height:1.55;margin:0;white-space:pre-wrap}.ad a{overflow-wrap:anywhere;color:#775771}.ad>details{margin-top:10px}.ad>details>summary{font-size:12px}
+.fold{margin:18px 0;border:1px solid #e8e1e8;border-radius:8px;background:#fff;padding:0 18px;font-size:13px;line-height:1.65;min-width:0}.fold>summary{display:flex;align-items:center;gap:12px;list-style:none;padding:14px 0;font-size:13px;font-weight:500;cursor:pointer;color:#6f5c6b}.fold>summary::after,.innerDetails>summary::after{content:"";display:block;flex-shrink:0;width:10px;height:10px;margin-left:auto;background:linear-gradient(#9b8798,#9b8798) center/10px 1px no-repeat,linear-gradient(#9b8798,#9b8798) center/1px 10px no-repeat}.fold[open]>summary::after,.innerDetails[open]>summary::after{background-size:10px 1px,0 0}.fold>summary::-webkit-details-marker,.innerDetails>summary::-webkit-details-marker{display:none}.fold>summary span{font-size:11px;font-weight:400;color:#7d7280}.fold>article,.area>article{padding:15px 0;border-top:1px solid #ece6ec}.fold p{margin:8px 0}.fold h3{font-size:14px}.fold>ul{padding-left:20px}.fold>small{margin-bottom:14px}.innerDetails{margin:9px 0;min-width:0}.innerDetails>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;list-style:none;color:#756771;font-size:12px;padding:7px 0}.detailContent{padding:4px 0 8px;min-width:0;overflow-wrap:anywhere}.detailContent p{font-size:13px;line-height:1.6}.detailContent a{overflow-wrap:anywhere}.detailContent ul{padding-left:20px}.detailContent h3{font-size:13px}
+.technicalRecords{border-top:1px solid #eee7ed;padding:6px 0 16px;overflow-wrap:anywhere}.technicalRecords h2{font-size:18px;margin:18px 0 12px}.technicalRecords h3{font-size:14px;margin:12px 0 6px}.technicalRecords h4{font-size:13px;margin:8px 0}.recordSection{padding:12px 0;border-top:1px solid #ece6ec;min-width:0}.recordSection:first-child{border-top:0}.recordSection .recordSection{margin-left:12px;padding-left:14px;border-left:2px solid #eee8ee}.campaignRecords{padding:8px 0 20px;border-bottom:2px solid #e7e0e7}.technicalRecords .testData{margin-top:10px}.technicalRecords .recordSection>h3{color:#5d4e5c}.technicalRecords dl{margin:8px 0}.technicalRecords dd{margin:4px 0 12px}.technicalRecords dt{font-weight:600}
+.twoColumns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:25px}.facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:8px 0 12px}.facts>div{min-width:0}.facts dt{font-size:12px;color:#7d7280;font-weight:400}.facts dd{margin:4px 0 0;font-size:13px;color:#302b30;font-weight:600}.detailContent .phrases{display:flex;flex-wrap:wrap;gap:6px;list-style:none;padding:0;margin:4px 0 12px}.phrases li{border:1px solid #e8e1e8;border-radius:5px;background:#fcfafc;padding:3px 8px;max-width:100%;font-size:12px}
+.portfolio table,.strategy table,.research table,.testData table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:13px;line-height:1.6;margin:10px 0 16px}.portfolio th,.strategy th,.research th,.testData th{text-align:left;font-size:12px;color:#887a87;font-weight:500}.portfolio td,.portfolio th,.strategy td,.strategy th,.research td,.research th,.testData td,.testData th{padding:13px 20px 13px 0;border-bottom:1px solid #eee7ed;vertical-align:top;overflow-wrap:anywhere}.portfolio td:last-child,.strategy td:last-child,.research td:last-child,.testData td:last-child{padding-right:0}.directionTable th:first-child{width:28%}.directionTable th:nth-child(2){width:32%}.directionTable th:last-child{width:40%}.strategy .directionTable td{padding-top:18px;padding-bottom:18px}
+.goalAssessment{margin:16px 0;padding:12px 16px;border:1px solid #e8e1e8;border-radius:7px;background:#fff;font-size:13px;line-height:1.6;min-width:0;overflow-wrap:anywhere}.goalAssessment>p{margin:7px 0;color:#716572}.assessmentTitle{display:flex;align-items:center;justify-content:space-between;gap:16px}.assessmentTitle>strong{font-weight:500}.assessmentTitle>span{font-size:12px;color:#756771}.goalAssessment table{width:100%;table-layout:fixed;border-collapse:collapse}.goalAssessment td,.goalAssessment th{vertical-align:top;text-align:left;padding:10px 12px 10px 0;border-bottom:1px solid #eee7ed}.goalAssessment small{display:block;font-size:11px;color:#7d7280}.goalAssessment article{padding:8px 0}.goalAssessment .facts{margin-bottom:6px}.goalAssessment .facts dd>small{font-weight:400;margin-top:2px}
+.limits{margin:16px 0;padding:12px 16px;border:1px solid #e9dfcf;border-radius:7px;background:#fffcf7;font-size:13px;line-height:1.55}.limits>strong{font-size:13px}.limits ul{margin:8px 0;padding-left:18px}.limits article{margin:8px 0}.limits article p{margin:6px 0}.limits .targetLinks{padding-left:0}.blocker{color:#8c3838;font-size:12px}.conditions{font-size:12px;color:#716572;margin:8px 0 0;padding-left:18px}.targetLinks{list-style:none;padding:0;margin:6px 0;display:grid;gap:6px}.targetLinks a{color:#775771;text-underline-offset:3px}
+.testData{padding:10px 16px;margin:12px 0;background:#fffaf0;border:1px solid #eadabd;border-radius:7px;font-size:12px;line-height:1.65}.testData>strong{font-size:14px;color:#805c2b}.testData p{margin:7px 0 10px}.testData small{display:block;color:#987143;font-size:11px}.testData td:first-child{width:22%}.testData .innerDetails{margin:0}.testData strong{font-size:13px}
+.researchAreas{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.area{border-top:1px solid #ece6ec;padding:13px 0;min-width:0}.area>summary{display:flex;justify-content:space-between;font-weight:500;cursor:pointer}.area>summary span{color:#7d7280;font-size:12px}.finding{border-top:1px solid #ece6ec;padding:12px 0;min-width:0}.finding>summary{font-size:13px;line-height:1.5;cursor:pointer}.finding small{display:inline;margin-left:10px}.finding p{margin:8px 0}.research .header{margin-bottom:16px}.researchFindings,.researchLimits{border:1px solid #e8e1e8;border-radius:8px;background:#fff;padding:4px 18px;margin:12px 0}.researchFindings>.finding:first-child{border-top:0}.researchLimits h3{font-size:13px;margin:10px 0;font-weight:600}.findingEffect{font-size:13px;color:#716572;margin:5px 0}.research .findingEffect{display:block;font-size:13px;color:#716572;margin:5px 0 0}.research .fold .researchAreas{margin:4px 0 12px}.researchFindings .finding small{margin-left:0}
+/* Closed native details hide their descendants; campaign and group sections always remain visible. */
+details:is(.fold,.innerDetails,.area,.finding):not([open])>:not(summary){display:none!important}
+.portfolio :is(summary,a):focus-visible,.research :is(summary,a):focus-visible,.strategy :is(summary,a):focus-visible{outline:2px solid #92b8a3;outline-offset:3px}
+.researchTable th:first-child{width:47%}.researchTable th:last-child{width:53%}.researchTable td{padding-top:18px;padding-bottom:18px}.researchTable td>strong{font-size:13px;color:#736274}.researchTable td>p{margin:6px 0 9px;font-size:14px;line-height:1.6}.researchTable td>details{margin-top:8px}.researchTable .evidenceState{display:inline-block;color:#866b46;font-size:11px;margin:0 0 7px}.rowLimits{margin:12px 0 0;padding:0;list-style:none;color:#816b48;font-size:12px;line-height:1.6}.rowLimits li{padding-left:12px;border-left:2px solid #e6d7bb;margin:7px 0}
+/* Buyer roles and material explanations stay legible in the primary stage views. */
+.portfolio,.strategy{font-size:15px;line-height:1.65}
+.strategy .approach{font-size:19px;line-height:1.6;max-width:78ch}
+.strategy .directionTable th{font-size:13px;color:#716272}
+.strategy .directionTable td{font-size:16px;line-height:1.65;padding-top:20px;padding-bottom:20px}
+.strategy .directionRole{display:block;font-size:17px;font-weight:600;color:#342f35;max-width:37ch}
+.strategy .directionResponse{margin:0;font-size:16px;line-height:1.65}
+.strategy .directionReason{margin:0;font-size:15px;line-height:1.65;max-width:58ch}
+.strategy .budgetStatement p{font-size:15px;line-height:1.6}
+.strategy .goalAssessment,.portfolio .goalAssessment{font-size:15px;line-height:1.65}
+.strategy .assessmentTitle>span,.portfolio .assessmentTitle>span{font-size:14px}
+.campaignHeader h2{font-size:18px;font-weight:600;line-height:1.5}
+.campaignRole{font-size:17px;font-weight:600;line-height:1.6;color:#39323b;max-width:66ch;margin:16px 0 10px}
+.campaignCondition{font-size:15px;line-height:1.65}
+.groupHeader h3{font-size:17px;font-weight:600;line-height:1.5}
+.groupRole{font-size:15px;line-height:1.6;color:#5d5260;max-width:68ch;margin:7px 0 14px}
+.adStamp{font-size:13px;line-height:1.5}
+.creative h4{font-size:18px;line-height:1.5}
+.creative p{font-size:15px;line-height:1.65}
+.ad>details>summary{font-size:14px}
+.limits{padding:16px 20px;font-size:15px;line-height:1.65}
+.limits>strong{font-size:16px}
+.limits .limitGroups{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 36px;margin-top:10px}
+.limits .limitGroup{min-width:0;max-width:68ch}
+.limits .limitGroup:only-child{grid-column:1/-1}
+.limits .limitGroup h3{font-size:16px;line-height:1.5;margin:0 0 8px;color:#6e583b}
+.limits .limitGroup article{margin:10px 0}
+.limits .limitGroup p,.limits .limitGroup li{max-width:68ch;overflow-wrap:anywhere}
+.limits .blocker{font-size:14px}
+/* Research keeps one conclusion and application together; full qualifications are in the linked evidence. */
+.research .researchTable{font-size:16px;line-height:1.55}.research .researchTable th{font-size:14px;color:#655c64}.research .researchTable th:first-child{width:52%}.research .researchTable th:last-child{width:48%}.research .researchTable td{padding:20px 28px 20px 0}.research .researchTable td:last-child{padding-right:0}.research .researchTable td>strong{font-size:16px;color:#353136;font-weight:650}.research .researchTable td>p{font-size:16px;line-height:1.55;max-width:68ch;margin:7px 0 10px}.research .researchTable .evidenceState{font-size:13px;color:#775a32}.research .rowLimits{font-size:14px;line-height:1.55;max-width:68ch;color:#6b542f}.research .rowLimits li{margin:10px 0;padding-left:12px}.research .researchTable td>details{margin-top:10px}
+
+/* Owner summaries show the essential findings and choices in plain, readable rows. */
+.quietResearch,
+.quietStrategy,
+.quietPortfolio {
+  min-width: 0;
+  color: #302b30;
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+:is(.quietResearch, .quietStrategy, .quietPortfolio) .header {
+  align-items: flex-start;
+  margin-bottom: 22px;
+}
+
+:is(.quietResearch, .quietStrategy, .quietPortfolio) .header :is(h1, h2) {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.35;
+  font-weight: 600;
+}
+
+:is(.quietResearch, .quietStrategy, .quietPortfolio) .header > div:only-child {
+  text-align: left;
+}
+
+:is(.quietResearch, .quietStrategy, .quietPortfolio) .header :is(p, small) {
+  margin: 6px 0 0;
+  color: #6c626d;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.researchList {
+  margin: 0;
+}
+
+.researchRow {
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+  gap: 32px;
+  padding: 20px 0;
+  border-top: 1px solid #e9e3e9;
+}
+
+.researchRow > dt {
+  margin: 0;
+  color: #423844;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.researchCopy {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.researchCopy > p {
+  max-width: 78ch;
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.researchNotes {
+  max-width: 86ch;
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: #69583f;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.researchNotes > li + li {
+  margin-top: 5px;
+}
+
+.quietStrategy .approach {
+  max-width: 80ch;
+  margin: 0 0 26px;
+  font-size: 18px;
+  line-height: 1.6;
+}
+
+.strategyList {
+  margin: 0 0 24px;
+  border-bottom: 1px solid #e9e3e9;
+}
+
+.strategyRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 180px 150px;
+  align-items: baseline;
+  gap: 28px;
+  padding: 22px 0;
+  border-top: 1px solid #e9e3e9;
+}
+
+.directionName {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.directionName h3 {
+  margin: 0;
+  color: #342f35;
+  font-size: 20px;
+  line-height: 1.4;
+  font-weight: 600;
+}
+
+.directionName p {
+  max-width: 76ch;
+  margin: 6px 0 0;
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.directionMeta,
+.summaryMeta {
+  min-width: 0;
+  color: #6c626d;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.directionBudget,
+.summaryBudget {
+  color: #39313b;
+  font-size: 16px;
+  line-height: 1.5;
+  font-weight: 600;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.compactCampaigns {
+  margin: 24px 0;
+  border-bottom: 1px solid #e9e3e9;
+}
+
+.compactCampaign {
+  min-width: 0;
+  border-top: 1px solid #e9e3e9;
+  overflow-wrap: anywhere;
+}
+
+.compactCampaignSummary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 180px 150px 12px;
+  align-items: center;
+  gap: 28px;
+  padding: 22px 0;
+  list-style: none;
+  cursor: pointer;
+}
+
+.compactCampaignSummary::-webkit-details-marker {
+  display: none;
+}
+
+.compactCampaignSummary::after {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid #756771;
+  border-bottom: 1.5px solid #756771;
+  transform: rotate(45deg);
+  justify-self: center;
+}
+
+.compactCampaign[open] > .compactCampaignSummary::after {
+  transform: rotate(225deg);
+}
+
+.compactCampaignSummary:hover .campaignSummaryCopy h2 {
+  color: #6e506a;
+}
+
+.campaignSummaryCopy {
+  min-width: 0;
+}
+
+.campaignSummaryCopy h2 {
+  margin: 0;
+  color: #342f35;
+  font-size: 20px;
+  line-height: 1.4;
+  font-weight: 600;
+}
+
+.campaignSummaryCopy p {
+  max-width: 76ch;
+  margin: 6px 0 0;
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.compactCampaign > .campaignBody {
+  padding: 0 0 24px;
+}
+
+.compactCampaign > .campaignBody > .group:first-child {
+  margin-top: 0;
+}
+
+.compactCampaign:not([open]) > :not(summary) {
+  display: none !important;
+}
+
+.compactBudget {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
+  margin: 24px 0;
+  padding: 0;
+}
+
+.compactBudget > div {
+  min-width: 0;
+}
+
+.compactBudget dt {
+  margin: 0;
+  color: #6c626d;
+  font-size: 14px;
+  line-height: 1.5;
+  font-weight: 400;
+}
+
+.compactBudget dd {
+  margin: 6px 0 0;
+  color: #39313b;
+  font-size: 16px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+.compactBudget .budgetValue {
+  color: #342f35;
+  font-size: 22px;
+  line-height: 1.35;
+  font-weight: 600;
+}
+
+.compactBudget :is(small, dd > span) {
+  color: #6c626d;
+  font-size: 14px;
+  line-height: 1.5;
+  font-weight: 400;
+}
+
+.compactAssessment {
+  max-width: 88ch;
+  margin: 20px 0;
+  color: #5d515f;
+  font-size: 16px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.compactAssessment p {
+  margin: 0;
+}
+
+.compactLimits {
+  margin: 24px 0;
+  color: #53483e;
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.compactLimits > :is(h2, h3, strong) {
+  display: block;
+  margin: 0 0 12px;
+  color: #534438;
+  font-size: 16px;
+  line-height: 1.5;
+  font-weight: 600;
+}
+
+.compactLimit {
+  max-width: 88ch;
+  margin: 10px 0;
+  padding-left: 14px;
+  border-left: 2px solid #e4d4b7;
+  overflow-wrap: anywhere;
+}
+
+.compactLimit p {
+  margin: 0;
+}
+
+.compactLimit p + p {
+  margin-top: 5px;
+}
+
+.quietActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  margin: 24px 0 0;
+}
+
+.quietActions :is(a, button) {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.quietResearch :global(.findings-search-compact) > summary {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.quietResearch :global(.findings-search-compact) > summary > :global(.findings-brief-chevron) {
+  margin-left: auto;
+}
+
+:is(.quietResearch, .quietStrategy, .quietPortfolio, .quietActions) :is(summary, a, button):focus-visible {
+  outline: 2px solid #587c68;
+  outline-offset: 4px;
+}
+
+.prelaunchStatus {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px 24px;
+  margin: 0 0 24px;
+  padding: 18px 0;
+  border-top: 1px solid #e1e7e2;
+  border-bottom: 1px solid #e1e7e2;
+}
+.prelaunchStatus dt { color: #69726c; font-size: 12px; line-height: 1.5; }
+.prelaunchStatus dd { margin: 5px 0 0; color: #25392d; font-size: 16px; font-weight: 550; line-height: 1.4; }
+.prelaunchStatus [data-technical-status="BLOCKED"] dd,
+.prelaunchStatus [data-goal-support="CONSTRAINT_SHORTFALL"] dd { color: #9a302b; }

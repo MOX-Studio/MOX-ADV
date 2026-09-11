@@ -40,6 +40,31 @@ function transport(routes, resolved = ["93.184.216.34"]) {
   };
 }
 
+test("decodes declared Cyrillic encodings from HTTP or HTML instead of silently destroying competitor evidence", async () => {
+  const encode = (value) => Uint8Array.from([...value].map((char) => {
+    const code = char.codePointAt(0);
+    if (code >= 0x410 && code <= 0x44f) return code - 0x410 + 0xc0;
+    if (char === "Ё") return 0xa8;
+    if (char === "ё") return 0xb8;
+    return code;
+  }));
+  for (const httpCharset of [true, false]) {
+    const markup = `<meta charset="${httpCharset ? "utf-8" : "windows-1251"}"><title>Металлообработка</title><h1>Забронировать стенд</h1><p>Производители оборудования и приборов. Ёмкость рынка.</p>`;
+    const body = encode(markup);
+    const adapter = transport({ "https://expo.example/": new Response(new ReadableStream({ start(controller) {
+      controller.enqueue(body.slice(0, 12)); controller.enqueue(body.slice(12)); controller.close();
+    } }), { headers: { "content-type": httpCharset ? "text/html; charset=cp1251" : "text/html" } }) });
+    const result = await researchAllowlistedPublicCompetitorPage("https://expo.example/", {
+      allowedHosts: ["expo.example"], allowedDestinations: ["https://expo.example/"], policyId: "public-competitor-pages",
+      policyVersion: "2.0.0", policyUrl: "https://expo.example/robots.txt", observationScope: "Точная страница участия",
+    }, { ...adapter, now: () => "2026-09-07T10:00:00Z" });
+    assert.equal(result.page.title, "Металлообработка");
+    assert.match(result.page.text_excerpt, /Производители оборудования и приборов/u);
+    assert.match(result.page.text_excerpt, /Ёмкость рынка/u);
+    assert.doesNotMatch(result.page.text_excerpt, /�/u);
+  }
+});
+
 test("researches a bounded public first-party HTTPS target with redirects handled manually", async () => {
   const adapter = transport({
     "https://www.owner.example/": new Response(null, {

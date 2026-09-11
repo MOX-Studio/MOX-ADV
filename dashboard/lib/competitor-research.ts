@@ -8,7 +8,6 @@ import {
 
 export const BOUNDED_COMPETITOR_RESEARCH_SCHEMA = "p0-bounded-competitor-research-v1";
 export const NO_APPROVED_COMPETITOR_AD_SOURCE = "UNAVAILABLE_NO_APPROVED_SOURCE";
-const MAXIMUM_CANDIDATES = 10;
 const MAXIMUM_DESTINATIONS_PER_CANDIDATE = 3;
 const SHA256_DIGEST = /^sha256:[a-f0-9]{64}$/u;
 
@@ -310,8 +309,8 @@ export function createBoundedCompetitorCandidateSet(input: {
 }): CompetitorCandidateSet {
   const rule = requiredText(input.rule, "COMPETITOR_SET_RULE_REQUIRED", 1_000);
   assertSafeCompetitorObservationText(rule);
-  if (!Array.isArray(input.candidates) || input.candidates.length < 1 || input.candidates.length > MAXIMUM_CANDIDATES) {
-    fail("COMPETITOR_CANDIDATE_SET_UNBOUNDED", `Candidate set должен содержать от 1 до ${MAXIMUM_CANDIDATES} конкурентов.`);
+  if (!Array.isArray(input.candidates) || input.candidates.length < 1) {
+    fail("COMPETITOR_CANDIDATE_SET_UNBOUNDED", "Candidate set должен содержать хотя бы одно проверяемое предложение.");
   }
   const seenCompetitors = new Set<string>();
   const candidates = input.candidates.map((candidate) => {

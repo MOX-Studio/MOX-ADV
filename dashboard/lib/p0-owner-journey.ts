@@ -34,7 +34,6 @@ export const OWNER_JOURNEY_STAGES = [
   { id: "findings", label: "Что узнал агент" },
   { id: "strategy", label: "Стратегия" },
   { id: "campaigns", label: "Кампании" },
-  { id: "review", label: "Проверка публикации" },
 ] as const;
 
 export type OwnerJourneyStageId = typeof OWNER_JOURNEY_STAGES[number]["id"];
@@ -668,7 +667,7 @@ function preparedGoalInterviewQuestions(state: InternalState): OwnerGoalIntervie
 }
 
 function currentStage(state: InternalState): OwnerJourneyStageId {
-  if (state.package_review) return "review";
+  if (state.package_review) return "campaigns";
   if (state.strategy) return "campaigns";
   if (record(state.business_model).source === "REAL_SITE_RESEARCH_PLUS_OWNER_CONFIRMATION") return "strategy";
   if (state.business_model) return "findings";
@@ -1220,12 +1219,8 @@ export function projectDemandCostResearchForOwner(snapshot: unknown): OwnerJourn
   const cost = record(market.cost);
   const plan = record(market.research_plan);
   if (!Object.keys(frequency).length && !Object.keys(cost).length && !Object.keys(plan).length) return null;
-  const dimensions = list(plan.dimensions).map(record);
   const seeds = list(plan.seeds).map(record);
   const wordstat = projectWordstatForPresentation(frequency, plan, market.batch_finished_at);
-  const wordstatSourceLabel = frequency.source === "YANDEX_WORDSTAT_UI"
-    ? "Яндекс Wordstat · авторизованный интерфейс"
-    : "Яндекс Wordstat · официальное API";
   const formulations: NonNullable<OwnerJourneyProjection["demandCostResearch"]>["demand"]["formulations"] = wordstat.formulations.map((row, index) => ({
     category: row.formulation_role === "RETURNED_TOP_ROW"
       ? "Популярная формулировка Wordstat"
@@ -1239,20 +1234,6 @@ export function projectDemandCostResearchForOwner(snapshot: unknown): OwnerJourn
     observedAt: ownerText(row.observed_at, "Дата наблюдения недоступна", 100),
     provenance: row.source_label,
   }));
-  for (const dimension of dimensions) {
-    if (seeds.some((seed) => seed.dimension === dimension.dimension)) continue;
-    formulations.push({
-      category: ownerText(DEMAND_DIMENSION_LABELS[String(dimension.dimension)]),
-      phrase: "Формулировка недоступна из текущих подтверждённых данных",
-      frequency: "Частота недоступна",
-      status: "Формулировка недоступна",
-      method: wordstat.method_label,
-      operator: "Профиль формулировки недоступен",
-      scope: "Область наблюдения недоступна",
-      observedAt: "Дата наблюдения недоступна",
-      provenance: wordstatSourceLabel,
-    });
-  }
   const demandStatus = frequency.status === "AVAILABLE" ? "Доступно" as const : frequency.status === "PARTIAL" ? "Частично" as const : "Недоступно" as const;
   const observed = record(frequency.observed_unique_count).value;
   const planScope = record(plan.scope);
@@ -1269,8 +1250,8 @@ export function projectDemandCostResearchForOwner(snapshot: unknown): OwnerJourn
     demand: {
       status: demandStatus,
       conclusion: observed === null || observed === undefined
-        ? "Наблюдаемая нижняя граница спроса недоступна; это не нулевой спрос."
-        : `Наблюдаемая нижняя граница: ${Number(observed).toLocaleString("ru-RU")} запросов в возвращённых верхних строках.`,
+        ? "Частотность запросов недоступна; это не нулевой спрос."
+        : `Сумма частот исследованных фраз: ${Number(observed).toLocaleString("ru-RU")} запросов в возвращённых верхних строках.`,
       source: frequency.source === "YANDEX_WORDSTAT_UI"
         ? "Яндекс Wordstat · авторизованный интерфейс · headless Playwright"
         : "Яндекс Wordstat · официальное API",
@@ -1283,7 +1264,7 @@ export function projectDemandCostResearchForOwner(snapshot: unknown): OwnerJourn
       seasonality: seasonality.business_context
         ? `${ownerText(seasonality.business_context)} · месячная динамика ${ownerText(seasonality.from_date, "")} — ${ownerText(seasonality.to_date, "")}`
         : "Сезонный бизнес-контекст недоступен; месячная динамика сохраняется отдельно.",
-      limitation: "Это нижняя граница возвращённых строк, а не число людей, кликов, показов или прогноз бюджета.",
+      limitation: "Частоты фраз могут пересекаться. Сумма не показывает уникальный спрос, число людей, кликов или прогноз бюджета.",
       gaps: wordstat.gaps,
       nextAction: wordstat.next_action,
     },
@@ -2097,7 +2078,7 @@ function outcome(view: InternalView, stage: OwnerJourneyStageId, unknowns: strin
   }
   if (stage === "findings") return { status: unknowns.length ? "blocked" : "ready", headline: "Агент собрал понимание бизнеса", summary: "Проверьте только выводы, которые существенно влияют на рекламу." };
   if (stage === "strategy") return { status: "ready", headline: "Стратегия подготовлена", summary: "Рекомендации уже заполнены; подтвердите бизнес-смысл одним решением." };
-  if (stage === "campaigns") {
+  if (stage === "campaigns" && !state.package_review) {
     const viabilityOutcome = record(record(state.recommendation_set).viability_outcome);
     if (viabilityOutcome.status === "NO_VIABLE_DRAFTS") {
       const repairs = list(viabilityOutcome.repair_plan).map((item) => ownerText(record(item).action, "", 240)).filter(Boolean).slice(0, 3);
@@ -2143,7 +2124,7 @@ function recommendation(view: InternalView, stage: OwnerJourneyStageId): OwnerJo
     return { headline: ownerText(record(state.business_model).product, "Подтвердить рекламный фокус"), rationale: ownerText(record(state.business_model).value, "Агент собрал доступные факты и отделил неизвестное.") };
   }
   if (stage === "strategy") return { headline: "Утвердить подготовленную стратегию", rationale: "Агент заполнил discoverable факты; от владельца требуется только материальное бизнес-решение." };
-  if (stage === "campaigns") return { headline: "Принять готовые к проверке варианты", rationale: "Жёсткие ограничения применены до сравнительной оценки; заблокированные варианты не попадут в пакет." };
+  if (stage === "campaigns" && !view.state.package_review) return { headline: "Принять готовые к проверке варианты", rationale: "Жёсткие ограничения применены до сравнительной оценки; заблокированные варианты не попадут в пакет." };
   if (state.package_corrections.some((correction) => correction.status === "HUMAN_GATE_REQUIRED")) {
     return { headline: "Подтвердить подготовленное исправление", rationale: "Новая формулировка прошла тот же бизнес-редактор и полную проверку, но исходный отказ и новое решение остаются раздельными." };
   }

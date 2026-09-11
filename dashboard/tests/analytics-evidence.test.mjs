@@ -417,7 +417,7 @@ test("persists official scoped demand and qualified cost inside the content-addr
   assert.equal(snapshot.market_evidence.research_plan.plan_id, researchPlan.plan_id);
   assert.ok(snapshot.market_evidence.research_plan.seeds.length >= 4);
   assert.equal(snapshot.market_evidence.frequency.status, "AVAILABLE");
-  assert.deepEqual(snapshot.market_evidence.frequency.observed_unique_count, { value: 67, semantics: "LOWER_BOUND_OBSERVED_TOP_ROWS" });
+  assert.deepEqual(snapshot.market_evidence.frequency.observed_unique_count, { value: 80, semantics: "SUM_OBSERVED_PHRASE_FREQUENCIES" });
   const canonicalObservation = snapshot.market_evidence.frequency.canonical_observations[0];
   assert.equal(canonicalObservation.method, "top_requests");
   assert.deepEqual(canonicalObservation.region_names, ["Москва"]);
@@ -923,4 +923,34 @@ test("redacts credential and PII patterns and bounds raw values before client or
   const record = result.evidence.find((item) => item.source_kind === "first_party_web");
   assert.equal(record.raw.bounded.truncated, true);
   assert.ok(JSON.stringify(record.raw.value).length <= 1_300);
+});
+
+test('goal-scoped business research is sealed with independently collected sources and rejects tampering', async () => {
+  const { createCurrentGoal } = await import('../lib/goal-revision-lifecycle.ts');
+  const { QUALIFIED_REQUEST_COUNTING_POLICY } = await import('../lib/goal-revision.ts');
+  const { buildFindingsResearchPlan } = await import('../lib/findings-research.ts');
+  const input = fixture();
+  const current = await createCurrentGoal({ owner_key: 'owner', desired_outcome: 'Продажа участия', qualified_action: 'Квалифицированный запрос', customer_geography: 'Россия', counting_policy: QUALIFIED_REQUEST_COUNTING_POLICY,
+    success_criterion: { target_count: 10, deadline: '2027-06-30', max_result_cost_rub: 30000 }, created_at: input.generatedAt });
+  input.model.goal_research_scope = current.revision;
+  input.model.business_research = { schema_version: 'p0-findings-research-v1', plan: buildFindingsResearchPlan(current.revision), observations: [{ area: 'product', field: 'product', value: 'Промышленная выставка', quote: input.site.pages[0].text_excerpt, source_url: input.site.url, applicability: 'CURRENT', limitation: 'Опубликовано на сайте' }], sources: [{ url: input.site.url, text: input.site.pages[0].text_excerpt }], gaps: [], attempts: [], observed_at: input.generatedAt };
+  const snapshot = await buildAnalyticsEvidence(input);
+  assert.equal(await verifyAnalyticsEvidenceSnapshot(snapshot), true);
+  const changed = structuredClone(snapshot); changed.business_research.observations[0].value = 'Другое предложение';
+  assert.equal(await verifyAnalyticsEvidenceSnapshot(changed), false);
+  const broken = structuredClone(snapshot); broken.business_research.sources[0].text = 'Нет такого факта';
+  assert.equal(await verifyAnalyticsEvidenceSnapshot(broken), false);
+});
+
+test("multiple public copy spans keep exact first-party facts and reject invented or financial values", async () => {
+  const input = fixture();
+  input.site.pages[0].text_excerpt += " Стандарт: площадь от 9 м². Бизнес: площадь от 20 м².";
+  input.model.copy_facts = ["Стандарт: площадь от 9 м².", "Бизнес: площадь от 20 м²."].map(quote => ({ predicate: "offer", quote, source_url: input.site.url }));
+  const result = await buildAnalyticsEvidence(input);
+  assert.equal(await verifyAnalyticsEvidenceSnapshot(result), true);
+  for (const fact of input.model.copy_facts) assert.ok(result.claims.some(c => c.predicate === "offer" && c.normalized.value === fact.quote.normalize("NFKC")));
+  for (const changes of [{ quote: "Гарантируем 30 продаж" }, { source_url: "https://external.example/" }, { predicate: "average_sale_value_rub" }]) {
+    const invalid = structuredClone(input); Object.assign(invalid.model.copy_facts[0], changes);
+    await assert.rejects(buildAnalyticsEvidence(invalid), error => error.code === "PUBLIC_COPY_FACT_UNSUPPORTED");
+  }
 });

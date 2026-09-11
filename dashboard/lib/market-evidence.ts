@@ -14,8 +14,11 @@ export const WORDSTAT_ENDPOINTS = {
 
 const WORDSTAT_METHODS = ["top_requests", "dynamics", "regions"] as const;
 const WORDSTAT_DEVICES = new Set(["all", "desktop", "phone", "tablet"]);
-const WORDSTAT_MAXIMUM_SEEDS = 8;
-const WORDSTAT_MAXIMUM_PROVIDER_CALLS = 24;
+export const WORDSTAT_INITIAL_DISCOVERY_SEED_LIMIT = 20;
+export const WORDSTAT_EXPANSION_SEED_LIMIT = 20;
+export const WORDSTAT_VERIFICATION_SEED_LIMIT = 8;
+const WORDSTAT_MAXIMUM_SEEDS = WORDSTAT_INITIAL_DISCOVERY_SEED_LIMIT;
+const WORDSTAT_MAXIMUM_PROVIDER_CALLS = WORDSTAT_MAXIMUM_SEEDS * WORDSTAT_METHODS.length;
 
 export const WORDSTAT_SCOPE_ENDPOINT = `https://${WORDSTAT_API_HOST}/v1/getRegionsTree`;
 
@@ -68,18 +71,27 @@ export type WordstatSeed = {
   region_ids: number[];
   region_names: string[];
   device: "all" | "desktop" | "phone" | "tablet";
+  relevance_tokens?: string[];
+  collection_purpose?: "DISCOVERY" | "OPERATOR_VERIFICATION" | "SEASONALITY_VERIFICATION";
+  discovery_depth?: 0 | 1;
+  parent_seed_id?: string | null;
 };
 export type WordstatCall = {
   call_id: string;
   batch_id: string;
+  collection_id?: string;
   seed_id: string;
   cluster_id: string;
   method: WordstatMethod;
+  provider_surface?: "TOP_POPULAR" | "TOP_SIMILAR" | "DYNAMICS" | "REGIONS";
   endpoint: string;
   requested_at: string;
   status: "AVAILABLE" | "UNAVAILABLE";
   operator_profile: WordstatOperatorProfile;
   canonical_phrase: string;
+  collection_purpose?: NonNullable<WordstatSeed["collection_purpose"]>;
+  discovery_depth?: WordstatSeed["discovery_depth"];
+  parent_seed_id?: string | null;
   period: WordstatSeed["dynamics_period"] | null;
   from_date: string | null;
   to_date: string | null;
@@ -102,10 +114,22 @@ export type WordstatObservationBatch = {
   declared_window: string;
   source_window_end: string;
   calls: WordstatCall[];
+  discovery?: {
+    initial_seed_count: number;
+    expansion_seed_count: number;
+    verification_seed_count: number;
+    waves_completed: number;
+    stop_reason: "SATURATED"
+      | "EXPANSION_LIMIT_REACHED"
+      | "NO_EXPANSION_CANDIDATES"
+      | "EXPANSION_PHASE_UNAVAILABLE"
+      | "OPERATOR_VERIFICATION_UNAVAILABLE"
+      | "SEASONALITY_VERIFICATION_UNAVAILABLE";
+  };
 };
 
 export const DEMAND_COST_RESEARCH_PLAN_SCHEMA = "demand-cost-research-plan-v1";
-export type DemandSeedDimension = "OFFER_LANGUAGE" | "CUSTOMER_PROBLEM" | "HIGH_INTENT_ACTION" | "BRAND" | "NON_BRAND";
+export type DemandSeedDimension = "OFFER_LANGUAGE" | "CUSTOMER_PROBLEM" | "HIGH_INTENT_ACTION" | "BRAND" | "NON_BRAND" | "AUDIENCE";
 export type DemandFormulationProvenance = {
   dimension: DemandSeedDimension;
   input_index: number;
@@ -117,8 +141,11 @@ export type DemandCostResearchPlan = {
   plan_id: string;
   generated_at: string;
   quota: {
-    maximum_seed_formulations: 8;
-    maximum_provider_calls: 24;
+    maximum_seed_formulations: number;
+    maximum_provider_calls: number;
+    maximum_expansion_seed_formulations: number;
+    maximum_verification_seed_formulations: number;
+    maximum_ui_surface_reads: number;
     planned_seed_formulations: number;
     planned_provider_calls: number;
   };
@@ -194,6 +221,82 @@ function boundedPhrase(value: unknown) {
   return selected.join(" ");
 }
 
+const SEARCH_EDGE_STOP_WORDS = new Set([
+  "без", "в", "во", "для", "до", "из", "к", "ко", "на", "над", "о", "об", "от", "по", "под", "при", "про", "с", "со", "у",
+]);
+const SEARCH_CONNECTORS = new Set(["в", "на", "для", "по", "под"]);
+const TRAILING_CALL_TO_ACTIONS = new Set(["заказать", "оставить", "отправить", "подать", "получить", "рассчитать", "стать", "узнать"]);
+const COMPLETED_ACTION_PREFIXES = new Set(["заполненная", "заполненный", "оставленная", "оставленный", "отправленная", "отправленный", "полученная", "полученный"]);
+const GENERIC_SEARCH_INTENT_TOKENS = new Set([
+  "бизнес", "заявка", "заказать", "компания", "купить", "нужно", "оставить", "отправить", "оформить", "подать", "подача", "получить",
+  "руководитель", "сколько", "стать", "стоимость", "требуется", "участие", "участвовать", "хочу", "цена",
+].map(demandToken));
+const NON_COMMERCIAL_DEMAND_TOKENS = new Set([
+  "принял", "примет", "участвовал", "участвовала", "участвовали", "участвует",
+].map(demandToken));
+
+function searchWords(value: unknown) {
+  return boundedPhrase(value).split(/\s+/u).filter(Boolean);
+}
+
+function searchPhrase(value: unknown, maximumWords = 7) {
+  const words = searchWords(value);
+  const trailingAction = words.findIndex((word, index) => index >= 3
+    && TRAILING_CALL_TO_ACTIONS.has(word.toLocaleLowerCase("ru-RU")));
+  return words.slice(0, trailingAction >= 0 ? trailingAction : undefined).slice(0, maximumWords).join(" ");
+}
+
+function intentSearchPhrase(value: unknown) {
+  const words = searchWords(value);
+  while (words.length && COMPLETED_ACTION_PREFIXES.has(words[0].toLocaleLowerCase("ru-RU"))) words.shift();
+  const transportBoundary = words.findIndex((word, index) => index >= 2
+    && ["через", "посредством"].includes(word.toLocaleLowerCase("ru-RU")));
+  return words.slice(0, transportBoundary >= 0 ? transportBoundary : undefined).slice(0, 6).join(" ");
+}
+
+function mergeSearchPhrases(primary: string, domainPhrase: string, maximumWords = 7) {
+  const seen = new Set<string>();
+  return [...searchWords(primary), ...searchWords(domainPhrase)]
+    .filter((word) => {
+      const key = demandToken(word);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, maximumWords)
+    .join(" ");
+}
+
+function searchAnchorTokens(value: unknown) {
+  return [...new Set(searchWords(value)
+    .map(demandToken)
+    .filter((token) => token.length >= 3
+      && !GENERIC_SEARCH_INTENT_TOKENS.has(token)
+      && !SEARCH_EDGE_STOP_WORDS.has(token)))];
+}
+
+function offerSearchPhrases(value: unknown) {
+  const full = searchPhrase(value);
+  if (!full) return [];
+  const words = full.split(/\s+/u);
+  const phrases = [full];
+  const trigram = words.slice(0, -2).map((_, index) => words.slice(index, index + 3))
+    .find((parts) => !SEARCH_EDGE_STOP_WORDS.has(parts[0].toLocaleLowerCase("ru-RU"))
+      && !SEARCH_EDGE_STOP_WORDS.has(parts.at(-1)!.toLocaleLowerCase("ru-RU")));
+  if (trigram) phrases.push(trigram.join(" "));
+  const first = words[0];
+  const last = words.at(-1);
+  const connector = words.find((word, index) => index > 0 && index < words.length - 1
+    && SEARCH_CONNECTORS.has(word.toLocaleLowerCase("ru-RU")));
+  if (first && connector && last) phrases.push(`${first} ${connector} ${last}`);
+  const bigram = words.slice(0, -1).map((_, index) => words.slice(index, index + 2))
+    .find((parts) => !SEARCH_EDGE_STOP_WORDS.has(parts[0].toLocaleLowerCase("ru-RU"))
+      && !SEARCH_EDGE_STOP_WORDS.has(parts[1].toLocaleLowerCase("ru-RU"))
+      && parts.join(" ") !== trigram?.slice(0, 2).join(" "));
+  if (bigram) phrases.push(bigram.join(" "));
+  return [...new Map(phrases.map((phrase) => [normalizedText(phrase).toLocaleLowerCase("ru-RU"), phrase])).values()];
+}
+
 function plusPhrase(value: string) {
   return value.split(/\s+/u).filter(Boolean).map((item) => `+${item}`).join(" ");
 }
@@ -204,6 +307,7 @@ export async function buildDemandCostResearchPlan(input: {
   customerProblems: string[];
   highIntentActions: string[];
   brandTerms: string[];
+  audienceTerms?: string[];
   exclusions: string[];
   regionIds: number[];
   regionNames: string[];
@@ -212,6 +316,7 @@ export async function buildDemandCostResearchPlan(input: {
   dynamicsFromDate: string;
   dynamicsToDate: string;
   minimumClickSample?: number;
+  semanticExpansion?: boolean;
 }): Promise<DemandCostResearchPlan> {
   if (!Number.isFinite(Date.parse(input.generatedAt))) throw new Error("Demand research plan requires a generated timestamp.");
   const providerScope = validateWordstatProviderScope({
@@ -224,10 +329,48 @@ export async function buildDemandCostResearchPlan(input: {
     || input.dynamicsFromDate > input.dynamicsToDate) {
     throw new Error("Demand research plan requires a valid bounded seasonality window.");
   }
-  const offer = boundedPhrase(input.offerLanguage);
+  const semanticExpansion = input.semanticExpansion === true;
+  const maximumInitialSeeds = semanticExpansion ? WORDSTAT_INITIAL_DISCOVERY_SEED_LIMIT : 8;
+  const offer = searchPhrase(input.offerLanguage);
   if (!offer) throw new Error("Demand research plan requires offer language.");
-  const brandTokens = new Set(input.brandTerms.flatMap((value) => boundedPhrase(value).toLocaleLowerCase("ru-RU").split(/\s+/u)).filter(Boolean));
-  const nonBrandOffer = offer.split(/\s+/u).filter((word) => !brandTokens.has(word.toLocaleLowerCase("ru-RU"))).join(" ") || offer;
+  const brandPhrases = input.brandTerms.map((value) => searchPhrase(value, 4)).filter(Boolean);
+  const brandTokens = new Set(brandPhrases.flatMap((value) => value.toLocaleLowerCase("ru-RU").split(/\s+/u)).filter(Boolean));
+  const nonBrandOffer = searchPhrase(offer.split(/\s+/u).filter((word) => !brandTokens.has(word.toLocaleLowerCase("ru-RU"))).join(" ")) || offer;
+  const nonBrandVariants = offerSearchPhrases(nonBrandOffer).slice(0, 3);
+  const intentDomainPhrase = nonBrandVariants.find((phrase) => searchAnchorTokens(phrase).length) ?? nonBrandOffer;
+  const intentCandidates = input.highIntentActions.map((value, index) => ({
+    dimension: "HIGH_INTENT_ACTION" as const,
+    phrase: mergeSearchPhrases(intentSearchPhrase(value), intentDomainPhrase, 7),
+    provenance: { dimension: "HIGH_INTENT_ACTION" as const, input_index: index, source_phrase: normalizedText(value) },
+  }));
+  const brandCandidates = brandPhrases.map((phrase, index) => ({
+    dimension: "BRAND" as const,
+    phrase,
+    provenance: { dimension: "BRAND" as const, input_index: index, source_phrase: normalizedText(input.brandTerms[index]) },
+  }));
+  const customerProblemCandidates = input.customerProblems.flatMap((value, index) => (semanticExpansion
+    ? offerSearchPhrases(searchPhrase(value, 6)).slice(0, 2)
+    : [searchPhrase(value, 6)]).map((phrase) => ({
+      dimension: "CUSTOMER_PROBLEM" as const,
+      phrase,
+      provenance: { dimension: "CUSTOMER_PROBLEM" as const, input_index: index, source_phrase: normalizedText(value) },
+    })));
+  const audienceCandidates = (semanticExpansion ? input.audienceTerms ?? [] : []).flatMap((value, index) => offerSearchPhrases(searchPhrase(value, 5)).slice(0, 2).map((phrase) => ({
+    dimension: "AUDIENCE" as const,
+    phrase,
+    provenance: { dimension: "AUDIENCE" as const, input_index: index, source_phrase: normalizedText(value) },
+  })));
+  const commercialCandidates = (semanticExpansion ? nonBrandVariants : []).filter((phrase) => searchAnchorTokens(phrase).length).slice(0, 2)
+    .flatMap((phrase, index) => ["стоимость", "цена"].map((modifier) => ({
+      dimension: "HIGH_INTENT_ACTION" as const,
+      phrase: searchPhrase(`${phrase} ${modifier}`),
+      provenance: { dimension: "HIGH_INTENT_ACTION" as const, input_index: input.highIntentActions.length + index, source_phrase: `${phrase} · ${modifier}` },
+    })));
+  const brandOfferCandidates = brandPhrases.slice(0, 2).map((brand, index) => ({
+    dimension: "BRAND" as const,
+    phrase: searchPhrase(`${brand} ${nonBrandVariants[1] ?? nonBrandOffer}`),
+    provenance: { dimension: "BRAND" as const, input_index: index, source_phrase: normalizedText(input.brandTerms[index]) },
+  }));
   const candidates: Array<{
     dimension: DemandSeedDimension;
     phrase: string;
@@ -238,26 +381,17 @@ export async function buildDemandCostResearchPlan(input: {
       phrase: offer,
       provenance: { dimension: "OFFER_LANGUAGE", input_index: 0, source_phrase: normalizedText(input.offerLanguage) },
     },
-    ...input.customerProblems.map((value, index) => ({
-      dimension: "CUSTOMER_PROBLEM" as const,
-      phrase: boundedPhrase(`${value} ${nonBrandOffer}`),
-      provenance: { dimension: "CUSTOMER_PROBLEM" as const, input_index: index, source_phrase: normalizedText(value) },
+    ...nonBrandVariants.map((phrase) => ({
+      dimension: "NON_BRAND" as const,
+      phrase,
+      provenance: { dimension: "NON_BRAND" as const, input_index: 0, source_phrase: normalizedText(input.offerLanguage) },
     })),
-    ...input.highIntentActions.map((value, index) => ({
-      dimension: "HIGH_INTENT_ACTION" as const,
-      phrase: boundedPhrase(`${value} ${nonBrandOffer}`),
-      provenance: { dimension: "HIGH_INTENT_ACTION" as const, input_index: index, source_phrase: normalizedText(value) },
-    })),
-    ...input.brandTerms.map((value, index) => ({
-      dimension: "BRAND" as const,
-      phrase: boundedPhrase(value),
-      provenance: { dimension: "BRAND" as const, input_index: index, source_phrase: normalizedText(value) },
-    })),
-    {
-      dimension: "NON_BRAND",
-      phrase: nonBrandOffer,
-      provenance: { dimension: "NON_BRAND", input_index: 0, source_phrase: normalizedText(input.offerLanguage) },
-    },
+    ...intentCandidates,
+    ...commercialCandidates,
+    ...brandCandidates,
+    ...(semanticExpansion ? customerProblemCandidates : customerProblemCandidates.slice(0, 1)),
+    ...audienceCandidates,
+    ...brandOfferCandidates,
   ];
   const unique = new Map<string, {
     dimension: DemandSeedDimension;
@@ -282,7 +416,20 @@ export async function buildDemandCostResearchPlan(input: {
       formulation_provenance: [candidate.provenance],
     });
   }
-  const selected = [...unique.values()].slice(0, WORDSTAT_MAXIMUM_SEEDS);
+  const available = [...unique.values()];
+  const selected = semanticExpansion ? [] as typeof available : available.slice(0, maximumInitialSeeds);
+  if (semanticExpansion) {
+    const selectedPerDimension = new Map<DemandSeedDimension, number>();
+    for (const maximumPerDimension of [1, 2, 4, Number.POSITIVE_INFINITY]) {
+      for (const candidate of available) {
+        if (selected.length >= maximumInitialSeeds || selected.includes(candidate)) continue;
+        const count = selectedPerDimension.get(candidate.dimension) ?? 0;
+        if (count >= maximumPerDimension) continue;
+        selected.push(candidate);
+        selectedPerDimension.set(candidate.dimension, count + 1);
+      }
+    }
+  }
   const dimensionCounters = new Map<DemandSeedDimension, number>();
   const seeds = selected.map((candidate, index) => {
     const ordinal = (dimensionCounters.get(candidate.dimension) ?? 0) + 1;
@@ -302,9 +449,13 @@ export async function buildDemandCostResearchPlan(input: {
       region_ids: [...providerScope.regionIds],
       region_names: [...providerScope.regionNames],
       device: providerScope.device,
+      relevance_tokens: searchAnchorTokens(candidate.phrase),
+      collection_purpose: "DISCOVERY" as const,
+      discovery_depth: 0 as const,
+      parent_seed_id: null,
     };
   });
-  const dimensions = (["OFFER_LANGUAGE", "CUSTOMER_PROBLEM", "HIGH_INTENT_ACTION", "BRAND", "NON_BRAND"] as DemandSeedDimension[])
+  const dimensions = (["OFFER_LANGUAGE", "CUSTOMER_PROBLEM", "HIGH_INTENT_ACTION", "BRAND", "NON_BRAND", "AUDIENCE"] as DemandSeedDimension[])
     .map((dimension) => {
       const formulationCount = seeds.filter((seed) => seed.formulation_provenance.some((origin) => origin.dimension === dimension)).length;
       return {
@@ -318,8 +469,13 @@ export async function buildDemandCostResearchPlan(input: {
     schema_version: DEMAND_COST_RESEARCH_PLAN_SCHEMA as typeof DEMAND_COST_RESEARCH_PLAN_SCHEMA,
     generated_at: new Date(input.generatedAt).toISOString(),
     quota: {
-      maximum_seed_formulations: 8 as const,
-      maximum_provider_calls: 24 as const,
+      maximum_seed_formulations: maximumInitialSeeds,
+      maximum_provider_calls: WORDSTAT_MAXIMUM_PROVIDER_CALLS,
+      maximum_expansion_seed_formulations: WORDSTAT_EXPANSION_SEED_LIMIT,
+      maximum_verification_seed_formulations: WORDSTAT_VERIFICATION_SEED_LIMIT,
+      maximum_ui_surface_reads: WORDSTAT_INITIAL_DISCOVERY_SEED_LIMIT * 2
+        + WORDSTAT_EXPANSION_SEED_LIMIT * 2
+        + WORDSTAT_VERIFICATION_SEED_LIMIT * 3,
       planned_seed_formulations: seeds.length,
       planned_provider_calls: providerScope.regionIds.length ? seeds.length * WORDSTAT_METHODS.length : 0,
     },
@@ -353,7 +509,10 @@ export async function buildDemandCostResearchPlan(input: {
 
 function wordstatRows(method: WordstatMethod, payload: Record<string, unknown>) {
   const raw = method === "top_requests"
-    ? payload.topRequests
+    ? [
+        ...(Array.isArray(payload.topRequests) ? payload.topRequests : []),
+        ...(Array.isArray(payload.associations) ? payload.associations : []),
+      ]
     : method === "dynamics"
       ? payload.dynamics
       : payload.regions;
@@ -456,6 +615,7 @@ export async function collectOfficialWordstatBatch(
       const base = {
         call_id: `${batchId}:${seed.seed_id}:${method}`,
         batch_id: batchId,
+        collection_id: batchId,
         seed_id: seed.seed_id,
         cluster_id: seed.cluster_id,
         method,
@@ -463,6 +623,9 @@ export async function collectOfficialWordstatBatch(
         requested_at: requestedAt,
         operator_profile: operatorProfile as WordstatOperatorProfile,
         canonical_phrase: method === "dynamics" ? seed.dynamics_phrase : seed.phrase,
+        collection_purpose: seed.collection_purpose ?? "DISCOVERY",
+        discovery_depth: seed.discovery_depth ?? 0,
+        parent_seed_id: seed.parent_seed_id ?? null,
         period: method === "dynamics" ? seed.dynamics_period : null,
         from_date: method === "dynamics" ? seed.dynamics_from_date : null,
         to_date: method === "dynamics" ? seed.dynamics_to_date : null,
@@ -551,7 +714,7 @@ type DemandScopeEvidence = {
   region_ids: number[];
   region_names: string[];
   device: WordstatSeed["device"];
-  observed_unique_count: { value: number | null; semantics: "LOWER_BOUND_OBSERVED_TOP_ROWS" };
+  observed_unique_count: { value: number | null; semantics: "SUM_OBSERVED_PHRASE_FREQUENCIES" };
   unique_assigned_row_ids: string[];
   call_coverage: {
     planned_call_ids: string[];
@@ -598,7 +761,7 @@ function tokenCount(value: string) {
 
 function topScopeKey(call: WordstatCall) {
   return JSON.stringify({
-    batch_id: call.batch_id,
+    batch_id: call.collection_id ?? call.batch_id,
     method: call.method,
     operator_profile: call.operator_profile,
     region_ids: [...call.scope.region_ids].sort((left, right) => left - right),
@@ -613,7 +776,7 @@ function topScopeKey(call: WordstatCall) {
 function demandToken(value: string) {
   const token = normalizedPhrase(value);
   return /[а-яё]/u.test(token) && token.length > 4
-    ? token.replace(/(?:иями|ами|ями|ого|ему|ому|ыми|ими|ий|ый|ая|яя|ое|ее|ую|юю|ы|и|а|я|у|ю|е|о)$/u, "")
+    ? token.replace(/(?:иями|ами|ями|ого|ему|ому|ыми|ими|ий|ый|ая|яя|ое|ее|ую|юю|ам|ям|ах|ях|ом|ем|ов|ев|ей|ы|и|а|я|у|ю|е|о)$/u, "")
     : token;
 }
 
@@ -632,9 +795,13 @@ function relevanceFor(phrase: string, cluster: DemandClusterSpec | undefined) {
   const required = cluster.classification?.required_any_tokens?.length
     ? cluster.classification.required_any_tokens.map((token) => demandToken(normalizedPhrase(token)))
     : [...phraseTokens(Object.values(cluster.semantic_key).join(" "))];
-  const excluded = (cluster.classification?.excluded_tokens ?? []).map((token) => demandToken(normalizedPhrase(token)));
+  const excluded = new Set([
+    ...NON_COMMERCIAL_DEMAND_TOKENS,
+    ...(cluster.classification?.excluded_tokens ?? []).map((token) => demandToken(normalizedPhrase(token))),
+  ]);
   return {
-    eligible: required.some((token) => phraseSet.has(token)) && !excluded.some((token) => phraseSet.has(token)),
+    eligible: required.some((token) => phraseSet.has(token))
+      && ![...excluded].some((token) => phraseSet.has(token)),
     version,
   };
 }
@@ -728,7 +895,7 @@ async function assignedRowsForScope(calls: WordstatCall[], clusterSpecs: Map<str
       },
     });
   }
-  return { rows, excludedRows, conflicts };
+  return { rows, excludedRows, conflicts, candidateCount: candidates.size };
 }
 
 function median(values: number[]) {
@@ -783,7 +950,10 @@ function normalizedSeasonality(calls: WordstatCall[]) {
 }
 
 export async function buildScopedDemandEvidence(batch: WordstatObservationBatch, clusterSpecs: DemandClusterSpec[]) {
-  const topCalls = batch.calls.filter((call) => call.method === "top_requests");
+  const operatorVerificationCalls = batch.calls.filter((call) => call.method === "top_requests"
+    && call.collection_purpose === "OPERATOR_VERIFICATION");
+  const topCalls = batch.calls.filter((call) => call.method === "top_requests"
+    && call.collection_purpose !== "OPERATOR_VERIFICATION");
   const availableTopCalls = topCalls.filter((call) => call.status === "AVAILABLE");
   const gaps: DemandGap[] = batch.calls.flatMap((call) => call.gaps);
   const byScope = Map.groupBy(topCalls, topScopeKey);
@@ -791,10 +961,12 @@ export async function buildScopedDemandEvidence(batch: WordstatObservationBatch,
   const scopes: DemandScopeEvidence[] = [];
   const allRows: AssignedDemandRow[] = [];
   const allExcludedRows: ExcludedDemandRow[] = [];
+  let uniqueReturnedRows = 0;
   for (const [scopeKey, calls] of [...byScope.entries()].sort(([left], [right]) => left.localeCompare(right))) {
     const availableCalls = calls.filter((call) => call.status === "AVAILABLE");
     const unavailableCalls = calls.filter((call) => call.status === "UNAVAILABLE");
-    const { rows, excludedRows, conflicts } = await assignedRowsForScope(availableCalls, specsById);
+    const { rows, excludedRows, conflicts, candidateCount } = await assignedRowsForScope(availableCalls, specsById);
+    uniqueReturnedRows += candidateCount;
     gaps.push(...conflicts);
     allExcludedRows.push(...excludedRows);
     const scope = JSON.parse(scopeKey) as Record<string, unknown>;
@@ -808,7 +980,7 @@ export async function buildScopedDemandEvidence(batch: WordstatObservationBatch,
       region_ids: [...first.scope.region_ids],
       region_names: [...first.scope.region_names],
       device: first.scope.device,
-      observed_unique_count: { value: rows.length ? value : null, semantics: "LOWER_BOUND_OBSERVED_TOP_ROWS" },
+      observed_unique_count: { value: rows.length ? value : null, semantics: "SUM_OBSERVED_PHRASE_FREQUENCIES" },
       unique_assigned_row_ids: rows.map((row) => row.row_id).sort(),
       call_coverage: {
         planned_call_ids: calls.map((call) => call.call_id).sort(),
@@ -845,7 +1017,7 @@ export async function buildScopedDemandEvidence(batch: WordstatObservationBatch,
           assigned_row_ids: scopeRows.map((row) => row.row_id).sort(),
           observed_unique_count: {
             value: scopeRows.reduce((sum, row) => sum + row.count, 0),
-            semantics: "LOWER_BOUND_OBSERVED_TOP_ROWS" as const,
+            semantics: "SUM_OBSERVED_PHRASE_FREQUENCIES" as const,
           },
         }))
         .sort((left, right) => left.scope_fingerprint.localeCompare(right.scope_fingerprint));
@@ -862,7 +1034,7 @@ export async function buildScopedDemandEvidence(batch: WordstatObservationBatch,
         scopes: clusterScopes,
         observed_unique_count: {
           value: clusterScopes.length === 1 ? clusterScopes[0].observed_unique_count.value : null,
-          semantics: "LOWER_BOUND_OBSERVED_TOP_ROWS",
+          semantics: "SUM_OBSERVED_PHRASE_FREQUENCIES",
         },
       };
     })
@@ -873,18 +1045,22 @@ export async function buildScopedDemandEvidence(batch: WordstatObservationBatch,
     detail: `${unknownAssignments.length} Wordstat rows reference an unknown Demand Cluster.`,
     retry_after_seconds: null,
   });
-  const seedMatchedRowCounts = topCalls
-    .map((call) => {
-      const matched = call.status === "AVAILABLE"
-        ? call.rows.find((row) => normalizedPhrase(row.phrase) === normalizedPhrase(call.canonical_phrase))
-        : undefined;
-      const value = matched ? finiteNonNegative(matched.count) : null;
+  const seedMatchedRowCounts = [...Map.groupBy(topCalls, (call) => call.seed_id).entries()]
+    .map(([seedId, seedCalls]) => {
+      const matched = seedCalls.flatMap((call) => call.status === "AVAILABLE"
+        ? call.rows
+          .filter((row) => normalizedPhrase(row.phrase) === normalizedPhrase(call.canonical_phrase))
+          .map((row) => ({ call, value: finiteNonNegative(row.count) }))
+        : []);
+      const values = [...new Set(matched.map((item) => item.value).filter((value): value is number => value !== null))];
+      const value = values.length === 1 ? values[0] : null;
+      const representative = matched[0]?.call ?? seedCalls[0];
       return {
-        seed_id: call.seed_id,
-        cluster_id: call.cluster_id,
+        seed_id: seedId,
+        cluster_id: representative.cluster_id,
         value,
         status: value === null ? "UNAVAILABLE" : "AVAILABLE",
-        call_id: call.call_id,
+        call_id: representative.call_id,
       };
     })
     .sort((left, right) => left.seed_id.localeCompare(right.seed_id));
@@ -905,10 +1081,10 @@ export async function buildScopedDemandEvidence(batch: WordstatObservationBatch,
       .map((call) => [normalizedPhrase(call.canonical_phrase), call.canonical_phrase])).values()],
     observed_unique_count: {
       value: status === "UNAVAILABLE" || multipleScopes || scopes.length !== 1 ? null : scopes[0].observed_unique_count.value,
-      semantics: "LOWER_BOUND_OBSERVED_TOP_ROWS",
+      semantics: "SUM_OBSERVED_PHRASE_FREQUENCIES",
     },
     semantics: {
-      lower_bound: true,
+      lower_bound: false,
       counts_are_queries_not_users_clicks_or_impressions: true,
       unique_assignment_rule: "exact canonical seed; required token count; stable cluster_id",
     },
@@ -918,18 +1094,39 @@ export async function buildScopedDemandEvidence(batch: WordstatObservationBatch,
     unique_assigned_rows: canonicalObservations,
     excluded_rows: allExcludedRows.sort((left, right) => left.row_id.localeCompare(right.row_id)),
     coverage: {
+      initial_seed_count: batch.discovery?.initial_seed_count ?? new Set(topCalls.filter((call) => (call.discovery_depth ?? 0) === 0).map((call) => call.seed_id)).size,
+      expansion_seed_count: batch.discovery?.expansion_seed_count ?? new Set(topCalls.filter((call) => call.discovery_depth === 1).map((call) => call.seed_id)).size,
+      verification_seed_count: batch.discovery?.verification_seed_count ?? 0,
+      discovery_waves_completed: batch.discovery?.waves_completed ?? 1,
+      discovery_stop_reason: batch.discovery?.stop_reason ?? "NO_EXPANSION_CANDIDATES",
       planned_top_request_calls: topCalls.length,
       available_top_request_calls: availableTopCalls.length,
       unavailable_top_request_calls: topCalls.length - availableTopCalls.length,
       unavailable_call_ids: topCalls.filter((call) => call.status === "UNAVAILABLE").map((call) => call.call_id).sort(),
       unavailable_seed_ids: [...new Set(topCalls.filter((call) => call.status === "UNAVAILABLE").map((call) => call.seed_id))].sort(),
       returned_rows: availableTopCalls.reduce((sum, call) => sum + call.rows.length, 0),
+      unique_returned_rows: uniqueReturnedRows,
       eligible_unique_rows: allRows.length,
       excluded_unique_rows: allExcludedRows.length,
+      eligible_cluster_count: new Set(allRows.map((row) => row.assigned_cluster_id)).size,
+      operator_verification_calls: operatorVerificationCalls.length,
+      available_operator_verification_calls: operatorVerificationCalls.filter((call) => call.status === "AVAILABLE").length,
       exclusion_reason_counts: allExcludedRows.length ? { RELEVANCE_RULE_NO_MATCH: allExcludedRows.length } : {},
       classifier_versions: [...new Set(clusterSpecs.map((cluster) => normalizedText(cluster.classification?.version) || "demand-relevance-rules-v1"))].sort(),
     },
     seed_matched_row_counts: seedMatchedRowCounts,
+    operator_profile_checks: operatorVerificationCalls.map((call) => {
+      const canonical = normalizedPhrase(boundedPhrase(call.canonical_phrase));
+      const matched = call.rows.find((row) => normalizedPhrase(row.phrase) === canonical);
+      return {
+        call_id: call.call_id,
+        cluster_id: call.cluster_id,
+        phrase: boundedPhrase(call.canonical_phrase),
+        operator_profile: call.operator_profile,
+        value: matched ? finiteNonNegative(matched.count) : null,
+        status: call.status,
+      };
+    }),
     clusters,
     seasonality: normalizedSeasonality(dynamics),
     geo_evidence: {

@@ -1,10 +1,16 @@
 import { projectionFieldValue } from "./campaign-draft-fields.ts";
+import { DIRECT_RESPONSIVE_TITLE_LIMIT } from "./direct-limits.ts";
 import { evaluateBrandClaimsContract } from "./campaign-creation-profile.ts";
 import {
   fingerprintDirectProjection,
   type DirectCapabilitySnapshot,
 } from "./campaign-fanout.ts";
 import type { DirectProjection } from "./direct-write.ts";
+import {
+  compileLocalCampaignGenerationProjection,
+  isLocalCampaignGenerationProjection,
+  type LocalCampaignGenerationProjection,
+} from "./campaign-generation-profile.ts";
 
 export const DIRECT_PROJECTION_COMPILER_VERSION = "direct-projection-compiler-v1";
 export const DIRECT_PROFILE_APPLICABILITY_REGISTRY_VERSION = "direct-v501-search-applicability-v1";
@@ -108,10 +114,15 @@ export type DirectFieldApplicabilityProof = {
 };
 
 export type DirectProjectionCompilerInput = {
-  projection: DirectProjection;
-  capability_snapshot: DirectCapabilitySnapshot;
+  projection: DirectProjection | LocalCampaignGenerationProjection;
+  capability_snapshot: DirectCapabilitySnapshot | null;
   allowed_landing_hosts: string[];
   applicability_proofs: DirectFieldApplicabilityProof[];
+};
+
+type LegacyDirectProjectionCompilerInput = Omit<DirectProjectionCompilerInput, "projection" | "capability_snapshot"> & {
+  projection: DirectProjection;
+  capability_snapshot: DirectCapabilitySnapshot;
 };
 
 export type DirectProjectionViolation = {
@@ -295,11 +306,11 @@ function validateShape(projection: DirectProjection, violations: DirectProjectio
     "/direct/keyword/Keyword",
     "The explicit keyword must be non-empty and within the profile limit.",
   );
-  if (!uniqueNonEmptyStrings(responsive.Titles, 15, 56)) addViolation(
+  if (!uniqueNonEmptyStrings(responsive.Titles, DIRECT_RESPONSIVE_TITLE_LIMIT, 56)) addViolation(
     violations,
     "RESPONSIVE_TITLES_INVALID",
     "/direct/ad/ResponsiveAd/Titles",
-    "ResponsiveAd requires 1-15 unique titles of at most 56 characters.",
+    `ResponsiveAd requires 1-${DIRECT_RESPONSIVE_TITLE_LIMIT} unique titles of at most 56 characters.`,
   );
   if (!uniqueNonEmptyStrings(responsive.Texts, 3, 81)) addViolation(
     violations,
@@ -318,7 +329,7 @@ function validateShape(projection: DirectProjection, violations: DirectProjectio
 }
 
 function validateApplicability(
-  input: DirectProjectionCompilerInput,
+  input: LegacyDirectProjectionCompilerInput,
   violations: DirectProjectionViolation[],
 ) {
   const proofs = new Map<string, DirectFieldApplicabilityProof>();
@@ -372,7 +383,7 @@ function validateApplicability(
 }
 
 function validateAccountAndLimits(
-  input: DirectProjectionCompilerInput,
+  input: LegacyDirectProjectionCompilerInput,
   violations: DirectProjectionViolation[],
 ) {
   const snapshot = input.capability_snapshot;
@@ -420,7 +431,7 @@ function validateAccountAndLimits(
 }
 
 function validateUrlAndUtm(
-  input: DirectProjectionCompilerInput,
+  input: LegacyDirectProjectionCompilerInput,
   violations: DirectProjectionViolation[],
 ) {
   const hrefPointer = "/direct/ad/ResponsiveAd/Href";
@@ -474,12 +485,23 @@ function validateRightsAndLineage(
 }
 
 export async function compileDirectProjection(input: DirectProjectionCompilerInput) {
+  if (isLocalCampaignGenerationProjection(input.projection)) {
+    const local = await compileLocalCampaignGenerationProjection({ ...input, projection: input.projection });
+    if (local.violations.length) throw new DirectProjectionCompilationError(local.violations);
+    return local.compiled;
+  }
+  if (!input.capability_snapshot) throw new DirectProjectionCompilationError([{
+    code: "CAPABILITY_SNAPSHOT_INVALID",
+    pointer: null,
+    message: "The legacy publication profile requires an exact account snapshot.",
+  }]);
+  const legacyInput = { ...input, projection: input.projection, capability_snapshot: input.capability_snapshot };
   const violations: DirectProjectionViolation[] = [];
-  validateShape(input.projection, violations);
-  const applicability = validateApplicability(input, violations);
-  validateAccountAndLimits(input, violations);
-  validateUrlAndUtm(input, violations);
-  validateRightsAndLineage(input.projection, violations);
+  validateShape(legacyInput.projection, violations);
+  const applicability = validateApplicability(legacyInput, violations);
+  validateAccountAndLimits(legacyInput, violations);
+  validateUrlAndUtm(legacyInput, violations);
+  validateRightsAndLineage(legacyInput.projection, violations);
   if (violations.length) throw new DirectProjectionCompilationError(violations);
 
   const direct = record(input.projection.direct);

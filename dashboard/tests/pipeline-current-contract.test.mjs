@@ -5,19 +5,27 @@ import {
   assertCurrentPipelineAction,
   projectCurrentPipelineContract,
 } from "../lib/pipeline-current-contract.ts";
-import { projectOwnerPipeline } from "../lib/pipeline-owner-dashboard.ts";
+import { OwnerPipelineController, projectOwnerPipeline } from "../lib/pipeline-owner-dashboard.ts";
 
-test("current query projection contains only the five-stage contract and no legacy current-path objects", () => {
+test("completed preparation never marks the business outcome achieved", () => {
+  const pipeline = projectOwnerPipeline(null);
+  pipeline.status = "COMPLETED";
+  pipeline.active = false;
+  const projected = projectCurrentPipelineContract(pipeline);
+  assert.equal(projected.pipeline.status, "COMPLETED");
+  assert.equal(projected.businessOutcome.status, "ready");
+});
+
+test("current query projection contains only the four-stage contract and no legacy current-path objects", () => {
   const projected = projectCurrentPipelineContract(projectOwnerPipeline(null));
   const serialized = JSON.stringify(projected);
 
   assert.equal(projected.pipeline.status, "NOT_STARTED");
   assert.deepEqual(projected.pipeline.stages.map((stage) => stage.label), [
-    "Цели",
+    "Цель",
     "Сбор сведений",
     "Стратегия",
     "Кампании",
-    "Проверка публикации",
   ]);
   assert.equal(projected.campaignStrategy, null);
   assert.deepEqual(projected.campaignOptions, []);
@@ -59,7 +67,12 @@ test("current action contract rejects every legacy action", () => {
   assert.equal(assertCurrentPipelineAction({ pipeline_action: "CORRECT_GOAL" }), "CORRECT_GOAL");
   assert.equal(assertCurrentPipelineAction({ pipeline_action: "REFRESH_EVIDENCE" }), "REFRESH_EVIDENCE");
   assert.equal(assertCurrentPipelineAction({ pipeline_action: "EXPLAIN" }), "EXPLAIN");
-  assert.equal(assertCurrentPipelineAction({ pipeline_action: "CORRECT_STRATEGY" }), "CORRECT_STRATEGY");
+  for (const action of ["CLAIM_CONTROL", "RELEASE_CONTROL", "COLLECT_EVIDENCE", "IMPORT_EVIDENCE", "GET_STAGE_TASK", "SUBMIT_STAGE_RESULT", "RESUME_COMMIT"]) {
+    assert.equal(assertCurrentPipelineAction({ pipeline_action: action }), action);
+  }
+  for (const action of ["CORRECT_STRATEGY", "REFRESH_COMPETITOR_ANALYSIS", "PROPOSE_PLAYBOOK_CANDIDATE"]) {
+    assert.throws(() => assertCurrentPipelineAction({ pipeline_action: action }), /Старый action-контракт/);
+  }
   assert.equal(assertCurrentPipelineAction({ pipeline_action: "EDIT_CAMPAIGN_PAIR" }), "EDIT_CAMPAIGN_PAIR");
   assert.equal(assertCurrentPipelineAction({ pipeline_action: "PLAYBOOK_STEWARD_DECISION" }), "PLAYBOOK_STEWARD_DECISION");
   for (const payload of [
@@ -71,4 +84,57 @@ test("current action contract rejects every legacy action", () => {
   ]) {
     assert.throws(() => assertCurrentPipelineAction(payload), /Старый action-контракт отключён/u);
   }
+});
+
+test("persisted local readiness overrides obsolete historical PASS and preserves exact current blockers", async () => {
+  const current = {
+    state_revision: 7, current_stage: "CAMPAIGNS", updated_at: "2026-09-05T12:00:00.000Z",
+    analytics_evidence_snapshot: null, campaign_strategy: null, campaign_pair_checks: { status: "PASS" }, publication_review: null,
+    campaign_pairs: [{
+      pair_revision_id: "pair:local", hypothesis: { hypothesis_revision_id: "hypothesis:local" },
+      draft: {
+        draft_revision_id: "draft:local",
+        publish_projection: { schema_version: "p0-direct-projection-v5", direct: { campaign: { Name: "Локальная кампания" } } },
+        validation: { status: "VALID", scope: "LOCAL_CONTENT_REVIEW" },
+        publication_readiness: {
+          status: "UNAVAILABLE",
+          blockers: [
+            { code: "LOCAL_PROFILE_WRITE_UNIMPLEMENTED", message: "Публикация полного графа пока недоступна." },
+            { code: "GENERATION_MEASUREMENT_UNAVAILABLE", message: "Точная цель Метрики пока не подтверждена." },
+          ],
+        },
+      },
+    }],
+  };
+  const controller = new OwnerPipelineController({ loadCurrent: async () => null }, { productStore: { loadCurrent: async () => structuredClone(current) } });
+  const pipeline = await controller.current("owner");
+  assert.deepEqual(pipeline.currentProducts.campaignPairs[0].publicationReadiness, {
+    status: "UNAVAILABLE", localContentValid: true, blockers: current.campaign_pairs[0].draft.publication_readiness.blockers,
+  });
+  const projected = projectCurrentPipelineContract(pipeline, {
+    historicalState: { package_review: { business_projection: { preflight: { status: "PASS", passed: 9, total: 9 } } } },
+  });
+  assert.equal(projected.currentResult.preflight.status, "LOCAL_PREPARED_PUBLICATION_UNAVAILABLE");
+  assert.equal(projected.currentResult.preflight.passed, 1);
+  assert.equal(projected.currentResult.preflight.total, 4);
+  assert.ok(projected.currentResult.preflight.preflightGates.some((gate) => gate.label.includes("Покрытие поисковых намерений") && gate.status === "Заблокировано"));
+  assert.equal(projected.currentResult.preflight.preflightGates[2].explanation, "Точная цель Метрики пока не подтверждена.");
+  assert.equal(projected.currentResult.preflight.preflightGates[2].status, "Заблокировано");
+});
+
+test("missing local readiness cannot inherit an old successful publication preflight", () => {
+  const pipeline = projectOwnerPipeline(null);
+  pipeline.currentProducts = {
+    stateRevision: 8,
+    campaignPairs: [{
+      publishProjection: { schema_version: "p0-direct-projection-v5", direct: { campaign: { Name: "Непроверенный черновик" } } },
+      reproducibility: [],
+    }],
+  };
+  const projected = projectCurrentPipelineContract(pipeline, {
+    historicalState: { package_review: { business_projection: { preflight: { status: "PASS", passed: 9, total: 9 } } } },
+  });
+  assert.equal(projected.currentResult.preflight.status, "LOCAL_REVIEW_INCOMPLETE_PUBLICATION_UNAVAILABLE");
+  assert.equal(projected.currentResult.preflight.passed, 0);
+  assert.ok(projected.currentResult.preflight.preflightGates.some((gate) => gate.label.includes("Публикация полного графа") && gate.status === "Заблокировано"));
 });

@@ -79,7 +79,6 @@ const TASK_BY_STAGE: Record<PipelineStageId, string> = {
   EVIDENCE_COLLECTION: "Собрать и проверить разрешённые сведения",
   STRATEGY: "Сформировать и проверить текущую Campaign Strategy",
   CAMPAIGNS: "Собрать и проверить пары Campaign Hypothesis + Campaign Draft",
-  PUBLICATION_REVIEW: "Передать проверенные Draft на проверку публикации без внешней записи",
 };
 
 const ACTOR_LABELS: Record<string, string> = {
@@ -124,7 +123,7 @@ function versionKind(schemaVersion: string) {
   if (/playbook/iu.test(schemaVersion)) return "Campaign Playbook";
   if (/policy/iu.test(schemaVersion)) return "Политика";
   if (/schema/iu.test(schemaVersion)) return "Схема";
-  if (/goal/iu.test(schemaVersion)) return "Цели";
+  if (/goal/iu.test(schemaVersion)) return "Цель";
   if (/business/iu.test(schemaVersion)) return "Бизнес-вход";
   return "Версия объекта";
 }

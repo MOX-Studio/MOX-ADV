@@ -116,7 +116,7 @@ def assert_no_horizontal_overflow(test: unittest.TestCase, page: Page) -> None:
 
 
 class P0ProductionCandidateE2ETests(unittest.TestCase):
-    def test_owner_dashboard_opens_with_the_five_stages_and_without_removed_top_panels(self) -> None:
+    def test_owner_dashboard_opens_with_the_four_stages_and_without_removed_top_panels(self) -> None:
         with production_candidate_server() as base_url:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(headless=True)
@@ -131,11 +131,11 @@ class P0ProductionCandidateE2ETests(unittest.TestCase):
                 stage_path.wait_for(state="visible")
                 stages = stage_path.locator("li")
                 self.assertEqual(
-                    ["Цели", "Сбор сведений", "Стратегия", "Кампании", "Проверка публикации"],
+                    ["Цели", "Сбор сведений", "Стратегия", "Кампании"],
                     stages.locator("strong").all_inner_texts(),
                 )
                 self.assertEqual(
-                    ["Требует уточнения", "Ожидает", "Ожидает", "Ожидает", "Ожидает"],
+                    ["Требует уточнения", "Ожидает", "Ожидает", "Ожидает"],
                     stages.locator("small").all_inner_texts(),
                 )
                 self.assertEqual(0, page.locator(".owner-pipeline-control").count())

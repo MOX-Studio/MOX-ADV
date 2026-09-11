@@ -15,12 +15,19 @@ import {
   DIRECT_PROJECTION_COMPILER_VERSION,
 } from "./direct-projection-compiler.ts";
 import { fingerprintDirectProjection } from "./campaign-fanout.ts";
+import {
+  compileLocalCampaignGenerationProjection,
+  isLocalCampaignGenerationProjection,
+  LOCAL_CAMPAIGN_GENERATION_COMPILER,
+  LOCAL_CAMPAIGN_GENERATION_PROFILE,
+  LOCAL_CAMPAIGN_GENERATION_PROFILE_VERSION,
+} from "./campaign-generation-profile.ts";
 
 export const OWNER_CAMPAIGN_PAIR_DOSSIER_SCHEMA = "p0-owner-campaign-pair-dossier-v1";
 
 type ExactDirectField = {
   pointer: string;
-  disposition: "Будет передано" | "Доказанное отсутствие" | "Не применяется";
+  disposition: "Будет передано" | "Доказанное отсутствие" | "Не применяется" | "Локальный черновик";
   value: string;
   provenance: string;
 };
@@ -29,7 +36,7 @@ export type OwnerCampaignPairDossier = {
   schemaVersion: typeof OWNER_CAMPAIGN_PAIR_DOSSIER_SCHEMA;
   state: "Полная текущая пара";
   title: string;
-  profile: "ЕПК / Поиск / WB_MAXIMUM_CLICKS";
+  profile: string;
   lineage: Array<{
     kind: "Campaign Strategy" | "Campaign Hypothesis" | "Campaign Draft";
     versionLabel: string;
@@ -251,6 +258,111 @@ function directFields(pair: CompiledCampaignPair): ExactDirectField[] {
   });
 }
 
+async function projectLocalGenerationDossier(
+  strategy: AutonomousCampaignStrategy,
+  pair: CompiledCampaignPair,
+): Promise<OwnerCampaignPairDossier | null> {
+  const projection = pair.draft.publish_projection;
+  if (!isLocalCampaignGenerationProjection(projection)) return null;
+  const lineage = record(projection.lineage);
+  const draft = record(pair.draft);
+  const readiness = record(draft.publication_readiness);
+  if (strategy.status !== "AGENT_ACCEPTED" || strategy.schema_version !== AUTONOMOUS_CAMPAIGN_STRATEGY_SCHEMA
+    || pair.schema_version !== COMPILED_CAMPAIGN_PAIR_SCHEMA || pair.hypothesis.schema_version !== CAMPAIGN_HYPOTHESIS_SCHEMA
+    || pair.strategy_revision_id !== strategy.strategy_revision_id || pair.hypothesis.strategy_revision_id !== strategy.strategy_revision_id
+    || pair.analytics_evidence_snapshot_id !== pair.hypothesis.analytics_evidence_snapshot_id
+    || lineage.strategy_revision_id !== strategy.strategy_revision_id || lineage.campaign_hypothesis_revision_id !== pair.hypothesis.hypothesis_revision_id
+    || pair.draft.schema_version !== LOCAL_CAMPAIGN_GENERATION_COMPILER || pair.draft.profile_id !== (projection.schema_version === "p0-direct-projection-v6" ? "campaign-formation-local-v1" : LOCAL_CAMPAIGN_GENERATION_PROFILE)
+    || pair.draft.profile_version !== LOCAL_CAMPAIGN_GENERATION_PROFILE_VERSION || pair.draft.validation.status !== "VALID"
+    || pair.draft.validation.external_write_sent !== false || record(pair.draft.validation).scope !== "LOCAL_CONTENT_REVIEW"
+    || readiness.status !== "UNAVAILABLE" || !list(readiness.blockers).some((blocker) => record(blocker).code === "LOCAL_PROFILE_WRITE_UNIMPLEMENTED")
+    || !pair.hypothesis.evidence_refs.length || pair.economics.effectiveness_forecast !== false || pair.economics.budget_limited !== true
+    || Number(projection.local_review.strategy_weekly_budget_rub) !== Number(dimension(strategy, "weekly_budget")?.value)
+    || Number(projection.local_review.allocated_weekly_budget_rub) > Number(pair.economics.weekly_budget)) return null;
+  const responsiveAds = projection.direct.ads.map((node) => record(node.provider_fields.ResponsiveAd));
+  const allowedHosts = responsiveAds.flatMap((ad) => {
+    try { return [new URL(text(ad.Href)).hostname]; } catch { return []; }
+  });
+  const verified = await compileLocalCampaignGenerationProjection({ projection, capability_snapshot: null, allowed_landing_hosts: allowedHosts });
+  if (verified.violations.length || verified.compiled.publish_fingerprint !== pair.draft.publish_fingerprint
+    || JSON.stringify(verified.compiled.local_graph) !== JSON.stringify(pair.draft.local_graph)
+    || JSON.stringify(verified.compiled.applicability) !== JSON.stringify(pair.draft.applicability)) return null;
+  const campaign = projection.direct.campaign;
+  const unified = record(campaign.UnifiedCampaign);
+  const search = record(record(unified.BiddingStrategy).Search);
+  const conversion = search.BiddingStrategyType === "WB_MAXIMUM_CONVERSION_RATE";
+  const branch = conversion ? "WbMaximumConversionRate" : "WbMaximumClicks";
+  const business = projection.business;
+  const offer = dimension(strategy, "advertised_offer");
+  const audience = dimension(strategy, "target_audience");
+  const outcome = dimension(strategy, "qualified_result");
+  const budget = dimension(strategy, "weekly_budget");
+  const period = dimension(strategy, "period");
+  if ([offer, audience, outcome, budget, period].some((item) => !item || item.value === null || !text(item.rationale) || !item.evidence_refs.length)) return null;
+  const combinations = responsiveAds.flatMap((ad) => list(ad.Titles).flatMap((title) => list(ad.Texts).map((body) => ({ title: text(title), text: text(body), link: text(ad.Href) }))));
+  const explicit = projection.direct.keywords.filter((node) => node.kind === "EXPLICIT_KEYWORD");
+  const automatic = projection.direct.keywords.filter((node) => node.kind === "AUTOTARGETING");
+  const fields: ExactDirectField[] = verified.compiled.applicability.map((field) => ({
+    pointer: field.pointer,
+    disposition: "Локальный черновик",
+    value: displayValue(field.value),
+    provenance: safeEvidenceReference(field.provenance_ref),
+  }));
+  return {
+    schemaVersion: OWNER_CAMPAIGN_PAIR_DOSSIER_SCHEMA,
+    state: "Полная текущая пара",
+    title: text(campaign.Name),
+    profile: projection.formation ? `Локальный план / ${projection.formation.portfolio.campaigns.find(c => c.id === projection.formation?.campaign_id)?.channel === "SEARCH" ? "Поиск" : "РСЯ"}` : `ЕПК / Поиск / ${conversion ? "Максимум конверсий" : "Максимум кликов"} · локальный профиль генерации`,
+    lineage: [{
+      kind: "Campaign Strategy", versionLabel: strategy.strategy_revision_id,
+      summary: `${safeBusinessText(business.product)} · ${safeBusinessText(business.audience)} · ${safeBusinessText(business.qualified_result)}`,
+    }, {
+      kind: "Campaign Hypothesis", versionLabel: pair.hypothesis.hypothesis_revision_id, summary: safeBusinessText(pair.hypothesis.mechanism),
+    }, {
+      kind: "Campaign Draft", versionLabel: text(lineage.draft_revision_id), summary: "Полное содержание подготовлено; публикация нового профиля недоступна.",
+    }],
+    hypothesis: {
+      mechanism: safeBusinessText(pair.hypothesis.mechanism), primaryMetric: safeBusinessText(pair.hypothesis.primary_metric),
+      baseline: safeBusinessText(pair.hypothesis.baseline), evidence: pair.hypothesis.evidence_refs.map(safeEvidenceReference),
+    },
+    clientPreview: {
+      titles: [...new Set(combinations.map((item) => item.title))],
+      texts: [...new Set(combinations.map((item) => item.text))],
+      link: [...new Set(combinations.map((item) => item.link))].join(" · "),
+      combinations,
+      requiredDisclaimers: ["Оговорки и рекламные обещания требуют проверки перед публикацией."],
+      creativeSource: "Содержание агента со ссылками на подтверждающие источники.",
+      creativeRights: "Проверка источников и прав перед публикацией",
+    },
+    strategyMapping: [{
+      dimension: "Предложение", decision: safeBusinessText(offer!.value), rationale: safeBusinessText(offer!.rationale), evidence: evidenceLabels(offer),
+      exactDraftFields: responsiveAds.flatMap((ad, index) => [exactField(`/direct/ads/${index}/provider_fields/ResponsiveAd/Titles`, ad.Titles), exactField(`/direct/ads/${index}/provider_fields/ResponsiveAd/Texts`, ad.Texts)]),
+    }, {
+      dimension: "Аудитория", decision: safeBusinessText(audience!.value), rationale: safeBusinessText(audience!.rationale), evidence: evidenceLabels(audience),
+      exactDraftFields: [
+        ...projection.direct.ad_groups.map((group, index) => exactField(`/direct/ad_groups/${index}/provider_fields`, group.provider_fields)),
+        ...projection.direct.keywords.map((keyword, index) => exactField(`/direct/keywords/${index}/provider_fields`, keyword.provider_fields)),
+      ],
+    }, {
+      dimension: "Целевое действие", decision: safeBusinessText(outcome!.value), rationale: safeBusinessText(outcome!.rationale), evidence: evidenceLabels(outcome),
+      exactDraftFields: [
+        ...responsiveAds.map((ad, index) => exactField(`/direct/ads/${index}/provider_fields/ResponsiveAd/Href`, ad.Href)),
+        exactField("/creation_profile/measurement_plan", projection.creation_profile.measurement_plan),
+      ],
+    }, {
+      dimension: "Экономические границы",
+      decision: `${rubles(projection.local_review.allocated_weekly_budget_rub)} в неделю на эту кампанию из ${rubles(budget!.value)} по Стратегии. ${text(campaign.StartDate)} — ${text(campaign.EndDate)}.`,
+      rationale: safeBusinessText(`${budget!.rationale} ${period!.rationale}`), evidence: [...new Set([...evidenceLabels(budget), ...evidenceLabels(period)])],
+      exactDraftFields: [projection.formation ? exactField("/direct/campaign/DeliveryPlan", campaign.DeliveryPlan) : exactField(`/direct/campaign/UnifiedCampaign/BiddingStrategy/Search/${branch}`, search[branch]), exactField("/direct/campaign/StartDate", campaign.StartDate), exactField("/direct/campaign/EndDate", campaign.EndDate)],
+    }],
+    directProjection: {
+      graph: ["1 кампания", `${projection.direct.ad_groups.length} групп объявлений`, `${explicit.length} ключевых фраз`, `${automatic.length} обязательных автотаргетингов`, `${projection.direct.ads.length} адаптивных объявлений`],
+      fields,
+    },
+    safety: `Полный локальный черновик без права публикации, показов или расходов. ${list(readiness.blockers).map((blocker) => text(record(blocker).message)).join(" ")}`,
+  };
+}
+
 /**
  * Builds the business-first dossier only from a fully compiled pair. Every
  * technical or compilation failure projects to null, so a partial Hypothesis
@@ -262,6 +374,7 @@ export async function projectCampaignPairDossier(input: {
 }): Promise<OwnerCampaignPairDossier | null> {
   if (input.result.status !== "COMPLETED") return null;
   const pair = input.result.pair as CompiledCampaignPair;
+  if (isLocalCampaignGenerationProjection(pair.draft.publish_projection)) return projectLocalGenerationDossier(input.strategy, pair);
   if (!hasCompleteShape(input.strategy, pair)) return null;
   if (await fingerprintDirectProjection(pair.draft.publish_projection as unknown as Record<string, unknown>) !== pair.draft.publish_fingerprint) return null;
 

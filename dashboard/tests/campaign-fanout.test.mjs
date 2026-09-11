@@ -597,6 +597,59 @@ test("packs compatible keyword clusters before a finite product-audience-offer f
   assert.deepEqual(value.recommended_shortlist.draft_ids, value.drafts.filter((draft) => draft.shortlist_eligible).sort((left, right) => left.viability_score.rank - right.viability_score.rank || left.draft_id.localeCompare(right.draft_id)).map((draft) => draft.draft_id));
 });
 
+test("turns packed INNOPROM demand into human-readable complete draft copy", async () => {
+  const productionEvidence = structuredClone(availableDemandEvidence);
+  productionEvidence.market_evidence.frequency.clusters = [
+    {
+      cluster_id: "demand-cluster-brand-1",
+      status: "AVAILABLE",
+      assigned_row_ids: ["row-commercial", "row-visitor"],
+      semantic_key: { product: "ИННОПРОМ", need: "участие", intent: "commercial", offer: "стенд" },
+    },
+    {
+      cluster_id: "demand-cluster-high-intent-action-1",
+      status: "AVAILABLE",
+      assigned_row_ids: ["row-non-brand"],
+      semantic_key: { product: "промышленная выставка", need: "участие", intent: "commercial", offer: "стенд" },
+    },
+  ];
+  productionEvidence.market_evidence.frequency.unique_assigned_rows = [
+    { row_id: "row-visitor", assigned_cluster_id: "demand-cluster-brand-1", phrase: "иннопром билеты посетителям", count: 2_000 },
+    { row_id: "row-non-brand", assigned_cluster_id: "demand-cluster-high-intent-action-1", phrase: "участие компании в выставке со стендом", count: 500 },
+    { row_id: "row-commercial", assigned_cluster_id: "demand-cluster-brand-1", phrase: "иннопром участие со стендом", count: 120 },
+  ];
+  const productionStrategy = {
+    ...strategy,
+    advertised_offer: "Участие компании со стендом в международной промышленной выставке ИННОПРОМ с возможностью обсудить формат, сроки и бюджет",
+    target_audience: "Руководители и уполномоченные представители промышленных компаний",
+    qualified_result: "Обращение представителя компании, который подтвердил интерес к участию со стендом и готов обсудить формат, сроки и бюджет",
+    exclusions: "Исключать запросы только о билетах, регистрации посетителя, программе выставки, вакансиях, фото и бесплатных информационных материалах",
+    landing_page: "https://expo.innoprom.com/become_a_partner",
+    weekly_budget_rub: "21000",
+    target_cpa_rub: "30000",
+    message: "Представьте компанию на ИННОПРОМ со стендом — оставьте заявку, чтобы обсудить формат участия, сроки и бюджет",
+  };
+
+  const value = await recommendationSet(productionEvidence, { strategy: productionStrategy });
+  const draft = value.drafts.find((item) => item.visibility === "VISIBLE");
+  const responsiveAd = draft.publish_projection.direct.ad.ResponsiveAd;
+  const negatives = draft.negative_keywords.split(",").map((item) => item.trim());
+
+  assert.equal(draft.keyword, "иннопром участие со стендом");
+  assert.equal(draft.group_name, "ИННОПРОМ — участие со стендом");
+  assert.match(draft.campaign_name, /^ИННОПРОМ — участие со стендом/u);
+  assert.doesNotMatch(`${draft.campaign_name} ${draft.group_name}`, /Demand pack|demand-cluster/iu);
+  for (const expected of ["бесплатно", "вакансии", "посетитель", "билет", "фото", "программа выставки", "регистрация посетителя", "информационные материалы"]) {
+    assert.ok(negatives.includes(expected), `missing negative phrase: ${expected}`);
+  }
+  assert.equal(responsiveAd.Titles.length, 2);
+  assert.equal(responsiveAd.Texts.length, 2);
+  assert.ok(responsiveAd.Titles.every((item) => item.length <= 56 && !item.endsWith("…")));
+  assert.ok(responsiveAd.Texts.every((item) => item.length <= 81 && /[.!?]$/u.test(item) && !item.includes("…")));
+  assert.ok(responsiveAd.Titles.some((item) => /ИННОПРОМ/u.test(item) && /стенд/iu.test(item)));
+  assert.ok(responsiveAd.Texts.some((item) => /формат/iu.test(item) && /срок/iu.test(item) && /бюджет/iu.test(item)));
+});
+
 test("reconciles canonical leaf coverage for cluster IDs that require normalization", async () => {
   const evidence = structuredClone(availableDemandEvidence);
   evidence.market_evidence.frequency.clusters = [{

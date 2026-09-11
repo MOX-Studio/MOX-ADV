@@ -1,10 +1,17 @@
+import type { FindingsResearchPlan } from "./findings-research.ts";
 import { env } from "cloudflare:workers";
+import { createGeographySearch, readDirectGeoRegions } from "./geography-search.ts";
+import { withFirstPartyGenerationHistory } from "./analytics-evidence.ts";
+import { collectAdditionalWordstatResearch } from "./wordstat-query-research.ts";
+import { goalMatchesProviderRegion } from "./goal-evidence-scope.ts";
+import type { ProductionPipelineEvidenceCollector } from "./pipeline-production-executor.ts";
 import {
   AccessReadinessService,
   type AccessReadinessStore,
   type AccessStoredRow,
 } from "./access-readiness.ts";
 import { YandexAccessReadinessAdapter } from "./yandex-access-readiness.ts";
+import { providerReadFetcher } from "./provider-read-fetch.ts";
 import {
   hasDuplicateCampaignName,
 } from "./campaign-draft.ts";
@@ -54,15 +61,6 @@ import {
   type OwnerActionSubmission,
 } from "./p0-owner-journey.ts";
 import {
-  P0AgentRuntime,
-  projectP0AgentRunForOwner,
-  type P0AgentOwnerProjection,
-} from "./p0-agent-runtime.ts";
-import {
-  D1P0AgentRunStore,
-  ensureP0AgentTables,
-} from "./p0-agent-d1-store.ts";
-import {
   buildDirectAuditReportDefinitions,
   DirectAccountAuditor,
   fingerprintDirectAuditCapability,
@@ -73,10 +71,6 @@ import {
   D1DirectAuditStore,
   ensureP0DirectAuditTables,
 } from "./p0-direct-audit-d1-store.ts";
-import { createP0ModelAdapter } from "./p0-model-provider.ts";
-import { ProductionMethodologyAgent } from "./methodology-agent.ts";
-import { createProductionStageAgents } from "./production-stage-agents.ts";
-import { BoundedStageAgentModel } from "./stage-agent-model.ts";
 import { resolveHostnameWithDnsJson } from "./public-dns.ts";
 import { researchPublicFirstPartySite } from "./site-research.ts";
 import { cleanText } from "./text.ts";
@@ -142,16 +136,22 @@ function directWriteConfig() {
   };
 }
 
-async function readDirectBinding() {
+function fetchWithSignal(signal?: AbortSignal): typeof fetch {
+  return providerReadFetcher({ signal });
+}
+
+export const productionGeographySuggestions = createGeographySearch(() => readDirectGeoRegions(directWriteConfig(), fetchWithSignal()));
+
+async function readDirectBinding(signal?: AbortSignal) {
   const config = directWriteConfig();
   return verifyDirectAccountBinding(
     { token: config.token, expectedAccount: config.account },
-    fetch,
+    fetchWithSignal(signal),
     now,
   );
 }
 
-async function readMetrikaBinding() {
+async function readMetrikaBinding(signal?: AbortSignal) {
   const runtime = runtimeEnv();
   return verifyMetrikaCounterBinding(
     {
@@ -159,7 +159,7 @@ async function readMetrikaBinding() {
       expectedCounterId: runtime.YANDEX_METRICA_COUNTER_ID ?? "",
       expectedGoalId: runtime.YANDEX_METRICA_GOAL_ID ?? "",
     },
-    fetch,
+    fetchWithSignal(signal),
     now,
   );
 }
@@ -316,12 +316,12 @@ class D1DirectExecutionJournal implements DirectExecutionJournal {
   }
 }
 
-async function readCurrencyLimits() {
+async function readCurrencyLimits(signal?: AbortSignal) {
   const runtime = runtimeEnv();
   const token = runtime.YANDEX_DIRECT_OAUTH_TOKEN;
   const account = runtime.YANDEX_DIRECT_CLIENT_LOGIN;
   if (!token || !account) throw new Error("Direct read credentials не настроены в среде выполнения.");
-  const response = await fetch("https://api.direct.yandex.com/json/v501/dictionaries", {
+  const response = await fetchWithSignal(signal)("https://api.direct.yandex.com/json/v501/dictionaries", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -382,7 +382,8 @@ async function directAuditBinding(value: VerifiedDirectBinding): Promise<DirectA
   };
 }
 
-async function readDirectAudit(ownerKey: string, binding: DirectAuditBinding): Promise<DirectAuditSummary> {
+async function readDirectAudit(ownerKey: string, binding: DirectAuditBinding, signal?: AbortSignal): Promise<DirectAuditSummary> {
+  signal?.throwIfAborted();
   const runtime = runtimeEnv();
   const token = runtime.YANDEX_DIRECT_OAUTH_TOKEN ?? "";
   const account = runtime.YANDEX_DIRECT_CLIENT_LOGIN ?? "";
@@ -394,7 +395,7 @@ async function readDirectAudit(ownerKey: string, binding: DirectAuditBinding): P
   return new DirectAccountAuditor({
     ownerKey,
     binding,
-    provider: new YandexDirectReadApi({ token, account, fetcher: fetch, now }),
+    provider: new YandexDirectReadApi({ token, account, fetcher: fetchWithSignal(signal), now }),
     store: new D1DirectAuditStore(runtime.DB),
     now,
     auditId: () => auditId,
@@ -439,7 +440,7 @@ function isoDateDaysAgo(days: number) {
   return value.toISOString().slice(0, 10);
 }
 
-async function readMetrika() {
+async function readMetrika(signal?: AbortSignal) {
   const runtime = runtimeEnv();
   const token = runtime.YANDEX_METRICA_OAUTH_TOKEN;
   const counter = runtime.YANDEX_METRICA_COUNTER_ID;
@@ -462,7 +463,7 @@ async function readMetrika() {
     accuracy: "full",
     limit: "100000",
   });
-  const response = await fetch(`https://api-metrika.yandex.net/stat/v1/data?${query}`, {
+  const response = await fetchWithSignal(signal)(`https://api-metrika.yandex.net/stat/v1/data?${query}`, {
     headers: { Authorization: `OAuth ${token}`, Accept: "application/json" },
   });
   if (!response.ok) throw new Error(`Яндекс Метрика вернула HTTP ${response.status}.`);
@@ -508,12 +509,15 @@ async function readMarketEvidence({
   model,
   context,
   generatedAt,
+  signal,
 }: {
   ownerKey: string;
-  model: Record<string, unknown>;
+  model: BusinessModel;
   context: P0Context;
   generatedAt: string;
+  signal?: AbortSignal;
 }): Promise<MarketEvidenceInput> {
+  signal?.throwIfAborted();
   const runtime = runtimeEnv();
   const regionIds = String(runtime.YANDEX_WORDSTAT_REGION_IDS ?? "")
     .split(",")
@@ -538,6 +542,18 @@ async function readMarketEvidence({
       cost_observations: [],
     };
   }
+  const goal = model.goal_research_scope;
+  if (goal && !goalMatchesProviderRegion(goal.customer_geography ?? "", providerScope)) {
+    return {
+      wordstat_batch: await unavailableWordstatBatch(
+        `География владельца «${goal.customer_geography}» не совпадает с точной областью провайдера «${providerScope.regionNames.join(", ")}». Региональные запросы не выполнялись; расширение географии запрещено.`,
+        generatedAt,
+        "GOAL_PROVIDER_GEOGRAPHY_MISMATCH",
+      ),
+      demand_clusters: [],
+      cost_observations: [],
+    };
+  }
   const configuredDevice = providerScope.device;
   const observedDate = new Date(generatedAt);
   const dynamicsTo = new Date(Date.UTC(observedDate.getUTCFullYear(), observedDate.getUTCMonth(), 0));
@@ -545,9 +561,12 @@ async function readMarketEvidence({
   const researchPlan = await buildDemandCostResearchPlan({
     generatedAt,
     offerLanguage: cleanText(String(model.product ?? ""), 500),
-    customerProblems: [model.customer_context, model.value].map((item) => cleanText(String(item ?? ""), 500)).filter(Boolean),
+    customerProblems: [record(model).customer_problem, record(model).search_need, record(model).pain_point]
+      .map((item) => cleanText(String(item ?? ""), 500))
+      .filter(Boolean),
     highIntentActions: [model.qualified_outcome, model.qualified_result].map((item) => cleanText(String(item ?? ""), 500)).filter(Boolean),
     brandTerms: String(runtime.P0_DEMAND_BRAND_TERMS ?? "").split(",").map((item) => cleanText(item, 100)).filter(Boolean),
+    audienceTerms: [model.audience, model.customer_context].map((item) => cleanText(String(item ?? ""), 500)).filter(Boolean),
     exclusions: [model.exclusions, model.key_constraints]
       .flatMap((item) => String(item ?? "").split(/[;,\n]/u))
       .map((item) => cleanText(item, 200))
@@ -559,17 +578,20 @@ async function readMarketEvidence({
     dynamicsFromDate: dynamicsFrom.toISOString().slice(0, 10),
     dynamicsToDate: dynamicsTo.toISOString().slice(0, 10),
     minimumClickSample: Number(runtime.P0_COMPARABLE_MIN_CLICKS ?? 3),
+    semanticExpansion: true,
   });
+  signal?.throwIfAborted();
   const demandClusters = researchPlan.seeds.map((seed) => ({
     cluster_id: seed.cluster_id,
     semantic_key: {
       product: seed.dimension === "OFFER_LANGUAGE" || seed.dimension === "NON_BRAND" ? seed.phrase : cleanText(String(model.product ?? ""), 500),
-      need: seed.dimension === "CUSTOMER_PROBLEM" ? seed.phrase : cleanText(String(model.customer_context ?? model.audience ?? ""), 500),
+      need: seed.dimension === "CUSTOMER_PROBLEM" || seed.dimension === "AUDIENCE" ? seed.phrase : cleanText(String(model.customer_context ?? model.audience ?? ""), 500),
       intent: seed.dimension === "HIGH_INTENT_ACTION" ? seed.phrase : cleanText(String(model.qualified_outcome ?? model.qualified_result ?? ""), 500),
       offer: seed.dimension === "BRAND" ? seed.phrase : cleanText(String(model.value ?? ""), 500),
     },
     classification: {
       version: "demand-relevance-rules-v1",
+      required_any_tokens: seed.relevance_tokens,
       excluded_tokens: researchPlan.exclusions,
     },
   }));
@@ -579,8 +601,9 @@ async function readMarketEvidence({
     wordstatBatch = await collectHeadlessWordstatUiBatch(researchPlan, {
       P0_WORDSTAT_BRIDGE_URL: runtime.P0_WORDSTAT_BRIDGE_URL,
       P0_WORDSTAT_BRIDGE_TOKEN: runtime.P0_WORDSTAT_BRIDGE_TOKEN,
-    });
+    }, { signal });
   } catch (error) {
+    signal?.throwIfAborted();
     wordstatBatch = await unavailableWordstatBatch(
       errorMessage(error),
       generatedAt,
@@ -588,11 +611,13 @@ async function readMarketEvidence({
       "YANDEX_WORDSTAT_UI",
     );
   }
+  signal?.throwIfAborted();
 
   const direct = record(context.direct);
   const audit = record(direct.audit);
   const artifactStore = new D1DirectAuditStore(runtime.DB);
   const checkpoint = await artifactStore.loadCurrent(ownerKey, String(direct.account ?? ""));
+  signal?.throwIfAborted();
   const checkpointReferences = checkpoint && checkpoint.audit_id === audit.audit_id
     ? [
         ...Object.values(checkpoint.collections).flatMap((collection) => collection.artifact_references),
@@ -604,6 +629,7 @@ async function readMarketEvidence({
     : Array.isArray(audit.artifact_references) ? audit.artifact_references.map(record) : [];
   const artifacts = (await Promise.all(references.map((reference) => artifactStore.getArtifact(String(reference.artifact_id ?? "")))))
     .filter((artifact): artifact is NonNullable<typeof artifact> => artifact !== null);
+  signal?.throwIfAborted();
   const capability = record(direct.capability_snapshot);
   const currency = cleanText(String(capability.currency ?? runtime.YANDEX_DIRECT_CURRENCY ?? "RUB"), 10);
   const comparable = await qualifyDirectComparableCandidates({
@@ -618,12 +644,14 @@ async function readMarketEvidence({
     minimumClicks: researchPlan.comparable_cost_scope.minimum_click_sample,
     currency,
   });
+  signal?.throwIfAborted();
   const trafficVolumes = String(runtime.P0_COMPARABLE_TRAFFIC_VOLUMES ?? "")
     .split(",")
     .map(Number)
     .filter((value) => Number.isFinite(value) && value > 0);
   const costObservations: CostObservation[] = [];
   for (const candidate of comparable.qualified.slice(0, 3)) {
+    signal?.throwIfAborted();
     costObservations.push(await collectCurrentAuctionCostObservation({
       token: runtime.YANDEX_DIRECT_OAUTH_TOKEN ?? "",
       account: runtime.YANDEX_DIRECT_CLIENT_LOGIN ?? "",
@@ -637,7 +665,8 @@ async function readMarketEvidence({
       comparison_scope: candidate.owner_scope,
       complete_direct_audit: true,
       sample_clicks: candidate.sample.clicks,
-    }, fetch, now));
+    }, fetchWithSignal(signal), now));
+    signal?.throwIfAborted();
     costObservations.push(buildOwnHistoryCostObservation(candidate, {
       observedAt: generatedAt,
       currency,
@@ -730,9 +759,11 @@ function coldStartContext(): P0Context {
   };
 }
 
-async function readContext(input: { owner_key?: string } = {}): Promise<P0Context> {
+async function readContext(input: { owner_key?: string; signal?: AbortSignal } = {}): Promise<P0Context> {
+  input.signal?.throwIfAborted();
   const ownerKey = input.owner_key ?? "p0-context";
   const accessState = await accessReadinessService.get(ownerKey, true);
+  input.signal?.throwIfAborted();
   if (accessState.path === "NEW_ADVERTISER" && accessState.status === "ACTIVE") return coldStartContext();
   if (accessState.path !== "EXISTING_ADVERTISER"
     || !["ACTIVE", "ACTIVE_LIMITED"].includes(accessState.status)
@@ -744,15 +775,16 @@ async function readContext(input: { owner_key?: string } = {}): Promise<P0Contex
     || accessState.binding.counter_identity !== (runtime.YANDEX_METRICA_COUNTER_ID ?? "")) {
     throw new Error("Selected business binding does not match the server-side provider configuration.");
   }
-  const directBindingPromise = readDirectBinding();
-  const directAuditPromise = directBindingPromise.then(async (value) => readDirectAudit(ownerKey, await directAuditBinding(value)));
+  const directBindingPromise = readDirectBinding(input.signal);
+  const directAuditPromise = directBindingPromise.then(async (value) => readDirectAudit(ownerKey, await directAuditBinding(value), input.signal));
   const [directBindingResult, directAuditResult, limitsResult, metrikaBindingResult, metrikaResult] = await Promise.allSettled([
     directBindingPromise,
     directAuditPromise,
-    readCurrencyLimits(),
-    readMetrikaBinding(),
-    readMetrika(),
+    readCurrencyLimits(input.signal),
+    readMetrikaBinding(input.signal),
+    readMetrika(input.signal),
   ]);
+  input.signal?.throwIfAborted();
   const directAuditTerminal = directAuditResult.status === "fulfilled"
     && ["COMPLETE", "PARTIAL"].includes(directAuditResult.value.status);
   const campaignInventoryReady = directAuditResult.status === "fulfilled"
@@ -877,12 +909,22 @@ async function resolveHostname(hostname: string) {
   return resolveHostnameWithDnsJson(hostname, fetch);
 }
 
-async function researchSite(rawUrl: string) {
-  return researchPublicFirstPartySite(rawUrl, {
-    fetch,
-    resolveHostname,
-    now,
-  });
+async function researchSite(rawUrl: string, signal?: AbortSignal, plan?: FindingsResearchPlan) {
+  signal?.throwIfAborted();
+  const fetcher = fetchWithSignal(signal);
+  try {
+    const site = await researchPublicFirstPartySite(rawUrl, {
+      plan, signal,
+      fetch: fetcher,
+      resolveHostname: (hostname) => resolveHostnameWithDnsJson(hostname, fetcher),
+      now,
+    });
+    signal?.throwIfAborted();
+    return site;
+  } catch (error) {
+    signal?.throwIfAborted();
+    throw error;
+  }
 }
 
 export async function productionPublicCompetitorRefresh(input: PipelineCompetitorCollectorInput) {
@@ -908,11 +950,14 @@ export async function productionPublicCompetitorRefresh(input: PipelineCompetito
 }
 
 async function readCompetitorResearch(input: {
+  ownerKey: string;
   model: BusinessModel;
   site: SiteAnalysis;
   generatedAt: string;
   candidateSet?: Record<string, unknown>;
+  signal?: AbortSignal;
 }) {
+  input.signal?.throwIfAborted();
   const configured = cleanText(runtimeEnv().P0_COMPETITOR_RESEARCH_JSON ?? "", 100_000);
   const candidateSet = record(input.candidateSet);
   const scoped = candidateSet.schema_version === "p0-bounded-competitor-research-v1"
@@ -934,11 +979,14 @@ async function readCompetitorResearch(input: {
     : "";
   const researchConfig = configured || scoped;
   if (!researchConfig) return null;
-  return collectProductionCompetitorResearch(researchConfig, {
-    fetch,
-    resolveHostname,
+  const fetcher = fetchWithSignal(input.signal);
+  const research = await collectProductionCompetitorResearch(researchConfig, {
+    fetch: fetcher,
+    resolveHostname: (hostname) => resolveHostnameWithDnsJson(hostname, fetcher),
     now,
   });
+  input.signal?.throwIfAborted();
+  return research;
 }
 
 async function ensureTables() {
@@ -956,7 +1004,6 @@ async function ensureTables() {
   await db.prepare(
     "CREATE TABLE IF NOT EXISTS p0_account_locks (account_key TEXT PRIMARY KEY, execution_id TEXT NOT NULL, owner_key TEXT NOT NULL, expires_at TEXT NOT NULL)",
   ).run();
-  await ensureP0AgentTables(db);
   await ensureP0DirectAuditTables(db);
 }
 
@@ -1022,7 +1069,7 @@ function accessConfiguration() {
 
 const accessReadinessService = new AccessReadinessService({
   store: new D1AccessReadinessStore(),
-  adapter: new YandexAccessReadinessAdapter(accessConfiguration(), fetch, now),
+  adapter: new YandexAccessReadinessAdapter(accessConfiguration(), providerReadFetcher(), now),
   now,
 });
 
@@ -1437,7 +1484,9 @@ export async function productionFinancialCompetitorIntelligence(input: {
   site: SiteAnalysis;
   context?: P0Context;
   generatedAt: string;
+  signal?: AbortSignal;
 }): Promise<FinancialCompetitorIntelligenceInput | null> {
+  input.signal?.throwIfAborted();
   const runtime = runtimeEnv();
   const bridgeUrl = cleanText(runtime.P0_FINANCIAL_INTELLIGENCE_BRIDGE_URL ?? "", 2_000);
   const bridgeToken = cleanText(runtime.P0_FINANCIAL_INTELLIGENCE_BRIDGE_TOKEN ?? "", 2_000);
@@ -1447,7 +1496,7 @@ export async function productionFinancialCompetitorIntelligence(input: {
   if (parsed.protocol !== "http:" || !["127.0.0.1", "localhost"].includes(parsed.hostname)) {
     throw new Error("Financial Intelligence production bridge must be an isolated loopback read adapter.");
   }
-  const response = await fetch(parsed, {
+  const response = await fetchWithSignal(input.signal)(parsed, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${bridgeToken}` },
     body: JSON.stringify({
@@ -1475,6 +1524,7 @@ export async function productionFinancialCompetitorIntelligence(input: {
   if (!await verifyFinancialCompetitorIntelligence(dossier)) {
     throw new Error("Financial Intelligence bridge returned a dossier that failed immutable verification.");
   }
+  input.signal?.throwIfAborted();
   return structuredClone(value);
 }
 
@@ -1526,45 +1576,35 @@ const application = new P0Application({
   },
 });
 
-export async function productionPipelineEvidenceCollector(input: {
-  ownerKey: string;
-  seedSnapshot: Record<string, unknown> | null;
-}) {
-  return application.collectCurrentAnalyticsEvidence(
+export async function productionPipelineEvidenceCollector(input: Parameters<ProductionPipelineEvidenceCollector>[0]) {
+  input.signal?.throwIfAborted();
+  if (input.wordstatResearch) {
+    const runtime = runtimeEnv();
+    return collectAdditionalWordstatResearch(input.seedSnapshot, input.wordstatResearch,
+      { P0_WORDSTAT_BRIDGE_URL: runtime.P0_WORDSTAT_BRIDGE_URL, P0_WORDSTAT_BRIDGE_TOKEN: runtime.P0_WORDSTAT_BRIDGE_TOKEN }, { signal: input.signal });
+  }
+  const snapshot = await application.collectCurrentAnalyticsEvidence(
     input.ownerKey,
     input.seedSnapshot,
     cleanText(runtimeEnv().P0_FIRST_PARTY_SITE_URL ?? "", 2_000),
+    input.signal,
+    { goal: input.goal, goalRevision: input.goalRevision },
   );
-}
-
-async function coordinateOwnerAgent(key: string): Promise<P0AgentOwnerProjection> {
-  try {
-    const state = await productionAgentRuntime().coordinate({
-      owner_key: key,
-      budgets: P0_AGENT_BUDGETS,
-    });
-    return projectP0AgentRunForOwner(state);
-  } catch {
-    return {
-      status: "blocked",
-      progress: { completed: 0, total: 1, label: "Работа безопасно остановлена" },
-      card: {
-        kind: "problem",
-        title: "Агент сейчас недоступен",
-        body: "Бизнес-состояние не изменено; техническая неполадка не стала новым вопросом владельцу.",
-      },
-      nextBusinessStep: "Вернуться к текущему бизнес-шагу без технического управления.",
-    };
-  }
+  input.signal?.throwIfAborted();
+  const enriched = await withFirstPartyGenerationHistory(snapshot, {
+    ownerKey: input.ownerKey,
+    store: new D1DirectAuditStore(runtimeEnv().DB),
+  });
+  input.signal?.throwIfAborted();
+  return enriched;
 }
 
 const ownerJourney = new P0OwnerJourney(application, {
-  agentProjection: coordinateOwnerAgent,
   accessReadiness: accessReadinessService,
 });
 
 export async function ownerOverview(key: string) {
-  return ownerJourney.query(key);
+  return ownerJourney.snapshot(key);
 }
 
 export async function ownerSnapshot(key: string) {
@@ -1577,36 +1617,11 @@ export async function submitOwnerAction(key: string, payload: Record<string, unk
 
 export async function recoverOwnerState(key: string, confirmation: unknown) {
   await application.recoverInvalidDocument(key, confirmation);
-  return ownerJourney.query(key);
+  return ownerJourney.snapshot(key);
 }
 
 export async function operatorDiagnostics(key: string) {
-  return ownerJourney.diagnostics(key);
-}
-
-const P0_AGENT_BUDGETS = {
-  max_model_calls: 8,
-  max_tool_calls: 12,
-  max_input_tokens: 80_000,
-  max_output_tokens: 16_000,
-  max_elapsed_ms: 120_000,
-  max_cost_microusd: 100_000,
-} as const;
-
-function configuredModelAdapter() {
-  const runtime = runtimeEnv();
-  return createP0ModelAdapter({
-    provider: runtime.P0_AGENT_PROVIDER ?? "",
-    model: runtime.P0_AGENT_MODEL ?? "gpt-5-mini",
-    openaiApiKey: runtime.OPENAI_API_KEY ?? "",
-    codexBridgeUrl: runtime.P0_CODEX_BRIDGE_URL ?? "",
-    codexBridgeToken: runtime.P0_CODEX_BRIDGE_TOKEN ?? "",
-  }, fetch);
-}
-
-/** Out-of-band only: produces a governed candidate and has no Playbook activation or owner-run path. */
-export function productionMethodologyAgent() {
-  return new ProductionMethodologyAgent(new BoundedStageAgentModel(configuredModelAdapter()), now);
+  return application.persistedPipelineInput(key);
 }
 
 export function productionCampaignPlaybookGovernance() {
@@ -1614,36 +1629,7 @@ export function productionCampaignPlaybookGovernance() {
   return new ProductionCampaignPlaybookGovernance(
     new D1CampaignPlaybookKnowledgeStore(runtime.DB),
     new D1CampaignPlaybookGovernanceStore(runtime.DB),
-    productionMethodologyAgent(),
+    null,
     now,
   );
-}
-
-export function productionPipelineStageAgents() {
-  const playbook = productionCampaignPlaybookGovernance();
-  return createProductionStageAgents(new BoundedStageAgentModel(configuredModelAdapter()), now, {
-    loadPlaybookSnapshot: () => playbook.strategySnapshot(),
-  });
-}
-
-function productionAgentRuntime() {
-  const runtime = runtimeEnv();
-  return new P0AgentRuntime({
-    application: {
-      contract: (ownerKey, objectiveKind) => application.agentContract(ownerKey, objectiveKind),
-      executeTool: (input) => application.executeAgentTool(input),
-      evaluate: (input) => application.evaluateAgentObjective(input),
-    },
-    model: configuredModelAdapter(),
-    store: new D1P0AgentRunStore(runtime.DB),
-    now,
-  });
-}
-
-export async function runAgent(key: string) {
-  const access = await accessReadinessService.get(key, true);
-  if (!["ACTIVE", "ACTIVE_LIMITED"].includes(access.status)) {
-    throw new Error("Owner-confirmed Access Readiness is required before agent coordination.");
-  }
-  return coordinateOwnerAgent(key);
 }

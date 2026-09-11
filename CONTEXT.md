@@ -6,6 +6,7 @@ MOX-ADV is a controlled advertising optimization context that links Yandex Direc
 
 **Test Scenario**:
 A coherent set of operator-supplied campaign and conversion facts used to observe how the test control loop responds without affecting a real campaign.
+For campaign preparation, the owner may also authorize the controlling Codex to supply explicitly labelled test planning values. Each substitution records what research could not establish, attempted sources and affected decisions; it never becomes an observed business fact or advertising result.
 _Avoid_: Fake metrics, mock campaign
 
 **Integrated Prototype**:
@@ -33,16 +34,25 @@ A pause that delegates one Critical Decision or Material Uncertainty to a named 
 _Avoid_: Blank form, generic approval, routine data collection
 
 **Campaign Strategy**:
-The current evidence-grounded statement of the real offer, audience, qualified outcome, exclusions, business goal, geography, period, landing page, budget, applicable target result cost, and core message, formed and accepted by the Strategy Agent to guide Campaign Hypotheses. The operator may edit it as a priority business input, but the Strategy itself does not authorize publication or spend.
+The current evidence-grounded statement of the real offer, audience, qualified outcome, exclusions, business goal, geography, period, landing page, budget, applicable target result cost, and core message, formed and accepted by the single controlling Codex to guide Campaign Hypotheses. The operator may edit it as a priority business input, but the Strategy itself does not authorize publication or spend.
 _Avoid_: Operator-approved strategy, single-campaign instruction, Yandex payload, technical bidding configuration
 
 **Strategy Agent**:
-The autonomous role that researches permitted evidence and forms, checks, and accepts the current Campaign Strategy according to versioned best practices. It cannot invent verifiable business facts, authorize publication or spend, or grant or expand a Mandate.
+Historical stage role, retained only in old artifacts and compatibility contracts. Current production work belongs to the single controlling Codex across every stage; see ADR-0002.
 _Avoid_: Strategy questionnaire, human strategy approval, campaign publisher
+
+**Evidence-to-campaign formation**:
+The human defines Goal; one controlling Codex researches, decides Strategy and creates the complete linked local campaign portfolio. Every material finding is applied, deferred or excluded with a reason and a concrete destination. Search keywords, network themes and retargeting conditions retain their distinct meanings. Unknown frequency, empty observations, test inputs and real observations remain separate. A completed preparation run does not establish commercial effectiveness or publication authority.
+_Avoid_: Copying one industry's fixed campaign counts, treating a research summary as first-party copy proof, or promoting test coefficients to actual performance
 
 **Campaign Hypothesis**:
 The current evidence-grounded, testable expression of how one Campaign Strategy becomes one future Yandex Direct campaign. It becomes user-visible only together with one complete current Campaign Draft and does not authorize publication or spend.
 _Avoid_: Internal candidate, Recommendation Set item, universal experiment, Campaign Draft
+
+**Goal-directed Preparation**:
+The controlling Codex's evidence-grounded comparison and selection of campaign approaches and actual ad variants for the exact human Goal. It records why the selected portfolio is the best supported choice, its expected contribution and assumptions, and repairs found by a final critical review. Scenario ranges, comparative recommendation and demonstrated business effectiveness are separate. A partial-period or unknown forecast does not establish good odds of attaining the whole goal.
+The fixed objective is the required relevant result count by the deadline in the owner's region with minimum spending within one total budget. Search continues beyond the first campaign for complementary opportunities, without a total campaign, group or ad count limit. Every selected addition must have a viable mechanism and incremental value under the shared Goal. Unknown numeric attainment does not block finished local preparation: an explicit review must cover every remaining performance unknown and a bounded validation phase inside the same budget. Unfinished work remains resumable. Neither state proves actual effectiveness. Among comparably credible routes to all Goal constraints, minimize spending. The owner enters only the total budget; the internal average cost ceiling is derived. Historical per-result limits retain their original meaning and are not silently migrated into a total budget.
+_Avoid_: Generic relevance check, automatic persuasiveness score, source-linked text as proof of effectiveness, fabricated success probability
 
 **Campaign Draft**:
 The editable, pre-publication representation of exactly one real campaign and all applicable supported child objects under one explicit Yandex Direct campaign profile. Every control changes either the current Campaign Strategy or a field that will be published; an optional provider field may be absent only when the selected profile does not consume it.
@@ -134,3 +144,15 @@ _Avoid_: Debug log, model reasoning
 **Gate 0 Boundary**:
 The approved safety limits that operator-edited rules may tighten but never weaken.
 _Avoid_: Default settings, suggestions
+
+**Single Codex Pipeline**:
+The four-stage preparation workflow in which one controlling Codex owns reasoning and decisions across Goal, Evidence Collection, Strategy and Campaigns. Deterministic tools serve that Codex and never invoke another model or agent.
+
+**Pipeline Workspace**:
+The durable continuation record for one run, including exact task inputs, accepted outputs, a single-session control lease and recoverable pending commits. Any authorized later Codex session can resume it through the Dashboard UI.
+
+**Pipeline Tool**:
+A deterministic operation for bounded source collection, extraction, calculation, validation, compilation or persistence. It returns observations, a verified result or errors to the controlling Codex and does not decide how to repair or continue the business task.
+
+**Goal Metric and Prelaunch Requirements**:
+The exact owner-defined event, unit, threshold/comparison, accounting rules, time, geography and budget. New preparation runs use `goal-directed-preparation-v4` to bind researched conditions and outcome evidence to strategy and actual campaign decisions. Counts, paid orders, sums in RUB and proportions are distinct. Completed local preparation, conditional numerical goal support and bounded technical checks are independent; a success probability is not implemented. Existing sealed versions retain their semantics.

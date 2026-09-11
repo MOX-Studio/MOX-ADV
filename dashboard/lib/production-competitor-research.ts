@@ -1,6 +1,7 @@
 import {
   NO_APPROVED_COMPETITOR_AD_SOURCE,
   assertSafeCompetitorObservationText,
+  containsCompetitorPromptInjection,
   createBoundedCompetitorCandidateSet,
   type CompetitorAdObservationInput,
   type CompetitorCandidateSet,
@@ -15,6 +16,7 @@ import { cleanText } from "./text.ts";
 export type ProductionCompetitorResearchInput = {
   competitor_candidate_set: CompetitorCandidateSet;
   competitor_observations: Array<Record<string, unknown>>;
+  competitor_collection_failures: Array<{ competitor: string; url: string; code: string; reason: string }>;
 };
 
 type ConfiguredCandidate = {
@@ -214,17 +216,27 @@ function competitorSubject(value: string) {
 }
 
 function observedPageEvidence(page: PublicCompetitorPageObservation["page"]) {
+  if (containsCompetitorPromptInjection(page.text_excerpt)) throw new Error("Инструкция из публичного контента отклонена.");
+  const safePublicOffer = (value: string) => {
+    try { assertSafeCompetitorObservationText(value); return Boolean(value); } catch { return false; }
+  };
   const headings = page.headings
     .map((value) => cleanText(value, 500))
-    .filter(Boolean)
+    .filter(safePublicOffer)
     .slice(0, 12);
   const productsServices = headings.length
     ? headings
-    : [cleanText(page.title, 500), cleanText(page.description, 500)].filter(Boolean).slice(0, 12);
-  const observedOfferMessage = cleanText(page.description, 1_000)
+    : [cleanText(page.title, 500), cleanText(page.description, 500)].filter(safePublicOffer).slice(0, 12);
+  const description = cleanText(page.description, 1_000);
+  const observedOfferMessage = (safePublicOffer(description) ? description : "")
     || productsServices[0]
     || cleanText(page.title, 1_000);
-  const evidenceQuote = cleanText(page.text_excerpt, 1_000);
+  const excerpt = cleanText(page.text_excerpt, 1_000);
+  // Keep non-advertising offer facts when a page also contains marketing claims
+  // about efficiency. The full source remains available for scoped assessment.
+  const evidenceQuote = (safePublicOffer(excerpt) ? excerpt : cleanText(
+    page.text_excerpt.split(/(?<=[.!?])\s+/u).filter(safePublicOffer).join(" "), 1_000))
+    || cleanText([...productsServices, observedOfferMessage].filter(safePublicOffer).join(" · "), 1_000);
   const priceMatch = evidenceQuote.match(/(?:от\s+)?\d+(?:[\s\u00a0]\d{3})*(?:[.,]\d{1,2})?\s*(?:₽|руб(?:\.|лей|ля)?)/iu);
   const publishedPrice = priceMatch
     ? { status: "PUBLISHED" as const, value: cleanText(priceMatch[0], 300) }
@@ -248,11 +260,12 @@ export async function collectProductionCompetitorResearch(
   const configured = parseProductionCompetitorResearchConfig(rawConfig);
   const candidateSet = createBoundedCompetitorCandidateSet(configured);
   const byName = new Map(configured.candidates.map((candidate) => [candidate.competitor.toLocaleLowerCase("ru-RU"), candidate]));
-  const observationTasks: Array<Promise<Record<string, unknown> | null>> = candidateSet.candidates.flatMap((candidate) => {
+  const failures: ProductionCompetitorResearchInput["competitor_collection_failures"] = [];
+  const observationTasks: Array<() => Promise<Record<string, unknown> | null>> = candidateSet.candidates.flatMap((candidate) => {
     const configuredCandidate = byName.get(candidate.competitor.toLocaleLowerCase("ru-RU"));
     if (!configuredCandidate) return [];
     const allowedHosts = [...new Set(candidate.exact_destinations.map((destination) => new URL(destination).hostname.toLowerCase()))];
-    return candidate.exact_destinations.map(async (destination) => {
+    return candidate.exact_destinations.map((destination) => async () => {
       try {
         const origin = new URL(destination).origin;
         const page = await researchAllowlistedPublicCompetitorPage(destination, {
@@ -277,6 +290,12 @@ export async function collectProductionCompetitorResearch(
             value: observed.observedOfferMessage,
           },
           raw_quote: observed.evidenceQuote,
+          research_content: {
+            title: page.page.title,
+            headings: page.page.headings,
+            text: cleanText(page.page.text_excerpt, 8_000),
+            forms_detected: page.page.forms_detected,
+          },
           matrix_row: {
             competitor: candidate.competitor,
             products_services: observed.productsServices,
@@ -353,17 +372,30 @@ export async function collectProductionCompetitorResearch(
               : "Одобренный источник не предоставлен; отсутствие наблюдения не означает отсутствие рекламы.",
           ],
         };
-      } catch {
+      } catch (error) {
+        failures.push({ competitor: candidate.competitor, url: destination,
+          code: error instanceof Error && "code" in error ? String(error.code) : "PUBLIC_PAGE_UNAVAILABLE",
+          reason: error instanceof Error ? cleanText(error.message, 500) : "Публичная страница недоступна" });
         // A failed exact landing remains unavailable in the denominator; it is never converted to zero evidence.
         return null;
       }
     });
   });
-  const observations = (await Promise.all(observationTasks))
+  const collected: Array<Record<string, unknown> | null> = new Array(observationTasks.length);
+  let nextTask = 0;
+  await Promise.all(Array.from({ length: Math.min(4, observationTasks.length) }, async () => {
+    for (;;) {
+      const index = nextTask++;
+      if (index >= observationTasks.length) return;
+      collected[index] = await observationTasks[index]();
+    }
+  }));
+  const observations = collected
     .filter((observation): observation is Record<string, unknown> => observation !== null);
 
   return {
     competitor_candidate_set: candidateSet,
     competitor_observations: observations,
+    competitor_collection_failures: failures,
   };
 }

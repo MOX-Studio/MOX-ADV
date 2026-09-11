@@ -3,6 +3,7 @@ import {
   type PipelineCurrentProducts,
   type PipelineCurrentProductStore,
 } from "./pipeline-current-products.ts";
+import { loadPipelineValue, storePipelineValue } from "./pipeline-value-chunks.ts";
 
 const COMPRESSED_VALUE_PREFIX = "p0:gzip-base64:v1:";
 
@@ -21,7 +22,7 @@ function base64ToBytes(value: string) {
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
-async function compressValue(value: string) {
+export async function compressValue(value: string) {
   const body = new Response(new TextEncoder().encode(value)).body;
   if (!body) throw new Error("Pipeline product compression stream is unavailable.");
   const compressed = new Uint8Array(await new Response(
@@ -30,7 +31,7 @@ async function compressValue(value: string) {
   return `${COMPRESSED_VALUE_PREFIX}${bytesToBase64(compressed)}`;
 }
 
-async function decompressValue(value: string) {
+export async function decompressValue(value: string) {
   if (!value.startsWith(COMPRESSED_VALUE_PREFIX)) return value;
   const body = new Response(base64ToBytes(value.slice(COMPRESSED_VALUE_PREFIX.length))).body;
   if (!body) throw new Error("Pipeline product decompression stream is unavailable.");
@@ -98,12 +99,27 @@ export class D1PipelineCurrentProductStore implements PipelineCurrentProductStor
       "SELECT state_revision, value_json FROM p0_pipeline_current_products WHERE owner_key = ?",
     ).bind(ownerKey).first<CurrentRow>();
     if (!row) return null;
-    const value = JSON.parse(await decompressValue(row.value_json)) as unknown;
+    const value = JSON.parse(await decompressValue(await loadPipelineValue(this.db, row.value_json))) as unknown;
     assertCurrentProducts(value);
     if (value.owner_key !== ownerKey || value.state_revision !== row.state_revision) {
       throw new Error("Current pipeline product row identity is corrupt.");
     }
     return structuredClone(value);
+  }
+
+  async loadEvidenceCandidates(ownerKey: string) {
+    await ensurePipelineCurrentProductTables(this.db);
+    const rows = await this.db.prepare(
+      "SELECT state_revision, value_json FROM p0_pipeline_product_revisions WHERE owner_key = ? AND current_stage = 'EVIDENCE_COLLECTION' ORDER BY state_revision DESC LIMIT 8",
+    ).bind(ownerKey).all<CurrentRow>();
+    const candidates: PipelineCurrentProducts[] = [];
+    for (const row of rows.results) {
+      const value: unknown = JSON.parse(await decompressValue(await loadPipelineValue(this.db, row.value_json)));
+      assertCurrentProducts(value);
+      if (value.owner_key !== ownerKey || value.state_revision !== row.state_revision) throw new Error("Historical evidence candidate row identity is corrupt.");
+      if (value.analytics_evidence_snapshot) candidates.push(structuredClone(value));
+    }
+    return candidates;
   }
 
   async compareAndSwap(ownerKey: string, expectedStateRevision: number | null, current: PipelineCurrentProducts) {
@@ -112,7 +128,7 @@ export class D1PipelineCurrentProductStore implements PipelineCurrentProductStor
     if (current.owner_key !== ownerKey || current.state_revision !== (expectedStateRevision ?? -1) + 1) {
       throw new Error("Current pipeline product CAS metadata is invalid.");
     }
-    const stored = await compressValue(JSON.stringify(current));
+    const stored = await storePipelineValue(this.db, await compressValue(JSON.stringify(current)));
     const statement = expectedStateRevision === null
       ? this.db.prepare(
           "INSERT OR IGNORE INTO p0_pipeline_current_products(owner_key, state_revision, run_id, run_version, current_stage, updated_at, value_json) VALUES (?, ?, ?, ?, ?, ?, ?)",

@@ -23,8 +23,12 @@ export const CAMPAIGN_DRAFT_TECHNICAL_FIELDS = Object.freeze([
   ...auctionProtocolFields,
 ] as const);
 
+export const LOCAL_CAMPAIGN_DRAFT_TECHNICAL_FIELDS = Object.freeze([
+  "campaign_name", "group_name", "keywords", "negative_keywords", "ad_title", "ad_text", "landing_page",
+] as const);
+
 export type CampaignHypothesisSemanticField = (typeof CAMPAIGN_HYPOTHESIS_SEMANTIC_FIELDS)[number];
-type DirectDraftTechnicalField = "campaign_name" | "group_name" | "negative_keywords" | "keyword" | "ad_title" | "ad_text";
+type DirectDraftTechnicalField = "campaign_name" | "group_name" | "negative_keywords" | "keyword" | "keywords" | "landing_page" | "ad_title" | "ad_text";
 type AuctionProtocolTechnicalField = (typeof AUCTION_PROTOCOL_EDITOR_FIELDS)[number]["key"];
 export type CampaignDraftTechnicalField = DirectDraftTechnicalField | AuctionProtocolTechnicalField;
 export type CampaignPairChangeClassification = "SEMANTIC" | "TECHNICAL";
@@ -35,6 +39,7 @@ export type CampaignPairEditRequest = {
   pair_id: string;
   expected_hypothesis_revision_id: string;
   expected_draft_revision_id: string;
+  group_ref?: string;
   semantic_changes?: Changes<CampaignHypothesisSemanticField>;
   technical_changes?: Changes<CampaignDraftTechnicalField>;
 };
@@ -93,6 +98,7 @@ function validateChanges(
   value: unknown,
   section: "semantic_changes" | "technical_changes",
   supportedFields: readonly string[],
+  allowEmptyFields: readonly string[] = [],
 ) {
   if (value === undefined) return {};
   const changes = plainRecord(value);
@@ -106,9 +112,9 @@ function validateChanges(
       `${section}.${unsupported} is not supported by ${CAMPAIGN_PAIR_EDIT_CONTRACT}; no current Campaign pair was changed.`,
     );
   }
-  const empty = Object.entries(changes).find(([, fieldValue]) => fieldValue === null
+  const empty = Object.entries(changes).find(([field, fieldValue]) => fieldValue === null
     || fieldValue === undefined
-    || (typeof fieldValue === "string" && !fieldValue.normalize("NFKC").trim()));
+    || (typeof fieldValue === "string" && !fieldValue.normalize("NFKC").trim() && !allowEmptyFields.includes(field)));
   if (empty) {
     throw new CampaignPairEditError(
       "CAMPAIGN_PAIR_EDIT_VALUE_INVALID",
@@ -122,7 +128,11 @@ function directDraftPointer(field: string) {
   return DIRECT_V501_DRAFT_FIELD_REGISTRY.fields.find((entry) => entry.input_name === field)?.pointer ?? null;
 }
 
-function technicalPointer(field: string) {
+function technicalPointer(field: string, local = false) {
+  if (local && ["group_name", "negative_keywords"].includes(field)) return "/direct/ad_groups";
+  if (local && ["ad_title", "ad_text"].includes(field)) return "/direct/ads";
+  if (field === "keywords") return "/direct/keywords";
+  if (field === "landing_page") return "/direct/ads";
   return directDraftPointer(field) ?? `/auction_protocol/${field}`;
 }
 
@@ -137,6 +147,7 @@ export function classifyCampaignPairEdit(value: unknown): CampaignPairRebuildPla
     "expected_draft_revision_id",
     "semantic_changes",
     "technical_changes",
+    "group_ref",
   ]);
   const unsupportedKey = Object.keys(request).find((key) => !acceptedKeys.has(key));
   if (unsupportedKey) {
@@ -149,18 +160,21 @@ export function classifyCampaignPairEdit(value: unknown): CampaignPairRebuildPla
   const pairId = requiredIdentifier(request.pair_id, "Campaign pair");
   requiredIdentifier(request.expected_hypothesis_revision_id, "Expected Campaign Hypothesis revision");
   requiredIdentifier(request.expected_draft_revision_id, "Expected Campaign Draft revision");
+  if (request.group_ref !== undefined) requiredIdentifier(request.group_ref, "Exact local group reference");
   const semanticChanges = validateChanges(
     request.semantic_changes,
     "semantic_changes",
     CAMPAIGN_HYPOTHESIS_SEMANTIC_FIELDS,
   );
+  const supportedTechnicalFields = request.group_ref === undefined ? CAMPAIGN_DRAFT_TECHNICAL_FIELDS : LOCAL_CAMPAIGN_DRAFT_TECHNICAL_FIELDS;
   const technicalChanges = validateChanges(
     request.technical_changes,
     "technical_changes",
-    CAMPAIGN_DRAFT_TECHNICAL_FIELDS,
+    supportedTechnicalFields,
+    request.group_ref === undefined ? [] : ["negative_keywords"],
   );
   const semanticFields = CAMPAIGN_HYPOTHESIS_SEMANTIC_FIELDS.filter((field) => Object.hasOwn(semanticChanges, field));
-  const technicalFields = CAMPAIGN_DRAFT_TECHNICAL_FIELDS.filter((field) => Object.hasOwn(technicalChanges, field));
+  const technicalFields = supportedTechnicalFields.filter((field) => Object.hasOwn(technicalChanges, field));
   if (!semanticFields.length && !technicalFields.length) {
     throw new CampaignPairEditError(
       "CAMPAIGN_PAIR_EDIT_NO_CHANGE",
@@ -186,7 +200,7 @@ export function classifyCampaignPairEdit(value: unknown): CampaignPairRebuildPla
     classification: semantic ? "SEMANTIC" : "TECHNICAL",
     changed_fields: [
       ...semanticFields.map((field) => `/hypothesis/${field}`),
-      ...technicalFields.map(technicalPointer),
+      ...new Set(technicalFields.map((field) => technicalPointer(field, request.group_ref !== undefined))),
     ],
     rebuild_cone: {
       hypothesis: semantic,

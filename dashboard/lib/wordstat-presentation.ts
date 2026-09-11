@@ -16,7 +16,8 @@ export type WordstatFormulationPresentation = {
   device: string;
   scope_label: string;
   observed_at: string | null;
-  lower_bound: true;
+  lower_bound: false;
+  demand_dimension: string | null;
 };
 
 export type WordstatPresentation = {
@@ -86,7 +87,6 @@ const GAP_LABELS: Record<string, string> = {
   INCOMPARABLE_WORDSTAT_SCOPES: "Частоты получены в несопоставимых областях и не складываются.",
   WORDSTAT_SCOPE_INVALID: "Область наблюдения Wordstat не подтверждена.",
   WORDSTAT_NO_ROWS_RETURNED: "Wordstat вернул штатную пустую выдачу; отсутствующие строки не считаются нулевым спросом.",
-  WORDSTAT_SNAPSHOT_ROW_CAP: "В нормализованный снимок вошли первые 50 строк; полный официальный CSV сохранён в защищённом артефакте.",
 };
 
 function gapLabels(frequency: JsonRecord) {
@@ -94,6 +94,11 @@ function gapLabels(frequency: JsonRecord) {
     const code = text(record(value).code);
     return GAP_LABELS[code] ?? "Для части пакета Wordstat частота недоступна.";
   }))];
+}
+
+/** A completed empty query belongs in the research log, not launch blockers. */
+export function isWordstatEmptyResultNote(value: string) {
+  return value === "WORDSTAT_NO_ROWS_RETURNED" || value === GAP_LABELS.WORDSTAT_NO_ROWS_RETURNED;
 }
 
 function status(value: unknown): WordstatPresentation["status"] {
@@ -149,6 +154,7 @@ export function projectWordstatForPresentation(
     regions?: unknown;
     device?: unknown;
     observedAt?: unknown;
+    demandDimension?: unknown;
   }): WordstatFormulationPresentation | null => {
     const phrase = text(input.phrase);
     if (!phrase) return null;
@@ -173,11 +179,13 @@ export function projectWordstatForPresentation(
       device,
       scope_label: [...scopedRegions, DEVICE_LABELS[device] ?? "устройство не подтверждено"].join(" · ") || "Область наблюдения недоступна",
       observed_at: text(input.observedAt) || observedAt,
-      lower_bound: true,
+      lower_bound: false,
+      demand_dimension: text(input.demandDimension) || null,
     };
   };
-  const plannedFormulations = list(plan.seeds).map((value) => {
-    const seed = record(value);
+  const planSeeds = list(plan.seeds).map(record);
+  const demandDimensionByCluster = new Map(planSeeds.map((seed) => [text(seed.cluster_id), text(seed.dimension)] as const));
+  const plannedFormulations = planSeeds.map((seed) => {
     return formulation({
       phrase: seed.phrase,
       formulationRole: "PLANNED_FORMULATION",
@@ -185,10 +193,12 @@ export function projectWordstatForPresentation(
       operatorProfile: seed.operator_profile,
       regions: seed.region_names,
       device: seed.device,
+      demandDimension: seed.dimension,
     });
   }).filter((value): value is WordstatFormulationPresentation => value !== null);
-  const canonicalFormulations = list(frequency.canonical_observations).map((value) => {
+  const canonicalFormulations = list(frequency.canonical_observations).map((value, index) => {
     const observation = record(value);
+    const clusterId = text(observation.assigned_cluster_id);
     return formulation({
       phrase: observation.phrase,
       formulationRole: "RETURNED_TOP_ROW",
@@ -197,20 +207,43 @@ export function projectWordstatForPresentation(
       regions: observation.region_names,
       device: observation.device,
       observedAt: observation.observed_at,
+      demandDimension: demandDimensionByCluster.get(clusterId) || clusterId || `RETURNED_ROW_${index + 1}`,
     });
   }).filter((value): value is WordstatFormulationPresentation => value !== null);
-  const plannedAvailable = plannedFormulations.some((item) => item.status === "AVAILABLE");
-  const formulations = status(frequency.status) === "AVAILABLE" && !plannedAvailable && canonicalFormulations.length
-    ? canonicalFormulations.slice(0, 8)
-    : plannedFormulations.length ? plannedFormulations : canonicalFormulations.slice(0, 8);
-  const available = formulations.filter((item) => item.status === "AVAILABLE").length;
+  const nonCommercialPattern = /(?:^|\s)(?:принял|примет|участвовал[аи]?|участвовали|участвует)(?:\s|$)/iu;
+  const availableCanonical = canonicalFormulations
+    .filter((item) => item.status === "AVAILABLE" && !nonCommercialPattern.test(item.phrase))
+    .sort((left, right) => (right.frequency ?? 0) - (left.frequency ?? 0)
+      || left.phrase.localeCompare(right.phrase, "ru-RU"));
+  const availablePlanned = plannedFormulations
+    .filter((item) => item.status === "AVAILABLE")
+    .sort((left, right) => (right.frequency ?? 0) - (left.frequency ?? 0)
+      || left.phrase.localeCompare(right.phrase, "ru-RU"));
+  const candidates = availableCanonical.length ? availableCanonical : availablePlanned;
+  const formulations: WordstatFormulationPresentation[] = [];
+  const perDimension = new Map<string, number>();
+  for (const maximumPerDimension of [1, 2]) {
+    for (const item of candidates) {
+      if (formulations.length >= 7 || formulations.includes(item)) continue;
+      const dimension = item.demand_dimension || item.phrase;
+      const selected = perDimension.get(dimension) ?? 0;
+      if (selected >= maximumPerDimension) continue;
+      formulations.push(item);
+      perDimension.set(dimension, selected + 1);
+    }
+  }
+  const available = formulations.length;
+  const coverage = record(frequency.coverage);
+  const uniqueReturned = finiteFrequency(coverage.unique_returned_rows);
+  const eligibleClusters = finiteFrequency(coverage.eligible_cluster_count);
   const gaps = gapLabels(frequency);
   const quotaExhausted = gaps.includes(GAP_LABELS.WORDSTAT_QUOTA_EXHAUSTED);
   const accessUnavailable = gaps.some((gap) => gap === GAP_LABELS.WORDSTAT_AUTHORITY_UNAVAILABLE || gap === GAP_LABELS.WORDSTAT_ACCESS_DENIED);
-  const nextAction = available === formulations.length && formulations.length > 0
-    ? "Сравнить формулировки по наблюдаемым частотам, сохраняя одинаковую область и ограничения метода."
-    : available > 0 || (status(frequency.status) === "PARTIAL" && canonicalFormulations.length > 0)
-      ? "Повторить только недоступные формулировки; до повторного наблюдения не считать пробелы нулевым спросом."
+  const frequencyStatus = status(frequency.status);
+  const nextAction = available > 0 && frequencyStatus === "AVAILABLE"
+    ? "Сравнить результативные формулировки по наблюдаемым частотам, сохраняя одинаковую область и ограничения метода."
+    : available > 0
+      ? "Использовать только подтверждённые формулировки; недоступные попытки не включать в гипотезы."
       : quotaExhausted
         ? "Повторить сбор после восстановления квоты; до этого спрос по формулировкам остаётся недоступным."
         : accessUnavailable
@@ -221,7 +254,11 @@ export function projectWordstatForPresentation(
     method,
     method_label: methodLabel(method),
     window_label: windowLabel(source, frequency.declared_window),
-    coverage_label: `${available} из ${formulations.length} формулировок получили подтверждённую частоту`,
+    coverage_label: available > 0 && uniqueReturned !== null
+      ? `Исследовано ${uniqueReturned.toLocaleString("ru-RU")} уникальных запросов · ${Number(eligibleClusters ?? 0).toLocaleString("ru-RU")} кластеров · ${available.toLocaleString("ru-RU")} формулировок показано`
+      : available > 0
+        ? `${available} результативных формулировок с подтверждённой частотой`
+        : "Результативные формулировки не получены",
     formulations,
     gaps,
     next_action: nextAction,

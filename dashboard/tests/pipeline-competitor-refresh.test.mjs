@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { COMPETITOR_ASSESSMENT_SCHEMA } from "../lib/competitor-comparison.ts";
 
 import {
   refreshCurrentPipelineCompetitorEvidence,
@@ -111,8 +112,9 @@ test("refreshes only public competitor evidence while preserving current pipelin
         financialCompetitorIntelligence: { capability_status: "AVAILABLE", profiles: [{ legal_name: "ООО «МКЕ»" }] },
       };
     },
-    analyst: async ({ collection, businessGoal }) => ({
-      schema_version: "p0-pipeline-competitor-assessment-v1",
+    analyst: async ({ collection, businessGoal, comparisonScope }) => ({
+      schema_version: COMPETITOR_ASSESSMENT_SCHEMA,
+      comparison_scope: structuredClone(comparisonScope),
       analyst: { actor_id: "evidence_analyst:test", actor_type: "AGENT", role: "EVIDENCE_ANALYST", model_id: "test" },
       objective: businessGoal.desiredOutcome,
       relations: [{
@@ -140,6 +142,120 @@ test("refreshes only public competitor evidence while preserving current pipelin
   assert.equal(next.competitor_evidence_refresh.competitor_assessment.relations[0].relation, "DIRECT_COMPETITOR");
   assert.deepEqual(next.competitor_evidence_refresh.authority, before.authority);
   assert.deepEqual(next.authority, before.authority);
+});
+
+test("excludes contractor observations and can recheck the original pool after all candidates were rejected", async () => {
+  const before = currentProducts();
+  const candidateSet = {
+    schema_version: "p0-bounded-competitor-research-v1",
+    competitor_set_rule: "Public candidate offers for the current purchase",
+    candidates: [
+      { competitor: "Industry Expo", exact_destinations: ["https://industry.example/participation"] },
+      { competitor: "Stand Contractor", exact_destinations: ["https://contractor.example/build"] },
+    ],
+  };
+  before.analytics_evidence_snapshot.competitor_matrix = { candidate_set: candidateSet };
+  const rows = candidateSet.candidates.map((item) => ({ competitor: item.competitor, exact_landing: item.exact_destinations[0], observed_offer_message: item.competitor }));
+  const store = new MemoryStore(before);
+  for (let pass = 0; pass < 3; pass += 1) {
+    const next = await refreshCurrentPipelineCompetitorEvidence({
+      store, ownerKey: "owner-1", expectedStateRevision: 7 + pass,
+      collector: async (input) => {
+        assert.deepEqual(input.candidateSet, candidateSet);
+        return { evidencePackId: "new-public-pack", competitorMatrix: { candidate_set: candidateSet, rows, aggregate_claims: [{ observed_count: 2 }] },
+          competitorObservations: rows.map((row) => ({ matrix_row: row })), financialCompetitorIntelligence: { capability_status: "UNAVAILABLE" } };
+      },
+      analyst: async ({ comparisonScope }) => ({
+        schema_version: COMPETITOR_ASSESSMENT_SCHEMA, comparison_scope: comparisonScope,
+        analyst: { actor_type: "AGENT", role: "EVIDENCE_ANALYST", actor_id: "test", model_id: "test" },
+        objective: "Same purchase", summary: "Competitors only",
+        relations: rows.map((row) => ({ competitor: row.competitor, evidence_url: row.exact_landing,
+          relation: pass === 0 && row.competitor === "Industry Expo" ? "DIRECT_COMPETITOR" : "NOT_COMPETITOR", rationale: "Purchase comparison" })),
+        authority: before.authority,
+      }),
+    });
+    const refresh = next.competitor_evidence_refresh;
+    assert.deepEqual(refresh.competitor_matrix.rows.map((item) => item.competitor), pass === 0 ? ["Industry Expo"] : []);
+    assert.deepEqual(refresh.competitor_observations.map((item) => item.matrix_row.competitor), pass === 0 ? ["Industry Expo"] : []);
+    assert.deepEqual(refresh.competitor_matrix.aggregate_claims, []);
+    assert.equal(refresh.competitor_matrix.status, pass === 0 ? "AVAILABLE" : "UNAVAILABLE");
+    assert.deepEqual(next.analytics_evidence_snapshot, before.analytics_evidence_snapshot);
+  }
+});
+
+test("a discovery agent replaces the old contractor pool before independent collection and assessment", async () => {
+  const before = currentProducts();
+  const store = new MemoryStore(before);
+  const calls = [];
+  const candidateSet = { schema_version: "p0-bounded-competitor-research-v1", competitor_set_rule: "Fresh public search", candidates: [
+    { competitor: "Industrial Exhibition", rationale: "Same participation purchase", exact_destinations: ["https://exhibition.example/participation"] },
+  ] };
+  const next = await refreshCurrentPipelineCompetitorEvidence({
+    store, ownerKey: "owner-1", expectedStateRevision: 7,
+    discoverer: async ({ comparisonScope, generatedAt }) => {
+      calls.push("discover");
+      return { schema_version: "p0-competitor-discovery-v1", observed_at: generatedAt, comparison_scope: comparisonScope, candidate_set: candidateSet,
+        analyst: { role: "EVIDENCE_ANALYST", model_id: "test" }, search_queries: ["industrial exhibition participation"], source_evidence: [], summary: "Discovered competing exhibition" };
+    },
+    collector: async (input) => {
+      calls.push("collect");
+      assert.deepEqual(input.candidateSet, candidateSet);
+      return { evidencePackId: "fresh", competitorMatrix: { candidate_set: input.candidateSet, rows: [{ competitor: "Industrial Exhibition", exact_landing: "https://exhibition.example/participation" }] }, competitorObservations: [], financialCompetitorIntelligence: {} };
+    },
+    analyst: async ({ comparisonScope }) => {
+      calls.push("assess");
+      return { schema_version: COMPETITOR_ASSESSMENT_SCHEMA, comparison_scope: comparisonScope, analyst: { actor_id: "test", actor_type: "AGENT", role: "EVIDENCE_ANALYST", model_id: "test" }, objective: "Current purchase",
+        relations: [{ competitor: "Industrial Exhibition", relation: "DIRECT_COMPETITOR", evidence_url: "https://exhibition.example/participation", rationale: "Same buyer and purchase" }], summary: "Verified", authority: before.authority };
+    },
+  });
+  assert.deepEqual(calls, ["discover", "collect", "assess"]);
+  assert.equal(next.competitor_evidence_refresh.competitor_discovery.analyst.role, "EVIDENCE_ANALYST");
+  assert.equal(next.competitor_evidence_refresh.competitor_matrix.rows[0].competitor, "Industrial Exhibition");
+});
+
+test("a failed discovery never falls back to the configured contractor pool or overwrites current results", async () => {
+  const before = currentProducts();
+  const store = new MemoryStore(before);
+  let collected = false;
+  await assert.rejects(refreshCurrentPipelineCompetitorEvidence({
+    store, ownerKey: "owner-1", expectedStateRevision: 7,
+    discoverer: async () => { throw new Error("Search unavailable"); },
+    collector: async () => { collected = true; throw new Error("Unexpected old-pool collection"); },
+    analyst: async () => { throw new Error("Unexpected assessment"); },
+  }), /Search unavailable/u);
+  assert.equal(collected, false);
+  assert.deepEqual(store.current, before);
+});
+
+test("concurrent campaign changes preserve researched competitors, while a changed purchase rejects stale research", async () => {
+  for (const changedPurchase of [false, true]) {
+    const before = currentProducts();
+    const store = new MemoryStore(before);
+    const promise = refreshCurrentPipelineCompetitorEvidence({
+      store, ownerKey: "owner-1", expectedStateRevision: 7,
+      collector: async () => ({ evidencePackId: "fresh", competitorMatrix: {
+        candidate_set: { candidates: [{ competitor: "Industry Expo", exact_destinations: ["https://expo.example/"] }] },
+        rows: [{ competitor: "Industry Expo", exact_landing: "https://expo.example/" }],
+      }, competitorObservations: [], financialCompetitorIntelligence: {} }),
+      analyst: async ({ comparisonScope }) => {
+        store.current.state_revision = 8;
+        store.current.campaign_pairs = [{ pair_revision_id: "new-campaign-from-parallel-work" }];
+        if (changedPurchase) store.current.goal_revision.goal_revision_id = "changed-goal";
+        return { schema_version: COMPETITOR_ASSESSMENT_SCHEMA, comparison_scope: comparisonScope,
+          analyst: { actor_id: "test", actor_type: "AGENT", role: "EVIDENCE_ANALYST", model_id: "test" }, objective: "Same purchase",
+          relations: [{ competitor: "Industry Expo", relation: "DIRECT_COMPETITOR", evidence_url: "https://expo.example/", rationale: "Comparable" }], summary: "Verified", authority: before.authority };
+      },
+    });
+    if (changedPurchase) {
+      await assert.rejects(promise, /Цель или предложение изменились/u);
+      assert.equal(store.current.competitor_evidence_refresh, null);
+    } else {
+      const result = await promise;
+      assert.equal(result.state_revision, 9);
+      assert.equal(result.campaign_pairs[0].pair_revision_id, "new-campaign-from-parallel-work");
+      assert.equal(result.competitor_evidence_refresh.competitor_matrix.rows[0].competitor, "Industry Expo");
+    }
+  }
 });
 
 test("bounds both public collection and Evidence Analyst time without persisting late results", async () => {

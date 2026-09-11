@@ -10,8 +10,15 @@ export function wordSafeLimit(value: unknown, maximum: number) {
   return `${text.slice(0, cutAt).replace(/[,:;.!?—-]+$/u, "").trim()}…`;
 }
 
+function leadingClause(value: unknown) {
+  const source = normalize(value);
+  const [clause] = source.split(/\s+[—–]\s+|[;:]/u);
+  return clause && clause !== source ? clause.replace(/[,:;.!?—–-]+$/u, "").trim() : "";
+}
+
 export function buildAdTitle(product: unknown) {
-  return wordSafeLimit(product, 56);
+  const clause = leadingClause(product);
+  return clause && clause.length <= 56 ? clause : wordSafeLimit(product, 56);
 }
 
 export function buildAdText(message: unknown, product: unknown, participation: boolean) {
@@ -29,6 +36,13 @@ export function buildAdText(message: unknown, product: unknown, participation: b
   }
 
   const callToAction = participation ? "Подайте заявку на участие." : "Оставьте заявку на сайте.";
+  const clause = leadingClause(text);
+  if (clause.length >= 20) {
+    const sentence = `${clause}.`;
+    const withCallToAction = `${sentence} ${callToAction}`;
+    if (withCallToAction.length <= maximum) return withCallToAction;
+    if (sentence.length <= maximum) return sentence;
+  }
   const subject = wordSafeLimit(normalize(product) || "Узнайте подробности", maximum - callToAction.length - 1);
   const separator = /[.!?…]$/u.test(subject) ? " " : ". ";
   return `${subject}${separator}${callToAction}`;

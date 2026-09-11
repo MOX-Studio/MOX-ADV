@@ -1,4 +1,10 @@
+import { buildFindingsResearchPlan, FINDINGS_POLICY, type BusinessResearchResult } from "./findings-research.ts";
+import { verifyBusinessResearch } from "./business-evidence-research.ts";
 import { normalizePublicHttpsUrl } from "./site-url.ts";
+import { assertGoalReady, verifyGoalFormationResult, type GoalRevision } from "./goal-revision.ts";
+import { fingerprintDirectAuditCapability, type DirectAuditStore } from "./direct-audit.ts";
+import { competitorResearchMatchesSnapshot } from "./competitor-comparison.ts";
+import type { PipelineCompetitorResearch } from "./pipeline-competitor-research.ts";
 import {
   buildProductFocusArtifacts,
   type FocusOpportunitySet,
@@ -184,6 +190,8 @@ export type AnalyticsEvidenceDomainManifest = {
 };
 
 export type AnalyticsEvidenceBundle = {
+  business_research?: BusinessResearchResult;
+  goal_context?: GoalRevision;
   schema_version: typeof ANALYTICS_EVIDENCE_SCHEMA;
   contract_version: typeof ANALYTICS_EVIDENCE_CONTRACT_VERSION;
   snapshot_id: string;
@@ -220,11 +228,13 @@ export type AnalyticsEvidenceBundle = {
   domain_manifest: AnalyticsEvidenceDomainManifest;
   competitor_ad_observation: CompetitorMatrix["ad_observation"];
   competitor_matrix: CompetitorMatrix | null;
+  competitor_research?: PipelineCompetitorResearch;
   financial_competitor_intelligence: FinancialCompetitorIntelligence | null;
   product_catalog: OfferCatalog;
   focus_opportunities: FocusOpportunitySet;
   market_evidence: Awaited<ReturnType<typeof buildMarketEvidence>>;
   prelaunch_cost: Awaited<ReturnType<typeof buildMarketEvidence>>["cost"];
+  first_party_history?: FirstPartyGenerationHistory;
   versions: {
     schema: string;
     contract: string;
@@ -260,6 +270,57 @@ type AnalyticsEvidenceInput = {
   model: Record<string, unknown>;
   context: Record<string, unknown>;
   generatedAt?: string;
+  /** Reuse already verified market observations when correcting first-party extraction. */
+  marketEvidenceSource?: AnalyticsEvidenceBundle;
+};
+
+export type FirstPartyDirectObservation = {
+  observation_id: string;
+  campaign_key: string;
+  date: string;
+  query: string | null;
+  matched_keyword: string | null;
+  impressions: number;
+  clicks: number;
+  cost: number;
+  currency: "ACCOUNT_CURRENCY";
+  vat: "INCLUDED" | "EXCLUDED" | "UNKNOWN";
+  reported_conversions: number | null;
+  evidence_ids: string[];
+  artifact_digest: string;
+  qualification: "DIAGNOSTIC_ONLY";
+  maturity: "UNKNOWN";
+  hypothesis_binding: "UNBOUND";
+};
+
+export type FirstPartyGenerationHistory = {
+  schema_version: "p0-first-party-generation-history-v1";
+  status: "AVAILABLE" | "PARTIAL" | "UNAVAILABLE";
+  campaign_observations: FirstPartyDirectObservation[];
+  query_observations: FirstPartyDirectObservation[];
+  metrika_observations: Array<{
+    observation_id: string;
+    campaign_key: string | null;
+    period_start: string;
+    period_end: string;
+    visits: number;
+    goal_visits: number;
+    attribution: string;
+    timezone: string;
+    quality_flags: string[];
+    evidence_ids: string[];
+    qualification: "MEASURED_GOAL_ONLY";
+    business_outcome_qualification: "UNKNOWN";
+    maturity: "UNKNOWN";
+  }>;
+  coverage: {
+    direct_rows_available: number;
+    direct_rows_included: number;
+    omitted_rows: number;
+    campaign_report: "AVAILABLE" | "UNAVAILABLE";
+    query_report: "AVAILABLE" | "UNAVAILABLE";
+  };
+  limitations: string[];
 };
 
 type BoundedValue = {
@@ -684,7 +745,19 @@ export async function buildAnalyticsEvidence({
   model,
   context,
   generatedAt,
+  marketEvidenceSource,
 }: AnalyticsEvidenceInput): Promise<AnalyticsEvidenceBundle> {
+  const businessResearch = model.business_research as BusinessResearchResult | undefined;
+  const goalContext = model.goal_research_scope as AnalyticsEvidenceBundle["goal_context"];
+  if (goalContext !== undefined) {
+    await verifyGoalFormationResult({ status: "VERIFIED", revision: goalContext });
+    assertGoalReady(goalContext);
+  }
+  if (marketEvidenceSource && (!await verifyAnalyticsEvidenceSnapshot(marketEvidenceSource)
+    || !goalContext || marketEvidenceSource.goal_context?.digest !== goalContext.digest
+    || marketEvidenceSource.scope.company_host !== urlHost(site.url))) {
+    fail("MARKET_EVIDENCE_REUSE_SCOPE_INVALID", "Повторное использование спроса требует целостного среза той же цели и компании.");
+  }
   const siteResearch = record(site.research);
   const accessProfile = record(context.access_profile);
   const evidenceScope = record(accessProfile.evidence_scope);
@@ -817,7 +890,7 @@ export async function buildAnalyticsEvidence({
   const competitorObservedAts = competitorInputs.map((item) => isoTimestamp(item.observed_at));
   const ownerObservedAts = Object.values(fieldEvidence).map((item) => isoTimestamp(record(item).owner_confirmed_at));
   const rawMarketInput = record(context.market_evidence_input);
-  const marketBatchObservedAt = isoTimestamp(record(rawMarketInput.wordstat_batch).batch_finished_at);
+  const marketBatchObservedAt = isoTimestamp(marketEvidenceSource?.market_evidence.batch_finished_at ?? record(rawMarketInput.wordstat_batch).batch_finished_at);
   const marketCostObservedAts = list(rawMarketInput.cost_observations).map((item) => isoTimestamp(record(item).as_of));
   const asOf = latestTimestamp([siteObservedAt, directObservedAt, metrikaObservedAt, marketBatchObservedAt, financialCompetitorIntelligence?.generated_at ?? null, ...marketCostObservedAts, ...competitorObservedAts, ...ownerObservedAts])
     ?? "1970-01-01T00:00:00.000Z";
@@ -829,7 +902,7 @@ export async function buildAnalyticsEvidence({
         demand_clusters: [],
         cost_observations: [],
       };
-  const marketEvidence = await buildMarketEvidence(marketInput);
+  const marketEvidence = marketEvidenceSource ? structuredClone(marketEvidenceSource.market_evidence) : await buildMarketEvidence(marketInput);
   const fallbackProductEvidence = record(fieldEvidence.product);
   const offerCandidates = list(model.offer_candidates).length
     ? list(model.offer_candidates).map((candidate) => safeValue(candidate) as OfferCandidateInput)
@@ -853,6 +926,11 @@ export async function buildAnalyticsEvidence({
     generatedAt: generated,
   });
   const companyHost = urlHost(site.url) || urlHost(record(list(site.pages)[0]).url);
+  const competitorResearch = context.competitor_research as PipelineCompetitorResearch | undefined;
+  if (competitorResearch !== undefined
+    && !competitorResearchMatchesSnapshot(competitorResearch, goalContext, companyHost, competitorMatrix)) {
+    fail("COMPETITOR_RESEARCH_SCOPE_INVALID", "Поиск и классификация конкурентов не соответствуют Цели или наблюдениям.");
+  }
   const directAccount = text(direct.account);
   const directClientId = text(direct.client_id);
   const metrikaCounterId = text(metrika.counter_id);
@@ -876,9 +954,21 @@ export async function buildAnalyticsEvidence({
     wordstat: [],
   };
 
-  for (const [field, rawItem] of Object.entries(fieldEvidence).sort(([left], [right]) => compareText(left, right))) {
+  const modelFacts = Object.entries(fieldEvidence).map(([field, rawItem]) => ({ field, rawItem, value: model[field] ?? "" }));
+  // Multiple exact public spans may describe distinct formats without overloading one model field.
+  // These are copy facts, never economic coefficients or owner confirmations.
+  const normalizeSpan = (value: string) => value.normalize("NFKC").replace(/\s+/gu, " ").trim().toLocaleLowerCase("ru-RU");
+  for (const value of list(model.copy_facts)) {
+    const fact = record(value), field = text(fact.predicate), quote = text(fact.quote), url = text(fact.source_url);
+    const page = list(site.pages).map(record).find(page => text(page.url) === url);
+    let firstParty = false;
+    try { firstParty = new URL(url).protocol === "https:" && new URL(url).hostname.toLowerCase() === companyHost; } catch { /* Invalid source remains inadmissible. */ }
+    if (!["product", "offer", "value", "message", "constraints", "delivery_terms", "terms"].includes(field) || !quote || !firstParty || !page
+      || !normalizeSpan(text(page.title) + " " + text(page.text_excerpt)).includes(normalizeSpan(quote))) fail("PUBLIC_COPY_FACT_UNSUPPORTED", "Дополнительный рекламный факт должен быть точной цитатой наблюдённой страницы своей компании; коэффициенты и подтверждения владельца недопустимы.");
+    modelFacts.push({ field, rawItem: { quote, source_url: url, confidence: "HIGH" }, value: quote });
+  }
+  for (const { field, rawItem, value: rawModelValue } of modelFacts.sort((left, right) => compareText(left.field, right.field))) {
     const item = record(rawItem);
-    const rawModelValue = model[field] ?? "";
     const normalizedValue = safeValue(rawModelValue);
     const quote = text(item.quote);
     const sourceUrl = text(item.source_url);
@@ -921,7 +1011,11 @@ export async function buildAnalyticsEvidence({
         sourceId: "owner-confirmed",
         claimId,
         sourceKind: "owner_confirmation",
-        sourceLocator: { state_path: `business_model.${field}`, field },
+        sourceLocator: {
+          state_path: `business_model.${field}`, field,
+          ...(goalContext && item.goal_revision_id === goalContext.goal_revision_id && item.goal_digest === goalContext.digest
+            ? { goal_revision_id: goalContext.goal_revision_id, goal_digest: goalContext.digest } : {}),
+        },
         fetchedAt: ownerConfirmedAt ?? generated,
         observedAt: ownerConfirmedAt ?? generated,
         scope: { access: "owner_authorized", company_host: companyHost },
@@ -1434,7 +1528,8 @@ export async function buildAnalyticsEvidence({
         selector_or_jsonpath: text(record(observation.locator).selector) || null,
         request_digest: await contentHash({ url: checked.url.toString(), access: "PUBLIC_NO_AUTH" }),
       },
-      rawValue: { quote: observation.raw_quote, matrix_row: observation.matrix_row ?? null },
+      rawValue: { quote: observation.raw_quote, matrix_row: observation.matrix_row ?? null,
+        ...(observation.research_content ? { research_content: observation.research_content } : {}) },
       rawQuote: text(observation.raw_quote),
       normalized: { value: normalizedClaim, datatype: "string", language: "ru", matrix_row: observation.matrix_row ?? null },
       limitations,
@@ -2125,6 +2220,9 @@ export async function buildAnalyticsEvidence({
   const hashes = {
     input_root_sha256: await contentHash({
       scope,
+      ...(goalContext ? { goal_context: goalContext } : {}),
+      ...(businessResearch ? { business_research: businessResearch } : {}),
+      ...(competitorResearch ? { competitor_research: competitorResearch } : {}),
       generated_at: generated,
       as_of: asOf,
       versions,
@@ -2154,6 +2252,9 @@ export async function buildAnalyticsEvidence({
     market_evidence_sha256: await contentHash(marketEvidence),
   };
   const unsigned: Omit<AnalyticsEvidenceBundle, "snapshot_id"> = {
+    ...(goalContext ? { goal_context: structuredClone(goalContext) } : {}),
+    ...(businessResearch ? { business_research: structuredClone(businessResearch) } : {}),
+    ...(competitorResearch ? { competitor_research: structuredClone(competitorResearch) } : {}),
     schema_version: ANALYTICS_EVIDENCE_SCHEMA,
     contract_version: ANALYTICS_EVIDENCE_CONTRACT_VERSION,
     generated_at: generated,
@@ -2200,6 +2301,266 @@ export async function buildAnalyticsEvidence({
   return deepFreeze(snapshot);
 }
 
+function historyNumber(value: unknown) {
+  if (typeof value !== "number" && (typeof value !== "string" || !/^\d+(?:\.\d+)?$/u.test(value.trim()))) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function historyDate(value: unknown) {
+  const date = text(value);
+  return /^\d{4}-\d{2}-\d{2}$/u.test(date)
+    && Number.isFinite(Date.parse(`${date}T00:00:00.000Z`))
+    && new Date(`${date}T00:00:00.000Z`).toISOString().slice(0, 10) === date ? date : null;
+}
+
+function historyText(value: unknown) {
+  return redactSensitiveEvidenceText(value, 300)
+    .replace(/https?:\/\/\S+/giu, "[REDACTED_URL]")
+    .replace(/\b\d{1,3}(?:\.\d{1,3}){3}\b/gu, "[REDACTED_PII]")
+    .replace(/\b\d{8,}\b/gu, "[REDACTED_PII]");
+}
+
+/**
+ * Reads only the exact immutable audit referenced by the freshly collected snapshot.
+ * Raw provider identifiers and report TSV remain in the audit store; agents receive
+ * bounded diagnostic observations, never invented qualification or causal outcomes.
+ */
+export async function withFirstPartyGenerationHistory(
+  snapshot: AnalyticsEvidenceBundle,
+  input: { ownerKey: string; store: Pick<DirectAuditStore, "getSnapshot" | "getArtifact"> },
+): Promise<AnalyticsEvidenceBundle> {
+  if (snapshot.schema_version !== ANALYTICS_EVIDENCE_SCHEMA || !await verifyAnalyticsEvidenceSnapshot(snapshot)) {
+    fail("FIRST_PARTY_HISTORY_SNAPSHOT_INVALID", "Generation history requires a verified current Analytics Evidence Snapshot.");
+  }
+  const history: FirstPartyGenerationHistory = {
+    schema_version: "p0-first-party-generation-history-v1",
+    status: "UNAVAILABLE",
+    campaign_observations: [],
+    query_observations: [],
+    metrika_observations: [],
+    coverage: {
+      direct_rows_available: 0,
+      direct_rows_included: 0,
+      omitted_rows: 0,
+      campaign_report: "UNAVAILABLE",
+      query_report: "UNAVAILABLE",
+    },
+    limitations: [
+      "Direct conversions have no qualified-business-outcome or attribution binding in the current report contract; use them only as diagnostics.",
+      "Reporting stability is not business conversion maturity; conversion delay and CRM qualification are unknown.",
+      "Observed campaign and query results are associational; they do not establish causal winners, losing hypotheses, or automatic exclusions.",
+      "Account-wide history may cover other products, geographies or business goals; establish relevance before transferring any observation to a new campaign.",
+      "Campaign keys group observations only; no exact campaign-to-generated-hypothesis binding has been established.",
+      "Costs are in the provider account currency; do not compare them with a business CPA in another or unverified currency.",
+      "Campaign reports, query reports and Metrica reports overlap and may use different periods or attribution; do not sum or join their metrics blindly.",
+    ],
+  };
+  const campaignKey = async (campaignId: string) => `campaign:${(await contentHash({
+    owner: input.ownerKey, account: snapshot.scope.direct_client_login, campaign: campaignId,
+  })).slice(7)}`;
+  const directEvidence = snapshot.evidence.find((item) => item.source_id === "direct"
+    && typeof record(item.normalized.complete_read_audit).audit_id === "string");
+  let ownerScopeMismatch = false;
+  if (directEvidence) {
+    const audit = record(directEvidence.normalized.complete_read_audit);
+    const auditIdentity = record(audit.snapshot);
+    const auditSnapshotId = text(auditIdentity.snapshot_id);
+    let durable: Awaited<ReturnType<DirectAuditStore["getSnapshot"]>> = null;
+    try {
+      if (auditSnapshotId) durable = await input.store.getSnapshot(auditSnapshotId);
+    } catch {
+      history.limitations.push("The exact durable Direct audit could not be read; its absence is not zero historical activity.");
+    }
+    ownerScopeMismatch = durable !== null && durable.owner_key !== input.ownerKey;
+    if (durable && durable.schema_version === "direct-read-audit-snapshot-v1"
+      && durable.snapshot_id === auditSnapshotId
+      && durable.owner_key === input.ownerKey
+      && durable.account === snapshot.scope.direct_client_login
+      && durable.client_id === snapshot.scope.direct_client_id
+      && durable.audit_id === audit.audit_id
+      && durable.audit_version === auditIdentity.audit_version
+      && durable.capability_snapshot_id === auditIdentity.capability_snapshot_id
+      && durable.capability_fingerprint === auditIdentity.capability_fingerprint
+      && durable.checkpoint.audit_id === durable.audit_id
+      && durable.checkpoint.version === durable.audit_version
+      && durable.checkpoint.owner_key === input.ownerKey
+      && durable.checkpoint.account === durable.account) {
+      const sealedReferences = [
+        ...list(audit.artifact_references).map(record),
+        ...list(audit.report_summaries).map((summary) => record(record(summary).artifact_reference)),
+      ];
+      for (const report of durable.checkpoint.reports) {
+        if (report.status !== "COMPLETE" || !report.artifact_reference) continue;
+        const isQuery = report.report_type === "SEARCH_QUERY_PERFORMANCE_REPORT";
+        if (!isQuery && report.report_type !== "CAMPAIGN_PERFORMANCE_REPORT") continue;
+        const reference = report.artifact_reference;
+        if (!sealedReferences.some((sealed) => sealed.artifact_id === reference.artifact_id && sealed.digest === reference.digest)) {
+          history.limitations.push("A durable report reference does not match the sealed Analytics Evidence Snapshot and was excluded.");
+          continue;
+        }
+        let artifact: Record<string, unknown> = {};
+        try {
+          artifact = record(await input.store.getArtifact(reference.artifact_id));
+        } catch {
+          history.limitations.push("A durable Direct report could not be read; historical coverage is partial.");
+          continue;
+        }
+        const params = record(record(artifact.exact_request).params);
+        const criteria = record(params.SelectionCriteria);
+        const dateFrom = historyDate(criteria.DateFrom);
+        const dateTo = historyDate(criteria.DateTo);
+        if (reference.audit_id !== durable.audit_id || reference.kind !== "DIRECT_REPORT_TSV"
+          || artifact.schema_version !== "direct-read-audit-report-v1"
+          || artifact.report_type !== report.report_type || artifact.report_key !== report.report_key
+          || !dateFrom || !dateTo || dateFrom > dateTo
+          || canonicalizeEvidence(artifact.exact_request) !== canonicalizeEvidence(report.request)
+          || await fingerprintDirectAuditCapability(artifact) !== reference.digest
+          || typeof artifact.tsv !== "string") {
+          history.limitations.push("A Direct report failed exact source, request, date or digest verification and was excluded.");
+          continue;
+        }
+        const lines = artifact.tsv.split(/\r?\n/u).filter((line) => line.length > 0);
+        const headers = (lines.shift() ?? "").replace(/^\uFEFF/u, "").split("\t");
+        const required = ["Date", "CampaignId", "Impressions", "Clicks", "Cost", ...(isQuery ? ["Query", "MatchedKeyword"] : [])];
+        if (new Set(headers).size !== headers.length || required.some((name) => !headers.includes(name))) {
+          history.limitations.push("A Direct report has an unsupported column shape and was excluded.");
+          continue;
+        }
+        history.coverage[isQuery ? "query_report" : "campaign_report"] = "AVAILABLE";
+        history.coverage.direct_rows_available += lines.length;
+        const dateIndex = headers.indexOf("Date");
+        const sortedLines = [...new Set(lines)].sort((left, right) => compareText(right.split("\t")[dateIndex], left.split("\t")[dateIndex]) || compareText(left, right));
+        let included = 0;
+        for (const line of sortedLines) {
+          const cells = line.split("\t");
+          if (cells.length !== headers.length) continue;
+          const row = Object.fromEntries(headers.map((header, index) => [header, cells[index]]));
+          const date = historyDate(row.Date);
+          const impressions = historyNumber(row.Impressions);
+          const clicks = historyNumber(row.Clicks);
+          const cost = historyNumber(row.Cost);
+          if (!date || date < dateFrom || date > dateTo || date > snapshot.as_of.slice(0, 10)
+            || !/^\d+$/u.test(row.CampaignId) || impressions === null || clicks === null || cost === null) continue;
+          if (included >= (isQuery ? 120 : 60)) continue;
+          included += 1;
+          const normalized = {
+            campaign_key: await campaignKey(row.CampaignId),
+            date,
+            query: isQuery ? historyText(row.Query) : null,
+            matched_keyword: isQuery ? historyText(row.MatchedKeyword) : null,
+            impressions, clicks, cost,
+            currency: "ACCOUNT_CURRENCY" as const,
+            vat: params.IncludeVAT === "YES" ? "INCLUDED" as const : params.IncludeVAT === "NO" ? "EXCLUDED" as const : "UNKNOWN" as const,
+            reported_conversions: historyNumber(row.Conversions),
+            evidence_ids: [directEvidence.evidence_id],
+            artifact_digest: reference.digest,
+            qualification: "DIAGNOSTIC_ONLY" as const,
+            maturity: "UNKNOWN" as const,
+            hypothesis_binding: "UNBOUND" as const,
+          };
+          (isQuery ? history.query_observations : history.campaign_observations).push({
+            ...normalized,
+            observation_id: `observation:${(await contentHash({ artifact: reference.digest, row })).slice(7)}`,
+          });
+        }
+      }
+    } else {
+      history.limitations.push("The immutable Direct audit is absent or does not match this owner/account snapshot; historical activity remains unknown.");
+    }
+  } else {
+    history.limitations.push("No complete-account Direct evidence is available for historical query retrieval; this is not evidence of zero activity.");
+  }
+  const bound = (rows: FirstPartyDirectObservation[], maximum: number) => [...new Map(rows.map((row) => [row.observation_id, row])).values()]
+    .sort((left, right) => compareText(right.date, left.date) || compareText(left.observation_id, right.observation_id))
+    .slice(0, maximum);
+  history.campaign_observations = bound(history.campaign_observations, 60);
+  history.query_observations = bound(history.query_observations, 120);
+  history.coverage.direct_rows_included = history.campaign_observations.length + history.query_observations.length;
+  history.coverage.omitted_rows = history.coverage.direct_rows_available - history.coverage.direct_rows_included;
+  if (history.coverage.omitted_rows > 0) {
+    history.limitations.push("History is bounded to 60 campaign-day and 120 query-day rows, newest first; invalid or duplicate rows are omitted and the remainder is not a complete account total.");
+  }
+  for (const evidence of snapshot.evidence.filter((item) => !ownerScopeMismatch && item.source_kind === "metrica_reports_api")) {
+    const value = evidence.normalized;
+    const report = record(value.report);
+    const periodStart = historyDate(report.period_start);
+    const periodEnd = historyDate(report.period_end);
+    const visits = historyNumber(value.visits);
+    const goals = historyNumber(value.goal_visits);
+    if (!periodStart || !periodEnd || periodStart > periodEnd || visits === null || goals === null) continue;
+    const campaign = /^ym:s:\w*DirectClickOrder=='(\d+)'$/u.exec(text(report.filters));
+    history.metrika_observations.push({
+      observation_id: `observation:${(await contentHash({ evidence: evidence.evidence_id })).slice(7)}`,
+      campaign_key: campaign ? await campaignKey(campaign[1]) : null,
+      period_start: periodStart,
+      period_end: periodEnd,
+      visits,
+      goal_visits: goals,
+      attribution: historyText(report.attribution),
+      timezone: historyText(report.timezone),
+      quality_flags: [...evidence.quality_flags],
+      evidence_ids: [evidence.evidence_id],
+      qualification: "MEASURED_GOAL_ONLY",
+      business_outcome_qualification: "UNKNOWN",
+      maturity: "UNKNOWN",
+    });
+  }
+  if (!history.metrika_observations.length) history.limitations.push("Measured Metrica goal observations are unavailable; qualification and conversions are unknown, not zero.");
+  const directAvailable = history.coverage.campaign_report === "AVAILABLE" || history.coverage.query_report === "AVAILABLE";
+  history.status = directAvailable || history.metrika_observations.length
+    ? history.coverage.campaign_report === "AVAILABLE" && history.coverage.query_report === "AVAILABLE"
+      && history.coverage.omitted_rows === 0 && history.metrika_observations.length > 0
+      && history.metrika_observations.every((item) => item.quality_flags.length === 0) ? "AVAILABLE" : "PARTIAL"
+    : "UNAVAILABLE";
+  history.limitations = [...new Set(history.limitations)];
+  const current = structuredClone(snapshot);
+  current.first_party_history = history;
+  current.hashes.input_root_sha256 = await contentHash({
+    scope: current.scope, generated_at: current.generated_at, as_of: current.as_of, versions: current.versions,
+    ...(current.goal_context ? { goal_context: current.goal_context } : {}),
+    ...(current.business_research ? { business_research: current.business_research } : {}),
+    ...(current.competitor_research ? { competitor_research: current.competitor_research } : {}),
+    sources: current.sources, claims: current.claims, evidence: current.evidence, conflicts: current.conflicts, gaps: current.gaps,
+    domain_manifest: current.domain_manifest, competitor_ad_observation: current.competitor_ad_observation,
+    competitor_matrix: current.competitor_matrix, financial_competitor_intelligence: current.financial_competitor_intelligence,
+    product_catalog: current.product_catalog, focus_opportunities: current.focus_opportunities, market_evidence: current.market_evidence,
+    first_party_history: history,
+  });
+  const unsigned = { ...current } as Record<string, unknown>;
+  delete unsigned.snapshot_id;
+  current.snapshot_id = await contentHash(unsigned);
+  return deepFreeze(current);
+}
+
+/** Append a dated source read without promoting the old coverage or changing its observations. */
+export async function withBusinessResearchMaterial(snapshot: AnalyticsEvidenceBundle, material: NonNullable<BusinessResearchResult["supporting_materials"]>[number]) {
+  if (!await verifyAnalyticsEvidenceSnapshot(snapshot) || !snapshot.goal_context) throw new Error("Исходный срез исследования не проверен или не привязан к цели.");
+  const current = structuredClone(snapshot);
+  current.business_research ??= {
+    schema_version: FINDINGS_POLICY, plan: buildFindingsResearchPlan(snapshot.goal_context),
+    sources: [], observations: [], attempts: [], gaps: [], observed_at: snapshot.generated_at,
+  };
+  const materials = current.business_research!.supporting_materials ?? [];
+  if (materials.some(item => item.id === material.id)) throw new Error("Это исследование уже добавлено в срез.");
+  current.business_research!.supporting_materials = [...materials, structuredClone(material)];
+  if (!verifyBusinessResearch(current.business_research!, current.goal_context?.digest ?? "")) throw new Error("Дополнительное исследование не прошло проверку.");
+  current.hashes.input_root_sha256 = await contentHash({
+    scope: current.scope, ...(current.goal_context ? { goal_context: current.goal_context } : {}),
+    generated_at: current.generated_at, as_of: current.as_of, versions: current.versions,
+    business_research: current.business_research, ...(current.competitor_research ? { competitor_research: current.competitor_research } : {}),
+    sources: current.sources, claims: current.claims, evidence: current.evidence, conflicts: current.conflicts, gaps: current.gaps,
+    domain_manifest: current.domain_manifest, competitor_ad_observation: current.competitor_ad_observation,
+    competitor_matrix: current.competitor_matrix, financial_competitor_intelligence: current.financial_competitor_intelligence,
+    product_catalog: current.product_catalog, focus_opportunities: current.focus_opportunities, market_evidence: current.market_evidence,
+    ...(current.first_party_history ? { first_party_history: current.first_party_history } : {}),
+  });
+  const unsigned = { ...current } as Record<string, unknown>; delete unsigned.snapshot_id;
+  current.snapshot_id = await contentHash(unsigned);
+  if (!await verifyAnalyticsEvidenceSnapshot(current)) throw new Error("Обновлённый срез исследования не прошёл проверку целостности.");
+  return deepFreeze(current);
+}
+
 export async function verifyAnalyticsEvidenceSnapshot(snapshot: AnalyticsEvidenceBundle | unknown) {
   try {
     const candidate = record(snapshot);
@@ -2212,6 +2573,12 @@ export async function verifyAnalyticsEvidenceSnapshot(snapshot: AnalyticsEvidenc
     }
     if (candidate.schema_version !== ANALYTICS_EVIDENCE_SCHEMA && !LEGACY_ANALYTICS_EVIDENCE_SCHEMAS.has(String(candidate.schema_version))) return false;
     const current = candidate as unknown as AnalyticsEvidenceBundle;
+    if (Object.hasOwn(current, "competitor_research")
+      && !competitorResearchMatchesSnapshot(current.competitor_research, current.goal_context, current.scope.company_host, current.competitor_matrix)) return false;
+    if (Object.hasOwn(current, "goal_context")) {
+      await verifyGoalFormationResult({ status: "VERIFIED", revision: current.goal_context! });
+      assertGoalReady(current.goal_context);
+    }
     for (const source of current.sources) {
       const { manifest_hash: manifestHash, ...body } = source;
       if (manifestHash !== await contentHash(body)) return false;
@@ -2332,6 +2699,14 @@ export async function verifyAnalyticsEvidenceSnapshot(snapshot: AnalyticsEvidenc
         || (current.financial_competitor_intelligence !== null && !await verifyFinancialCompetitorIntelligence(current.financial_competitor_intelligence)))) return false;
     const hasMarketEvidence = Boolean((current as unknown as Record<string, unknown>).market_evidence);
     if (hasMarketEvidence && current.hashes.market_evidence_sha256 !== await contentHash(current.market_evidence)) return false;
+    if (current.business_research && !verifyBusinessResearch(current.business_research, current.goal_context?.digest ?? "")) return false;
+    const hasFirstPartyHistory = Object.hasOwn(current, "first_party_history");
+    if (hasFirstPartyHistory && current.first_party_history?.schema_version !== "p0-first-party-generation-history-v1") return false;
+    if (hasFirstPartyHistory) {
+      const observations = [...current.first_party_history!.campaign_observations, ...current.first_party_history!.query_observations, ...current.first_party_history!.metrika_observations];
+      const evidenceIds = new Set(current.evidence.map((item) => item.evidence_id));
+      if (observations.some((item) => !item.evidence_ids.length || item.evidence_ids.some((id) => !evidenceIds.has(id)))) return false;
+    }
     const hasProductFocus = Boolean(
       (current as unknown as Record<string, unknown>).product_catalog
       && (current as unknown as Record<string, unknown>).focus_opportunities,
@@ -2348,6 +2723,9 @@ export async function verifyAnalyticsEvidenceSnapshot(snapshot: AnalyticsEvidenc
     }
     const inputRoot = {
       scope: current.scope,
+      ...(current.goal_context ? { goal_context: current.goal_context } : {}),
+    ...(current.business_research ? { business_research: current.business_research } : {}),
+      ...(current.competitor_research ? { competitor_research: current.competitor_research } : {}),
       generated_at: current.generated_at,
       as_of: current.as_of,
       versions: current.versions,
@@ -2365,6 +2743,7 @@ export async function verifyAnalyticsEvidenceSnapshot(snapshot: AnalyticsEvidenc
         focus_opportunities: current.focus_opportunities,
       } : {}),
       ...(hasMarketEvidence ? { market_evidence: current.market_evidence } : {}),
+      ...(hasFirstPartyHistory ? { first_party_history: current.first_party_history } : {}),
     };
     if (current.hashes.input_root_sha256 !== await contentHash(inputRoot)) return false;
     const unsigned = { ...current } as Record<string, unknown>;

@@ -19,6 +19,16 @@ test("preserves a complete short message", () => {
   assert.equal(buildAdText("Узнайте условия участия", "Выставка", true), "Узнайте условия участия.");
 });
 
+test("uses a complete leading clause instead of mechanical truncation", () => {
+  const message = "Представьте компанию на ИННОПРОМ со стендом — оставьте заявку, чтобы обсудить формат участия, сроки и бюджет";
+
+  assert.equal(buildAdTitle(message), "Представьте компанию на ИННОПРОМ со стендом");
+  assert.equal(
+    buildAdText(message, "Участие со стендом в выставке ИННОПРОМ", true),
+    "Представьте компанию на ИННОПРОМ со стендом. Подайте заявку на участие.",
+  );
+});
+
 test("shortens long titles without cutting through a word", () => {
   const value = buildAdTitle("Международная промышленная выставка и деловая программа для регионов");
 

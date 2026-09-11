@@ -144,7 +144,7 @@ export type AutonomousCampaignStrategy = {
   status: "AGENT_ACCEPTED";
   accepted_at: string;
   accepted_by: {
-    kind: "STRATEGY_AGENT";
+    kind: "STRATEGY_AGENT" | "SINGLE_CODEX";
     model_id: string;
   };
   input_lineage: {
@@ -573,6 +573,7 @@ export async function formAutonomousCampaignStrategy(input: {
   inputs: CampaignStrategyAgentInput;
   model: CampaignStrategyModel;
   acceptedAt: string;
+  validateContent?: (proposal: Readonly<CampaignStrategyAgentProposal>) => CampaignStrategyViolation[];
 }): Promise<Readonly<AutonomousCampaignStrategy>> {
   if (!input.model || !text(input.model.model_id, 255) || !text(input.acceptedAt, 100)
     || !Number.isFinite(Date.parse(input.acceptedAt))) {
@@ -597,6 +598,7 @@ export async function formAutonomousCampaignStrategy(input: {
 
   const firstProposal = normalizeProposal(await input.model.formCampaignStrategy(request(1, null)));
   const firstViolations = proposalViolations(firstProposal, immutableInputs);
+  if (!firstViolations.length && input.validateContent) firstViolations.push(...input.validateContent(deepFreeze(clone(firstProposal as CampaignStrategyAgentProposal))));
   let proposal: CampaignStrategyAgentProposal;
   if (firstViolations.length === 0) {
     proposal = firstProposal as CampaignStrategyAgentProposal;
@@ -607,6 +609,7 @@ export async function formAutonomousCampaignStrategy(input: {
       validation: firstValidation,
     })));
     const secondViolations = proposalViolations(secondProposal, immutableInputs);
+    if (!secondViolations.length && input.validateContent) secondViolations.push(...input.validateContent(deepFreeze(clone(secondProposal as CampaignStrategyAgentProposal))));
     if (secondViolations.length > 0) {
       const secondValidation = validationPackage(2, secondViolations);
       const details = deepFreeze({
@@ -623,6 +626,32 @@ export async function formAutonomousCampaignStrategy(input: {
     proposal = secondProposal as CampaignStrategyAgentProposal;
   }
 
+  return sealAcceptedStrategy(immutableInputs, proposal, input.acceptedAt, { kind: "STRATEGY_AGENT", model_id: input.model.model_id });
+}
+
+/** Verify a proposal authored by the one controlling Codex. Performs no I/O or retries. */
+export async function compileCampaignStrategy(input: {
+  inputs: CampaignStrategyAgentInput;
+  proposal: unknown;
+  acceptedAt: string;
+  validateContent?: (proposal: Readonly<CampaignStrategyAgentProposal>) => CampaignStrategyViolation[];
+}): Promise<Readonly<AutonomousCampaignStrategy>> {
+  if (!Number.isFinite(Date.parse(input.acceptedAt))) throw new Error("Strategy acceptance time is invalid.");
+  const immutableInputs = clone(input.inputs);
+  await assertInputs(immutableInputs);
+  const proposal = normalizeProposal(input.proposal);
+  const violations = proposalViolations(proposal, immutableInputs);
+  if (!violations.length && input.validateContent) violations.push(...input.validateContent(deepFreeze(clone(proposal as CampaignStrategyAgentProposal))));
+  if (violations.length) throw Object.assign(new Error("Стратегия не прошла проверку."), { code: "STRATEGY_CONTENT_INVALID", violations });
+  return sealAcceptedStrategy(immutableInputs, proposal as CampaignStrategyAgentProposal, input.acceptedAt, { kind: "SINGLE_CODEX", model_id: "codex" });
+}
+
+async function sealAcceptedStrategy(
+  immutableInputs: CampaignStrategyAgentInput,
+  proposal: CampaignStrategyAgentProposal,
+  acceptedAt: string,
+  acceptedBy: AutonomousCampaignStrategy["accepted_by"],
+): Promise<Readonly<AutonomousCampaignStrategy>> {
   const inputLineage = {
     goal_revision: reference(immutableInputs.goal_revision),
     business_input: reference(immutableInputs.business_input),
@@ -643,8 +672,8 @@ export async function formAutonomousCampaignStrategy(input: {
   };
   const identity = {
     contract: { name: CAMPAIGN_STRATEGY_AGENT_CONTRACT, version: CAMPAIGN_STRATEGY_AGENT_VERSION } as const,
-    accepted_at: input.acceptedAt,
-    accepted_by: { kind: "STRATEGY_AGENT" as const, model_id: input.model.model_id },
+    accepted_at: acceptedAt,
+    accepted_by: acceptedBy,
     input_lineage: inputLineage,
     playbook_lineage: playbookLineage,
     dimensions: proposal.dimensions,
@@ -660,7 +689,7 @@ export async function formAutonomousCampaignStrategy(input: {
     strategy_revision_id: `campaign-strategy:${digest.slice("sha256:".length, "sha256:".length + 24)}`,
     digest,
     status: "AGENT_ACCEPTED",
-    accepted_at: input.acceptedAt,
+    accepted_at: acceptedAt,
     accepted_by: identity.accepted_by,
     input_lineage: inputLineage,
     playbook_lineage: playbookLineage,

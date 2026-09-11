@@ -104,7 +104,7 @@ function numericValue(field: BusinessModelFieldId, value: unknown): number | nul
   const normalized = normalizedText(value).replace(/\s/gu, "").replace(",", ".");
   if (!normalized) return null;
   const number = Number(normalized);
-  if (!Number.isFinite(number) || number <= 0) return null;
+  if (!Number.isFinite(number) || number < 0) return null;
   if ((field === "gross_margin_percent" || field === "lead_to_sale_percent") && number > 100) return null;
   return Math.round(number * 100) / 100;
 }
@@ -159,7 +159,7 @@ function economics(fields: BusinessModelContract["fields"]): BusinessModelContra
       input_fields: [...inputFields],
     },
     limitation: confirmed && target !== null && target > 0
-      ? null
+      ? "Расчёт валового вклада до прочих затрат и требуемой прибыли. Сам по себе не доказывает прибыльный рекламный лимит."
       : "Целевая стоимость результата не выводится, пока ценность продажи, маржа и конверсия обращения в продажу не подтверждены владельцем.",
   };
 }

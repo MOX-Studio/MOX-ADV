@@ -140,6 +140,7 @@ function stageAgents() {
 async function ownerGoalAndVersions(versions = inputVersions()) {
   const currentGoal = await createCurrentGoal({
     owner_key: "owner",
+    customer_geography: "Россия",
     desired_outcome: "Получать квалифицированные заявки на участие со стендом",
     qualified_action: "Представитель промышленной компании подтвердил интерес и готов обсудить участие",
     success_criterion: { target_count: 30, deadline: "2027-06-30", max_result_cost_rub: 30_000 },
@@ -190,7 +191,7 @@ async function historicalEvidenceCollector({ view }) {
   return structuredClone(view.state.analytics_evidence_snapshot);
 }
 
-test("production executor seals real current artifacts through Publication Review without Direct authority", async () => {
+test("production executor seals real current artifacts through Campaigns without Direct authority", async () => {
   const store = new MemoryPipelineStore();
   let tick = 0;
   const orchestrator = new PipelineOrchestrator({
@@ -210,7 +211,7 @@ test("production executor seals real current artifacts through Publication Revie
   });
 
   assert.equal(completed.status, "COMPLETED");
-  assert.equal(completed.current_stage, "PUBLICATION_REVIEW");
+  assert.equal(completed.current_stage, "CAMPAIGNS");
   assert.equal(completed.stages.every((stage) => stage.status === "COMPLETED"), true);
   assert.deepEqual(completed.authority, {
     external_write: "DENIED",
@@ -299,17 +300,8 @@ test("only verified stage products become the canonical current product set", as
   assert.equal(products.current.analytics_evidence_snapshot.snapshot_id, "analytics-evidence-snapshot-revision-1");
   assert.equal(products.current.campaign_strategy.strategy.status, "AGENT_ACCEPTED");
   assert.equal(products.current.campaign_pairs.length, 1);
-  assert.deepEqual(products.current.publication_review, {
-    schema_version: "p0-publication-review-handoff-v1",
-    status: "REVIEW_ONLY",
-    run_id: "production-pipeline-products",
-    pair_count: 1,
-    publish_fingerprints: [digest("3")],
-    external_write: "DENIED",
-    publication: "NOT_AUTHORIZED",
-    impressions: 0,
-    spend_micros: 0,
-  });
+  assert.equal(products.current.publication_review, null);
+  assert.equal(products.current.authority.external_write, "DENIED");
 });
 
 test("fresh adapter collection replaces the frozen evidence seed for analysis, strategy, audit and current products", async () => {
@@ -360,6 +352,11 @@ test("fresh adapter collection replaces the frozen evidence seed for analysis, s
 
   assert.equal(collectionInput.seed.revision_id, "analytics-evidence-snapshot-revision-1");
   assert.equal(collectionInput.ownerKey, "owner");
+  assert.deepEqual(collectionInput.goalRevision, currentGoal.revision);
+  assert.equal(collectionInput.goalRevision.customer_geography, "Россия");
+  assert.equal(collectionInput.goalRevision.counting_policy.repeated_contacts, "DO_NOT_COUNT");
+  assert.equal(collectionInput.goal.digest, collectionInput.goalRevision.digest);
+  assert.equal(collectionInput.goal.revision_id, collectionInput.goalRevision.goal_revision_id);
   assert.equal(analyzedSnapshot.snapshot_id, "analytics-evidence-snapshot-fresh");
   assert.equal(strategySnapshot.snapshot_id, "analytics-evidence-snapshot-fresh");
   assert.equal(products.current.analytics_evidence_snapshot.snapshot_id, "analytics-evidence-snapshot-fresh");
@@ -427,7 +424,7 @@ test("Strategy Agent accepts the current exact Strategy without a redundant owne
     agents: stageAgents(),
     evidenceCollector: historicalEvidenceCollector,
   });
-  assert.equal(completed.current_stage, "PUBLICATION_REVIEW");
+  assert.equal(completed.current_stage, "CAMPAIGNS");
   const audit = await orchestrator.audit(completed.run_id);
   assert.equal(audit.find((event) => event.stage === "STRATEGY").actor.role, "STRATEGY_AGENT");
 });
@@ -451,7 +448,28 @@ test("production executor lets Campaign Design derive a current pair when no pri
   });
 
   assert.equal(completed.status, "COMPLETED");
-  assert.equal(completed.current_stage, "PUBLICATION_REVIEW");
+  assert.equal(completed.current_stage, "CAMPAIGNS");
   const campaignEvent = (await orchestrator.audit(completed.run_id)).find((event) => event.stage === "CAMPAIGNS");
   assert.equal(campaignEvent.actor.role, "CAMPAIGN_DESIGN_AGENT");
+});
+
+test("collector cannot hand off a snapshot bound to a different Goal revision", async () => {
+  const store = new MemoryPipelineStore();
+  const { currentGoal, versions } = await ownerGoalAndVersions();
+  const otherGoal = await createCurrentGoal({
+    owner_key: "owner", desired_outcome: currentGoal.revision.desired_outcome,
+    qualified_action: currentGoal.revision.qualified_action,
+    customer_geography: "Москва", success_criterion: currentGoal.revision.success_criterion,
+    created_at: "2026-08-31T11:00:00.000Z",
+  });
+  const orchestrator = new PipelineOrchestrator({ store, newRunId: () => "production-goal-mismatch" });
+  const started = await orchestrator.start("owner", versions);
+  let analysisCalls = 0;
+  await assert.rejects(executeProductionPipeline({
+    orchestrator, run: started, view: historicalView(), currentGoal,
+    agents: { ...stageAgents(), async analyzeEvidence() { analysisCalls++; throw new Error("Must not analyze a mismatched goal"); } },
+    evidenceCollector: async () => ({ schema_version: "test-evidence-v1", snapshot_id: "test-evidence:other", goal_context: otherGoal.revision }),
+  }), /GOAL_EVIDENCE_REFERENCE_MISMATCH/u);
+  assert.equal(analysisCalls, 0);
+  assert.equal((await orchestrator.current("owner")).current_stage, "EVIDENCE_COLLECTION");
 });

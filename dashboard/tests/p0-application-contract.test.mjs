@@ -369,6 +369,51 @@ async function fixture() {
   };
 }
 
+test("published accessory prices are not inferred as average realized sale value", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "mox-price-scope-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const base = adapters();
+  const application = new P0Application({ store: new JsonDurableStore(join(directory, "state.json")), adapters: adapters({
+    async researchSite(url) {
+      const site = await base.researchSite(url);
+      site.pages[0].text_excerpt += " Дополнительный бейдж экспонента: 2 000 ₽. Регистрационный сбор оплачивается отдельно.";
+      site.text_excerpt = site.pages[0].text_excerpt;
+      return site;
+    },
+  }) });
+  let result = await application.command("owner", { action: "analyze_site", expected_revision: 0, url: "https://owner.example/" });
+  result = await application.command("owner", { action: "confirm_context_goal", expected_revision: result.revision,
+    confirmation: "CONFIRM_CONTEXT_GOAL", goal: result.state.context_state.provisional_business_goal.value });
+  assert.equal(result.state.business_model.average_sale_value_rub, null);
+  assert.equal(result.state.business_model.owner_contract.fields.average_sale_value_rub.value, null);
+  assert.equal(result.state.business_model.field_evidence.average_sale_value_rub.quote, "");
+});
+
+test("canonical Pipeline input reads do not call providers, refresh timestamps or mutate the stored document", async () => {
+  const { directory, store, application } = await fixture();
+  try {
+    const original = await application.query("owner");
+    let providerReads = 0;
+    const restored = new P0Application({ store, adapters: adapters({
+      async readContext() { providerReads += 1; throw new Error("A status read must not wait for provider I/O."); },
+      async researchSite() { providerReads += 1; throw new Error("A status read must not collect website evidence."); },
+    }) });
+    const first = await restored.persistedPipelineInput("owner");
+    assert.deepEqual(Object.keys(first).sort(), ["revision", "state", "updated_at"]);
+    assert.equal(first.revision, original.revision);
+    assert.equal(first.updated_at, original.updated_at);
+    assert.deepEqual(first.state, original.state);
+    first.state.business_model = { product: "Unsaved caller change" };
+    const second = await restored.persistedPipelineInput("owner");
+    assert.deepEqual(second.state, original.state);
+    assert.equal(second.updated_at, original.updated_at);
+    assert.equal(providerReads, 0);
+    assert.equal((await store.history("owner")).length, 1);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 function ownerModel(state) {
   return {
     product: state.business_model.product,
@@ -489,14 +534,14 @@ test("owner demand and cost projection preserves business provenance without tec
   });
 
   assert.equal(projection.demand.status, "Частично");
-  assert.match(projection.demand.conclusion, /нижняя граница: 67/iu);
+  assert.match(projection.demand.conclusion, /Сумма частот исследованных фраз: 67/iu);
   assert.equal(projection.demand.formulations[0].frequency, "41 запрос");
   assert.equal(projection.demand.formulations[0].method, "Популярные запросы Wordstat · /v1/topRequests");
   assert.equal(projection.demand.formulations[0].operator, "Широкая формулировка");
   assert.equal(projection.demand.formulations[0].scope, "Москва · все устройства");
-  assert.equal(projection.demand.formulations[1].frequency, "Частота недоступна");
-  assert.match(projection.demand.coverage, /1 из 2 формулировок/iu);
-  assert.match(projection.demand.nextAction, /повторить только недоступные/iu);
+  assert.equal(projection.demand.formulations.length, 1);
+  assert.match(projection.demand.coverage, /1 результативн/iu);
+  assert.match(projection.demand.nextAction, /использовать только подтверждённые/iu);
   assert.deepEqual(projection.demand.gaps, ["Ответ Wordstat для части формулировок неполон."]);
   assert.equal(projection.cost.range, "110–170 RUB");
   assert.equal(projection.cost.vat, "НДС включён");
@@ -522,24 +567,24 @@ test("owner demand projection keeps full, partial, quota-exhausted and unavailab
       name: "full",
       frequency: { status: "AVAILABLE", method: "/v1/topRequests", declared_window: "rolling_last_30_days", seed_matched_row_counts: [{ seed_id: "seed-a", value: 41 }, { seed_id: "seed-b", value: 19 }], gaps: [] },
       expected: ["41 запрос", "19 запросов"],
-      next: /сравнить формулировки/iu,
+      next: /сравнить результативные формулировки/iu,
     },
     {
       name: "partial",
       frequency: { status: "PARTIAL", method: "/v1/topRequests", declared_window: "rolling_last_30_days", seed_matched_row_counts: [{ seed_id: "seed-a", value: 41 }, { seed_id: "seed-b", value: null }], gaps: [{ code: "WORDSTAT_RESPONSE_PARTIAL" }] },
-      expected: ["41 запрос", "Частота недоступна"],
-      next: /повторить только недоступные/iu,
+      expected: ["41 запрос"],
+      next: /использовать только подтверждённые/iu,
     },
     {
       name: "quota-exhausted",
       frequency: { status: "UNAVAILABLE", method: "/v1/topRequests", declared_window: "rolling_last_30_days", seed_matched_row_counts: [{ seed_id: "seed-a", value: null }, { seed_id: "seed-b", value: null }], gaps: [{ code: "WORDSTAT_QUOTA_EXHAUSTED" }] },
-      expected: ["Частота недоступна", "Частота недоступна"],
+      expected: [],
       next: /восстановления квоты/iu,
     },
     {
       name: "unavailable",
       frequency: { status: "UNAVAILABLE", method: "/v1/topRequests", declared_window: "rolling_last_30_days", seed_matched_row_counts: [], gaps: [{ code: "WORDSTAT_AUTHORITY_UNAVAILABLE" }] },
-      expected: ["Частота недоступна", "Частота недоступна"],
+      expected: [],
       next: /восстановить доступ/iu,
     },
   ];
@@ -702,12 +747,12 @@ test("authoritative application collects market evidence only for a Model revisi
     observation_sequence: 1,
   });
   assert.equal(agentRead.observation.facts.demand_cost_research.demand.source, "Яндекс Wordstat");
-  assert.equal(agentRead.observation.facts.demand_cost_research.demand.observed_lower_bound, 67);
+  assert.equal(agentRead.observation.facts.demand_cost_research.demand.observed_phrase_frequency_sum, 80);
   assert.ok(agentRead.observation.facts.demand_cost_research.demand.formulations.length >= 1);
   assert.equal(agentRead.observation.facts.demand_cost_research.demand.formulations[0].source, "YANDEX_WORDSTAT_V1");
   assert.equal(agentRead.observation.facts.demand_cost_research.demand.formulations[0].formulation_role, "RETURNED_TOP_ROW");
   assert.equal(agentRead.observation.facts.demand_cost_research.demand.formulations[0].method, "/v1/topRequests");
-  assert.equal(agentRead.observation.facts.demand_cost_research.demand.formulations[0].lower_bound, true);
+  assert.equal(agentRead.observation.facts.demand_cost_research.demand.formulations[0].lower_bound, false);
   assert.equal(agentRead.observation.facts.demand_cost_research.cost.status, "UNAVAILABLE");
   assert.equal(agentRead.observation.facts.demand_cost_research.cost.range, null);
   assert.doesNotMatch(JSON.stringify(agentRead.observation.facts.demand_cost_research), /keyword_id|campaign_id|ad_group_id/iu);
@@ -5371,7 +5416,7 @@ test("authoritative application owns the agent objective, typed tool schema, per
   assert.match(completed.stop_reason.decision_packet.decision_key, /^campaign-strategy:/u);
 });
 
-test("typed owner journey is the narrow five-stage query/action seam and keeps diagnostics outside the owner response", async (t) => {
+test("typed owner journey is the narrow four-stage query/action seam and keeps diagnostics outside the owner response", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "mox-p0-owner-journey-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new JsonDurableStore(join(directory, "state.json"));
@@ -5412,7 +5457,6 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
     "Что узнал агент",
     "Стратегия",
     "Кампании",
-    "Проверка публикации",
   ]);
   assert.equal(projection.journey.currentStage, "goal");
   assert.ok(projection.introduction);
@@ -5596,7 +5640,7 @@ test("typed owner journey is the narrow five-stage query/action seam and keeps d
     values: values(projection),
   });
   ownerResponses.push(projection);
-  assert.equal(projection.journey.currentStage, "review");
+  assert.equal(projection.journey.currentStage, "campaigns");
   assert.equal(projection.packageSummary.preflight, "9/9 бизнес-проверок пройдено");
   assert.equal(projection.packageSummary.preflightGates.length, 9);
   assert.equal(projection.packageSummary.preflightGates.every((gate) => gate.status === "Пройдено"), true);

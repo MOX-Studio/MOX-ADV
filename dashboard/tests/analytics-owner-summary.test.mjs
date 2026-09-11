@@ -110,7 +110,7 @@ test("complete evidence produces business findings and readiness without provide
   assert.equal(summary.findings.every((item) => item.status === "Подтверждено"), true);
   assert.match(summary.findings.find((item) => item.area === "Текущее продвижение").finding, /3 кампании/u);
   assert.match(summary.findings.find((item) => item.area === "Наблюдаемый результат").finding, /3 достижения/u);
-  assert.match(summary.findings.find((item) => item.area === "Поисковый спрос").finding, /67 уникальных строк/u);
+  assert.match(summary.findings.find((item) => item.area === "Поисковый спрос").finding, /67 запросов/u);
   assert.match(summary.findings.find((item) => item.area === "Сопоставимая стоимость").finding, /110–170 RUB/u);
   assert.equal(summary.observedSegmentRevenueShare.label, "Observed Segment Revenue Share");
   assert.equal(summary.observedSegmentRevenueShare.value, "33.33%");

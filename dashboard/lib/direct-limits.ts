@@ -1,6 +1,9 @@
 type CurrencyProperty = { Name?: unknown; Value?: unknown };
 type CurrencyRow = { Currency?: unknown; Properties?: CurrencyProperty[] };
 
+// Direct API v501, Ads.add: ResponsiveAdAdd.Titles accepts 1-7 items.
+export const DIRECT_RESPONSIVE_TITLE_LIMIT = 7;
+
 export function minimumWeeklyBudgetRub(currencies: CurrencyRow[]) {
   const rub = currencies.find((row) => row.Currency === "RUB");
   const property = rub?.Properties?.find((item) => item.Name === "MinimumWeeklySpendLimit");

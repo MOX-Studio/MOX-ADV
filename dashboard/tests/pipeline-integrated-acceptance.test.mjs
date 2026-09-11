@@ -50,7 +50,7 @@ function d1Shim(database) {
   };
 }
 
-test("controlled cold-start inputs traverse the durable five-stage orchestrator with autonomous correction and zero write authority", async () => {
+test("controlled cold-start inputs traverse the durable four-stage orchestrator with autonomous correction and zero write authority", async () => {
   const database = new DatabaseSync(":memory:");
   const db = d1Shim(database);
   const store = new D1PipelineRunStore(db);
@@ -64,6 +64,7 @@ test("controlled cold-start inputs traverse the durable five-stage orchestrator 
   });
   const historical = await pipelineAcceptanceHistoricalView();
   await controller.correctGoal("owner", {
+    customerGeography: "Россия",
     desiredOutcome: "Получать квалифицированные заявки на участие",
     qualifiedAction: "Отправленная заявка на участие",
     targetCount: 30,
@@ -98,9 +99,9 @@ test("controlled cold-start inputs traverse the durable five-stage orchestrator 
   const projection = projectOwnerPipeline(completed);
 
   assert.equal(completed.status, "COMPLETED");
-  assert.equal(completed.current_stage, "PUBLICATION_REVIEW");
-  assert.equal(projection.currentStage, "review");
-  assert.deepEqual(projection.stages.map((stage) => stage.status), ["Завершён", "Завершён", "Завершён", "Завершён", "Завершён"]);
+  assert.equal(completed.current_stage, "CAMPAIGNS");
+  assert.equal(projection.currentStage, "campaigns");
+  assert.deepEqual(projection.stages.map((stage) => stage.status), ["Завершён", "Завершён", "Завершён", "Завершён"]);
   assert.equal(audit.filter((event) => event.event_kind === "ATTEMPT_DISCARDED").length, 1);
   assert.equal(audit.find((event) => event.event_kind === "ATTEMPT_DISCARDED").retry.next_attempt, 2);
   assert.equal(audit.at(-1).event_kind, "RUN_COMPLETED");
@@ -139,6 +140,7 @@ test("stop, new run, and a saved owner correction create new identities and froz
   });
   const before = await pipelineAcceptanceHistoricalView();
   await controller.correctGoal("owner", {
+    customerGeography: "Россия",
     desiredOutcome: "Получать квалифицированные заявки на участие",
     qualifiedAction: "Отправленная заявка на участие",
     targetCount: 30,
@@ -149,6 +151,7 @@ test("stop, new run, and a saved owner correction create new identities and froz
   const stopped = await controller.stop("owner", { runId: first.runId, expectedVersion: first.version });
   const after = await pipelineAcceptanceHistoricalView({ ownerGoal: "Получать квалифицированные заявки на переговоры" });
   await controller.correctGoal("owner", {
+    customerGeography: "Россия",
     desiredOutcome: "Получать квалифицированные заявки на переговоры",
     qualifiedAction: "Назначенная встреча с менеджером",
     targetCount: 30,

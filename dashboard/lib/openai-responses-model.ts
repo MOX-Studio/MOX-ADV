@@ -1,3 +1,4 @@
+import { isPublicCompetitorDiscovery, isEvidenceResearch } from "./public-web-research.ts";
 import type {
   JsonValue,
   P0ModelAdapter,
@@ -35,6 +36,8 @@ export function p0ModelInstructions(request: P0ModelTurnRequest) {
     "Do not declare the objective complete. Only the trusted P0 application can stop the run as COMPLETED.",
     `Canonical objective: ${request.objective.statement}`,
     `Trusted policy: ${request.policy.instruction}`,
+    ...(request.execution ? ["Research has no elapsed-time or cumulative web-call cutoff. Continue purposeful research until the stated questions have sufficient evidence or accessible sources are exhausted. The owner can cancel. Do not repeat an exhausted search without a new hypothesis."] : []),
+    ...(isPublicCompetitorDiscovery(request.tools) ? ["The application grants built-in public web search only for this competitor discovery turn. Search and inspect primary public sources before returning the sole function result. No authenticated cabinets, arbitrary HTTP, shell, filesystem, or external writes."] : []),
   ].join("\n");
 }
 
@@ -46,7 +49,8 @@ export function p0ModelInput(request: P0ModelTurnRequest) {
     allowed_tools: request.policy.allowed_tools,
     checkpoint: request.checkpoint,
     observations: request.observations,
-    remaining_budget: request.budget.remaining,
+    remaining_budget: { ...request.budget.remaining, ...(request.execution ? { max_elapsed_ms: null } : {}) },
+    ...(request.execution ? { research_completion: request.execution.completion } : {}),
   };
 }
 
@@ -116,6 +120,7 @@ export class OpenAIResponsesModelAdapter implements P0ModelAdapter {
   private readonly fetcher: typeof fetch;
   private readonly endpoint: string;
   private readonly timeoutMs: number;
+  private readonly useStageBudget: boolean;
   private readonly inputMicrousdPerMillion: number;
   private readonly outputMicrousdPerMillion: number;
 
@@ -124,9 +129,9 @@ export class OpenAIResponsesModelAdapter implements P0ModelAdapter {
     model,
     fetcher = fetch,
     endpoint = OPENAI_RESPONSES_ENDPOINT,
-    timeoutMs = 45_000,
-    inputMicrousdPerMillion = 300_000,
-    outputMicrousdPerMillion = 2_500_000,
+    timeoutMs,
+    inputMicrousdPerMillion = model.trim() === "gpt-6-astra" ? 10_000_000 : 300_000,
+    outputMicrousdPerMillion = model.trim() === "gpt-6-astra" ? 50_000_000 : 2_500_000,
   }: {
     apiKey: string;
     model: string;
@@ -139,7 +144,8 @@ export class OpenAIResponsesModelAdapter implements P0ModelAdapter {
     this.apiKey = required(apiKey, "OpenAI API key", 10_000);
     this.model = required(model, "OpenAI model", 200);
     this.endpoint = required(endpoint, "OpenAI Responses endpoint", 2_000);
-    if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 120_000) {
+    const configuredTimeout = timeoutMs ?? 45_000;
+    if (!Number.isSafeInteger(configuredTimeout) || configuredTimeout <= 0 || configuredTimeout > 120_000) {
       throw new OpenAIResponsesModelError("MODEL_CONFIGURATION_INVALID", "Model timeout is invalid.");
     }
     if (!Number.isSafeInteger(inputMicrousdPerMillion) || inputMicrousdPerMillion <= 0
@@ -147,15 +153,23 @@ export class OpenAIResponsesModelAdapter implements P0ModelAdapter {
       throw new OpenAIResponsesModelError("MODEL_CONFIGURATION_INVALID", "Model cost rates are invalid.");
     }
     this.fetcher = fetcher;
-    this.timeoutMs = timeoutMs;
+    this.timeoutMs = configuredTimeout;
+    this.useStageBudget = timeoutMs === undefined;
     this.inputMicrousdPerMillion = inputMicrousdPerMillion;
     this.outputMicrousdPerMillion = outputMicrousdPerMillion;
     this.adapter_id = `openai-responses:${this.model}`;
   }
 
-  async turn(request: P0ModelTurnRequest): Promise<P0ModelTurnResponse> {
+  async turn(request: P0ModelTurnRequest, options: { signal?: AbortSignal } = {}): Promise<P0ModelTurnResponse> {
+    const publicDiscovery = isPublicCompetitorDiscovery(request.tools);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const discoveryBudget = Number(request.budget.remaining.max_elapsed_ms);
+    const timeoutMs = publicDiscovery && this.useStageBudget && Number.isFinite(discoveryBudget)
+      ? Math.min(175_000, Math.max(1_000, discoveryBudget - 5_000)) : this.timeoutMs;
+    const untimed = this.useStageBudget && request.execution?.time_limit_ms === null && isEvidenceResearch(request.tools);
+    const timeout = untimed ? undefined : setTimeout(() => controller.abort(), timeoutMs);
+    const signal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
+    signal.throwIfAborted();
     try {
       const response = await this.fetcher(this.endpoint, {
         method: "POST",
@@ -165,9 +179,13 @@ export class OpenAIResponsesModelAdapter implements P0ModelAdapter {
         },
         body: JSON.stringify({
           model: this.model,
+          ...(this.model === "gpt-6-astra" ? {
+            reasoning: { effort: "medium" },
+            service_tier: "default",
+          } : {}),
           store: false,
           parallel_tool_calls: false,
-          max_tool_calls: 1,
+          ...(!publicDiscovery ? { max_tool_calls: 1 } : {}),
           instructions: p0ModelInstructions(request),
           input: [{
             role: "user",
@@ -176,15 +194,15 @@ export class OpenAIResponsesModelAdapter implements P0ModelAdapter {
               text: JSON.stringify(p0ModelInput(request)),
             }],
           }],
-          tools: request.tools.map((tool) => ({
+          tools: [...(publicDiscovery ? [{ type: "web_search", search_context_size: "medium" }] : []), ...request.tools.map((tool) => ({
             type: "function",
             name: tool.name,
             description: tool.description,
             parameters: tool.input_schema,
             strict: true,
-          })),
+          }))],
         }),
-        signal: controller.signal,
+        signal,
       });
       if (!response.ok) {
         throw new OpenAIResponsesModelError(
@@ -199,16 +217,41 @@ export class OpenAIResponsesModelAdapter implements P0ModelAdapter {
         throw new OpenAIResponsesModelError("MODEL_RESPONSE_INVALID", "Neural model response is not JSON.");
       }
       const responseRecord = record(payload);
+      if (publicDiscovery && (!Array.isArray(responseRecord.output)
+        || !responseRecord.output.map(record).some((item) => item.type === "web_search_call" && item.status === "completed"))) {
+        throw new OpenAIResponsesModelError("MODEL_RESPONSE_INVALID", "Competitor discovery returned no completed public web research.");
+      }
       if (responseRecord.error) {
         throw new OpenAIResponsesModelError("MODEL_PROVIDER_FAILED", "Neural model provider returned an error response.");
       }
       const parsed = parseResponse(payload);
+      let billableInputTokens = parsed.usage.input_tokens;
+      let inputMultiplier = 1;
+      let outputMultiplier = 1;
+      if (this.model === "gpt-6-astra") {
+        // Standard pricing, including automatic cache writes and the long-context premium.
+        // https://developers.openai.com/api/docs/models/gpt-6-astra
+        // https://developers.openai.com/api/docs/guides/prompt-caching#monitor-cache-performance
+        const details = record(record(responseRecord.usage).input_tokens_details);
+        const cachedTokens = Math.min(billableInputTokens, tokenCount(details.cached_tokens));
+        const uncachedTokens = billableInputTokens - cachedTokens;
+        // If cache-write usage is unavailable, reserve the higher write rate for all uncached input.
+        const cacheWriteTokens = details.cache_write_tokens === undefined
+          ? uncachedTokens
+          : Math.min(uncachedTokens, tokenCount(details.cache_write_tokens));
+        billableInputTokens = uncachedTokens - cacheWriteTokens + cachedTokens * 0.1 + cacheWriteTokens * 1.25;
+        if (parsed.usage.input_tokens > 272_000) {
+          inputMultiplier = 2;
+          outputMultiplier = 1.5;
+        }
+      }
       parsed.usage.cost_microusd = Math.ceil(
-        (parsed.usage.input_tokens * this.inputMicrousdPerMillion
-          + parsed.usage.output_tokens * this.outputMicrousdPerMillion) / 1_000_000,
+        (billableInputTokens * this.inputMicrousdPerMillion * inputMultiplier
+          + parsed.usage.output_tokens * this.outputMicrousdPerMillion * outputMultiplier) / 1_000_000,
       );
       return parsed;
     } catch (error) {
+      options.signal?.throwIfAborted();
       if (error instanceof OpenAIResponsesModelError) throw error;
       throw new OpenAIResponsesModelError(
         "MODEL_PROVIDER_FAILED",
@@ -217,7 +260,7 @@ export class OpenAIResponsesModelAdapter implements P0ModelAdapter {
           : "Neural model provider request failed.",
       );
     } finally {
-      clearTimeout(timeout);
+      if (timeout !== undefined) clearTimeout(timeout);
     }
   }
 }

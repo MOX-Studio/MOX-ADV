@@ -47,7 +47,10 @@ test("adapts only a complete cleaned headless Wordstat UI batch without relabell
   const plan = await researchPlan();
   const observations = plan.seeds.flatMap((seed) => [
     observation(seed, "TOP_POPULAR", [{ rank: 1, phrase: seed.phrase, count: 120 }]),
-    observation(seed, "TOP_SIMILAR", [{ rank: 1, phrase: "деловое мероприятие", count: 80 }]),
+    observation(seed, "TOP_SIMILAR", [
+      { rank: 1, phrase: "деловое мероприятие выставка", count: 80 },
+      { rank: 2, phrase: "бери беру", count: 4_902_458 },
+    ]),
     observation(seed, "DYNAMICS", [
       { period_start: "2024-09-01", count: 90, share: 0.1 },
       { period_start: "2025-09-01", count: 100, share: 0.12 },
@@ -68,11 +71,17 @@ test("adapts only a complete cleaned headless Wordstat UI batch without relabell
   }, plan);
 
   assert.equal(batch.source, "YANDEX_WORDSTAT_UI");
-  assert.equal(batch.calls.length, plan.seeds.length * 3);
+  assert.equal(batch.calls.length, plan.seeds.length * 4);
   assert.ok(batch.calls.every((call) => call.endpoint === "https://wordstat.yandex.com/"));
+  assert.ok(batch.calls.some((call) => call.method === "top_requests"
+    && call.rows.some((row) => row.phrase === "деловое мероприятие выставка" && row.count === 80)));
   const frequency = await buildScopedDemandEvidence(batch, plan.seeds.map((seed) => ({
     cluster_id: seed.cluster_id,
     semantic_key: { product: seed.phrase, need: "", intent: "", offer: seed.phrase },
+    classification: {
+      version: "demand-relevance-rules-v1",
+      required_any_tokens: seed.relevance_tokens,
+    },
   })));
   assert.equal(frequency.source, "YANDEX_WORDSTAT_UI");
   assert.equal(frequency.method, "WORDSTAT_UI_TOP_POPULAR");
@@ -80,12 +89,137 @@ test("adapts only a complete cleaned headless Wordstat UI batch without relabell
   assert.ok(frequency.canonical_observations.every((item) => item.provider_provenance.source === "YANDEX_WORDSTAT_UI"));
   const presentation = projectWordstatForPresentation(frequency, plan);
   assert.equal(presentation.method_label, "Популярные запросы Wordstat · headless Playwright UI");
+  assert.match(presentation.coverage_label, /^Исследовано \d+ уникальных запросов · \d+ кластеров · \d+ формулировок показано$/u);
   assert.ok(presentation.formulations.every((item) => item.source === "YANDEX_WORDSTAT_UI"));
   assert.ok(presentation.formulations.every((item) => item.source_label === "Яндекс Wordstat · авторизованный интерфейс"));
+  assert.ok(frequency.canonical_observations.some((item) => item.phrase === "деловое мероприятие выставка" && item.count === 80));
+  assert.ok(presentation.formulations.length <= 7);
+  assert.equal(presentation.formulations.some((item) => item.phrase === "бери беру"), false);
   assert.doesNotMatch(JSON.stringify(presentation), /официальное API/iu);
 });
 
-test("bounds normalized top rows while retaining explicit protected-artifact provenance", async () => {
+test("enriches a weak conversion action with domain terms and excludes broad provider noise", async () => {
+  const plan = await buildDemandCostResearchPlan({
+    generatedAt: "2026-09-03T10:00:00.000Z",
+    offerLanguage: "Участие со стендом в международной промышленной выставке Стать партнёром",
+    customerProblems: ["Инвесторы, руководители компаний и представители органов власти"],
+    highIntentActions: ["Отправленная заявка на участие через форму сайта"],
+    brandTerms: ["ИННОПРОМ"],
+    exclusions: [],
+    regionIds: [225],
+    regionNames: ["Россия"],
+    device: "all",
+    seasonality: "",
+    dynamicsFromDate: "2024-09-01",
+    dynamicsToDate: "2026-08-31",
+  });
+  const intentSeed = plan.seeds.find((seed) => seed.dimension === "HIGH_INTENT_ACTION");
+  assert.match(intentSeed.phrase, /заявк.*участ.*стенд/iu);
+  assert.ok(intentSeed.relevance_tokens.includes("стенд"));
+
+  const observations = plan.seeds.flatMap((seed) => [
+    observation(seed, "TOP_POPULAR", [
+      { rank: 1, phrase: seed.phrase, count: 100 },
+      ...(seed.seed_id === intentSeed.seed_id ? [
+        { rank: 2, phrase: "заявка на участие в закупке", count: 12_407 },
+        { rank: 3, phrase: "принял участие в выставке", count: 1_812 },
+        { rank: 4, phrase: "подать заявку на участие со стендом", count: 240 },
+      ] : []),
+    ]),
+    observation(seed, "TOP_SIMILAR", [{ rank: 1, phrase: "бери беру", count: 4_902_458 }]),
+    observation(seed, "DYNAMICS", [{ period_start: "2026-07-01", count: 100, share: 0.1 }]),
+    observation(seed, "REGIONS", [{ provider_region_id: 225, region_label: "Россия", count: 100, share: 0.2, affinity_index: 100 }]),
+  ]);
+  const batch = adaptCompleteWordstatUiBatch({
+    schema_version: "wordstat-ui-observation-batch-v1",
+    source: "YANDEX_WORDSTAT_UI",
+    transport: "HEADLESS_PLAYWRIGHT",
+    status: "COMPLETE",
+    cleanup_status: "COMPLETE",
+    batch_id: `sha256:${"c".repeat(64)}`,
+    batch_started_at: "2026-09-03T10:00:00.000Z",
+    batch_finished_at: "2026-09-03T10:06:00.000Z",
+    observations,
+  }, plan);
+  const evidence = await buildScopedDemandEvidence(batch, plan.seeds.map((seed) => ({
+    cluster_id: seed.cluster_id,
+    semantic_key: { product: seed.phrase, need: "", intent: "", offer: seed.phrase },
+    classification: {
+      version: "demand-relevance-rules-v1",
+      required_any_tokens: seed.relevance_tokens,
+    },
+  })));
+  const phrases = evidence.canonical_observations.map((item) => item.phrase);
+  assert.ok(phrases.includes("подать заявку на участие со стендом"));
+  assert.equal(phrases.includes("заявка на участие в закупке"), false);
+  assert.equal(phrases.includes("принял участие в выставке"), false);
+  assert.equal(phrases.includes("бери беру"), false);
+  assert.ok(evidence.excluded_rows.some((item) => item.phrase === "заявка на участие в закупке"));
+  assert.ok(evidence.excluded_rows.some((item) => item.phrase === "принял участие в выставке"));
+  assert.ok(evidence.observed_unique_count.value < 2_000);
+
+  const presentation = projectWordstatForPresentation(evidence, plan);
+  assert.equal(presentation.formulations.some((item) => item.phrase === "заявка на участие в закупке"), false);
+  assert.equal(presentation.formulations.some((item) => item.phrase === "бери беру"), false);
+});
+
+test("presentation diversifies useful rows across demand dimensions", async () => {
+  const plan = await buildDemandCostResearchPlan({
+    generatedAt: "2026-09-03T10:00:00.000Z",
+    offerLanguage: "участие со стендом на выставке",
+    customerProblems: [],
+    highIntentActions: ["подать заявку на участие"],
+    brandTerms: ["ИННОПРОМ"],
+    exclusions: [],
+    regionIds: [225],
+    regionNames: ["Россия"],
+    device: "all",
+    seasonality: "",
+    dynamicsFromDate: "2024-09-01",
+    dynamicsToDate: "2026-08-31",
+  });
+  const brandCluster = plan.seeds.find((seed) => seed.dimension === "BRAND").cluster_id;
+  const nonBrandCluster = plan.seeds.find((seed) => seed.dimension === "NON_BRAND").cluster_id;
+  const presentation = projectWordstatForPresentation({
+    status: "AVAILABLE",
+    source: "YANDEX_WORDSTAT_UI",
+    method: "WORDSTAT_UI_TOP_POPULAR",
+    canonical_observations: [
+      { phrase: "иннопром", count: 10_767, assigned_cluster_id: brandCluster },
+      { phrase: "иннопром 2026", count: 4_145, assigned_cluster_id: brandCluster },
+      { phrase: "иннопром индия", count: 2_302, assigned_cluster_id: brandCluster },
+      { phrase: "участие в выставке", count: 6_634, assigned_cluster_id: nonBrandCluster },
+      { phrase: "принял участие в выставке", count: 1_812, assigned_cluster_id: nonBrandCluster },
+      { phrase: "стоимость участия в выставке", count: 900, assigned_cluster_id: nonBrandCluster },
+    ],
+    gaps: [],
+  }, plan, "2026-09-03T10:06:00.000Z");
+
+  assert.deepEqual(presentation.formulations.map((item) => item.phrase), [
+    "иннопром",
+    "участие в выставке",
+    "иннопром 2026",
+    "стоимость участия в выставке",
+  ]);
+  assert.equal(presentation.formulations.some((item) => item.phrase === "принял участие в выставке"), false);
+  assert.ok(presentation.formulations.length <= 7);
+});
+
+test("presentation omits attempted formulations that have no usable Wordstat result", async () => {
+  const plan = await researchPlan();
+  const presentation = projectWordstatForPresentation({
+    status: "UNAVAILABLE",
+    source: "YANDEX_WORDSTAT_UI",
+    seed_matched_row_counts: plan.seeds.map((seed) => ({ seed_id: seed.seed_id, value: null })),
+    canonical_observations: [],
+    gaps: [{ code: "WORDSTAT_PROVIDER_ERROR" }],
+  }, plan);
+
+  assert.deepEqual(presentation.formulations, []);
+  assert.equal(presentation.coverage_label, "Результативные формулировки не получены");
+});
+
+test("preserves every normalized top row for relevance classification", async () => {
   const plan = await researchPlan();
   const observations = plan.seeds.flatMap((seed) => [
     observation(seed, "TOP_POPULAR", Array.from({ length: 75 }, (_, index) => ({
@@ -110,9 +244,8 @@ test("bounds normalized top rows while retaining explicit protected-artifact pro
   }, plan);
 
   const top = batch.calls.find((call) => call.method === "top_requests");
-  assert.equal(top.rows.length, 50);
-  assert.ok(top.gaps.some((gap) => gap.code === "WORDSTAT_SNAPSHOT_ROW_CAP"));
-  assert.match(top.gaps.map((gap) => gap.detail).join(" "), /complete official CSV.*protected artifact/iu);
+  assert.equal(top.rows.length, 75);
+  assert.equal(top.gaps.some((gap) => gap.code === "WORDSTAT_SNAPSHOT_ROW_CAP"), false);
 });
 
 test("preserves a complete explicit empty UI surface without turning missing rows into zero demand", async () => {

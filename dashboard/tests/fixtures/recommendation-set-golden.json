@@ -1,6 +1,6 @@
 {
   "schema_version": "campaign-recommendation-set-v4",
-  "recommendation_set_id": "recommendation-set-10cced6f4fa0849811ee",
+  "recommendation_set_id": "recommendation-set-126b551a22b8728bb032",
   "capability_profile": "p0-campaign-creation-profile-v1@1.0.0",
   "playbook_release": "test-curated-release-default@1.0.0",
   "coverage": {
@@ -48,7 +48,7 @@
       "playbook_rule_id": "qualified-action-v1",
       "visibility": "VISIBLE",
       "suppression_reason": null,
-      "publish_fingerprint": "sha256:207f1c301b0c8b25571f6be0dd4326aea91de3c947e9ef34868c61d7f8189669",
+      "publish_fingerprint": "sha256:a77e7a250dc32d8184dfdacc8467b758e5689fb5f1e2bb142d453e808a401dd5",
       "changed_fields": []
     }
   ],

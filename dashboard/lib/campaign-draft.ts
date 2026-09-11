@@ -1,4 +1,5 @@
 import type { DirectProjection } from "./direct-write";
+import { buildAdText, buildAdTitle, wordSafeLimit } from "./ad-copy.ts";
 import { strategyAnswerValue, strategyPeriod } from "./campaign-strategy.ts";
 import {
   buildBrandClaimsContract,
@@ -54,9 +55,13 @@ export function hasDuplicateCampaignName(existingNames: unknown[], candidate: un
 }
 
 function twoDistinct(firstValue: unknown, secondValue: unknown, maximum: number) {
-  const first = text(firstValue).slice(0, maximum);
-  let second = text(secondValue).slice(0, maximum);
-  if (!second || second === first) second = `${first.slice(0, Math.max(1, maximum - 10)).trim()} · вариант`;
+  const first = wordSafeLimit(firstValue, maximum);
+  let second = wordSafeLimit(secondValue, maximum);
+  if (!second || second === first) {
+    second = maximum === 81
+      ? "Узнайте условия и оставьте заявку на сайте."
+      : "Узнайте условия участия";
+  }
   return [first, second];
 }
 
@@ -98,8 +103,20 @@ export function buildPublishProjection(
   const counterId = measurementPlan.status === "READY" && measurementPlan.counter_id
     ? Number(measurementPlan.counter_id)
     : null;
-  const titles = twoDistinct(draft.ad_title, strategyAnswerValue(strategy, "qualified_result") || model.qualified_result, 56);
-  const texts = twoDistinct(draft.ad_text, strategyAnswerValue(strategy, "core_message") || model.value, 81);
+  const advertisedOffer = strategyAnswerValue(strategy, "advertised_offer") || model.product;
+  const qualifiedResult = strategyAnswerValue(strategy, "qualified_result") || model.qualified_result;
+  const coreMessage = strategyAnswerValue(strategy, "core_message") || model.value;
+  const participation = /участ|participant/iu.test(text(qualifiedResult));
+  const titles = twoDistinct(
+    draft.ad_title,
+    buildAdTitle(coreMessage || qualifiedResult || advertisedOffer),
+    56,
+  );
+  const texts = twoDistinct(
+    draft.ad_text,
+    buildAdText(coreMessage || qualifiedResult, advertisedOffer, participation),
+    81,
+  );
   const trackingParams = "utm_source=yandex&utm_medium=cpc&utm_campaign={campaign_id}&utm_content={ad_id}&utm_term={keyword}";
   const brandClaimsContract = buildBrandClaimsContract({
     strategyRevisionId: draft.strategy_revision_id,

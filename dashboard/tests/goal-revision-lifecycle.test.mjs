@@ -11,12 +11,13 @@ import { projectOwnerPipeline } from "../lib/pipeline-owner-dashboard.ts";
 async function currentGoal() {
   return createCurrentGoal({
     owner_key: "owner",
+    customer_geography: "Россия",
     desired_outcome: "Получать квалифицированные заявки",
     qualified_action: "Клиент подтвердил потребность",
     success_criterion: {
       target_count: 30,
       deadline: "2027-06-30",
-      max_result_cost_rub: 30_000,
+      total_budget_rub: 30_000,
     },
     created_at: "2026-09-02T10:00:00.000Z",
   });
@@ -25,12 +26,13 @@ async function currentGoal() {
 test("owner input creates the first complete GoalRevision without an agent", async () => {
   const created = await createCurrentGoal({
     owner_key: "owner",
+    customer_geography: "Россия",
     desired_outcome: "Получать квалифицированные заявки",
     qualified_action: "Клиент подтвердил потребность",
     success_criterion: {
       target_count: 30,
       deadline: "2027-06-30",
-      max_result_cost_rub: 30_000,
+      total_budget_rub: 30_000,
     },
     created_at: "2026-09-02T10:00:00.000Z",
   });
@@ -41,9 +43,9 @@ test("owner input creates the first complete GoalRevision without an agent", asy
   assert.deepEqual(created.revision.success_criterion, {
     target_count: 30,
     deadline: "2027-06-30",
-    max_result_cost_rub: 30_000,
+    total_budget_rub: 30_000,
   });
-  assert.equal(created.revision.provenance.every((item) => item.input_id === "owner_goal_input_v1"), true);
+  assert.equal(created.revision.provenance.every((item) => item.input_id === "owner_goal_input_v3"), true);
 });
 
 test("normalization-only correction preserves the exact current GoalRevision", async () => {
@@ -72,12 +74,12 @@ test("goal correction rejects an incomplete success criterion", async () => {
       success_criterion: {
         target_count: 0,
         deadline: "2027-02-31",
-        max_result_cost_rub: 0,
+        total_budget_rub: 0,
       },
       corrected_at: "2026-09-02T11:00:00.000Z",
       dependencies: [],
     }),
-    /Укажите целевое количество, срок и максимальную стоимость результата/u,
+    /Количество и бюджет/u,
   );
 });
 
@@ -95,7 +97,7 @@ test("material correction creates the next verified revision and invalidates onl
     success_criterion: {
       target_count: 30,
       deadline: "2027-06-30",
-      max_result_cost_rub: 30_000,
+      total_budget_rub: 30_000,
     },
     corrected_at: "2026-09-02T11:00:00.000Z",
     dependencies,
@@ -105,11 +107,11 @@ test("material correction creates the next verified revision and invalidates onl
   assert.equal(result.current.source, "OWNER_CORRECTION");
   assert.equal(result.current.revision.version, 2);
   assert.notEqual(result.current.revision.goal_revision_id, before.revision.goal_revision_id);
-  assert.equal(result.current.revision.exact_inputs.at(-1).schema_version, "p0-owner-goal-correction-v2");
+  assert.equal(result.current.revision.exact_inputs.at(-1).schema_version, "p0-owner-goal-correction-v3");
   assert.deepEqual(result.current.revision.success_criterion, {
     target_count: 30,
     deadline: "2027-06-30",
-    max_result_cost_rub: 30_000,
+    total_budget_rub: 30_000,
   });
   assert.deepEqual(result.current.invalidation.dependencies.map((item) => item.kind), [
     "ANALYTICS_EVIDENCE", "CAMPAIGN_STRATEGY", "CAMPAIGN_PAIR",
@@ -123,7 +125,8 @@ test("material correction creates the next verified revision and invalidates onl
   assert.deepEqual(dashboard.goalFormation.successCriterion, {
     targetCount: 30,
     deadline: "2027-06-30",
-    maxResultCostRub: 30_000,
+    maxResultCostRub: 1_000,
+    totalBudgetRub: 30_000,
   });
   assert.equal(dashboard.goalFormation.versionLabel, "Версия 2");
   assert.equal(dashboard.goalFormation.rebuildRequired.length, 3);

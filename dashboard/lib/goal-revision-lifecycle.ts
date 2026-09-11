@@ -1,5 +1,17 @@
 import {
-  GOAL_CANDIDATE_SCHEMA,
+  GOAL_CANDIDATE_SCHEMA_V2,
+  GOAL_CANDIDATE_SCHEMA_V3,
+  GOAL_CANDIDATE_SCHEMA_V4,
+  isTypedGoalCriterion,
+  goalTotalBudgetRub,
+  describeGoalCriterion,
+  normalizeGoalSuccessCriterion,
+  normalizeGoalGeography,
+  ownerGoalCountingPolicy,
+  normalizeGoalText,
+  assertGoalReady,
+  GOAL_COUNTING_RULE,
+  type GoalCountingPolicy,
   verifyGoalCandidate,
   verifyGoalFormationResult,
   type GoalCandidate,
@@ -40,37 +52,8 @@ export interface CurrentGoalStore {
   append(current: CurrentGoal, expectedVersion: number | null): Promise<boolean>;
 }
 
-function normalizedMeaning(value: unknown, maximum = 1_000) {
-  const text = String(value ?? "").normalize("NFKC").replace(/\s+/gu, " ").trim();
-  if (!text || text.length > maximum) throw new Error("Goal correction is required and exceeds no field limit.");
-  return text;
-}
-
-function normalizedSuccessCriterion(value: GoalSuccessCriterion | null | undefined) {
-  if (value === null || value === undefined) return null;
-  const targetCount = Number(value.target_count);
-  const maxResultCostRub = Number(value.max_result_cost_rub);
-  const deadline = String(value.deadline ?? "").trim();
-  const deadlineDate = /^\d{4}-\d{2}-\d{2}$/u.test(deadline) ? new Date(`${deadline}T00:00:00Z`) : null;
-  if (!Number.isSafeInteger(targetCount) || targetCount < 1
-    || !Number.isSafeInteger(maxResultCostRub) || maxResultCostRub < 1
-    || !deadlineDate || Number.isNaN(deadlineDate.getTime())
-    || deadlineDate.toISOString().slice(0, 10) !== deadline) {
-    throw new Error("Укажите целевое количество, срок и максимальную стоимость результата.");
-  }
-  return { target_count: targetCount, deadline, max_result_cost_rub: maxResultCostRub };
-}
-
-function sameMeaning(
-  left: GoalRevision,
-  desiredOutcome: string,
-  qualifiedAction: string,
-  successCriterion: GoalSuccessCriterion | null | undefined,
-) {
-  return normalizedMeaning(left.desired_outcome) === desiredOutcome
-    && normalizedMeaning(left.qualified_action) === qualifiedAction
-    && JSON.stringify(left.success_criterion ?? null) === JSON.stringify(successCriterion ?? null)
-    && left.known_constraints.length === 0;
+function normalizedMeaning(value: unknown) {
+  return normalizeGoalText(value, "Описание цели или квалифицированного результата");
 }
 
 function clone<T>(value: T): T {
@@ -97,29 +80,40 @@ export async function createCurrentGoal(input: {
   desired_outcome: string;
   qualified_action: string;
   success_criterion: GoalSuccessCriterion;
+  customer_geography: string;
+  counting_policy?: GoalCountingPolicy;
   created_at: string;
 }): Promise<CurrentGoal> {
   const desiredOutcome = normalizedMeaning(input.desired_outcome);
   const qualifiedAction = normalizedMeaning(input.qualified_action);
-  const successCriterion = normalizedSuccessCriterion(input.success_criterion);
-  if (!successCriterion) throw new Error("Укажите целевое количество, срок и максимальную стоимость результата.");
-  const inputId = "owner_goal_input_v1";
+  const successCriterion = normalizeGoalSuccessCriterion(input.success_criterion);
+  const customerGeography = normalizeGoalGeography(input.customer_geography);
+  const typed = isTypedGoalCriterion(successCriterion);
+  const countingPolicy = typed ? input.counting_policy : ownerGoalCountingPolicy(input.counting_policy);
+  if (!successCriterion) throw new Error("Укажите целевое количество, срок и общий бюджет.");
+  assertGoalReady({ desired_outcome: desiredOutcome, qualified_action: qualifiedAction, success_criterion: successCriterion, customer_geography: customerGeography, ...(countingPolicy ? { counting_policy: countingPolicy } : {}) });
+  const totalBudget = goalTotalBudgetRub(successCriterion) !== null;
+  const inputId = typed ? "owner_goal_input_v4" : totalBudget ? "owner_goal_input_v3" : "owner_goal_input_v2";
   const exactInput = await ownerInputReference({
     input_id: inputId,
-    schema_version: "p0-owner-goal-input-v1",
+    schema_version: typed ? "p0-owner-goal-input-v4" : totalBudget ? "p0-owner-goal-input-v3" : "p0-owner-goal-input-v2",
     revision_id: "owner-goal-input:1",
     material: {
       desired_outcome: desiredOutcome,
       qualified_action: qualifiedAction,
       success_criterion: successCriterion,
+      customer_geography: customerGeography,
+      ...(!typed ? { counting_policy: countingPolicy } : {}),
     },
   });
   const result = await verifyGoalCandidate({
     candidate: {
-      schema_version: GOAL_CANDIDATE_SCHEMA,
+      schema_version: typed ? GOAL_CANDIDATE_SCHEMA_V4 : totalBudget ? GOAL_CANDIDATE_SCHEMA_V3 : GOAL_CANDIDATE_SCHEMA_V2,
       desired_outcome: desiredOutcome,
       qualified_action: qualifiedAction,
       success_criterion: successCriterion,
+      customer_geography: customerGeography,
+      ...(!typed ? { counting_policy: countingPolicy } : {}),
       used_input_ids: [inputId],
       provenance: [{
         supports: "DESIRED_OUTCOME",
@@ -135,8 +129,18 @@ export async function createCurrentGoal(input: {
         supports: "SUCCESS_CRITERION",
         input_id: inputId,
         locator: "owner_input.success_criterion",
-        evidence: `${successCriterion.target_count} результатов до ${successCriterion.deadline}, не дороже ${successCriterion.max_result_cost_rub} ₽`,
-      }],
+        evidence: describeGoalCriterion(successCriterion),
+      }, {
+        supports: "CUSTOMER_GEOGRAPHY",
+        input_id: inputId,
+        locator: "owner_input.customer_geography",
+        evidence: customerGeography,
+      }, ...(!typed ? [{
+        supports: "COUNTING_POLICY" as const,
+        input_id: inputId,
+        locator: "owner_input.counting_policy",
+        evidence: GOAL_COUNTING_RULE,
+      }] : [])],
       known_constraints: [],
       material_ambiguity: null,
     },
@@ -158,6 +162,8 @@ export async function reviseCurrentGoal(input: {
   desired_outcome: string;
   qualified_action: string;
   success_criterion?: GoalSuccessCriterion | null;
+  customer_geography?: string;
+  counting_policy?: GoalCountingPolicy;
   corrected_at: string;
   dependencies: GoalDependencyReference[];
 }): Promise<GoalRevisionSaveResult> {
@@ -166,8 +172,16 @@ export async function reviseCurrentGoal(input: {
   const qualifiedAction = normalizedMeaning(input.qualified_action);
   const successCriterion = input.success_criterion === undefined
     ? input.current.revision.success_criterion
-    : normalizedSuccessCriterion(input.success_criterion);
-  if (sameMeaning(input.current.revision, desiredOutcome, qualifiedAction, successCriterion)) {
+    : normalizeGoalSuccessCriterion(input.success_criterion);
+  const customerGeography = normalizeGoalGeography(input.customer_geography ?? input.current.revision.customer_geography);
+  const typed = isTypedGoalCriterion(successCriterion);
+  const countingPolicy = typed ? input.counting_policy : ownerGoalCountingPolicy(input.counting_policy ?? input.current.revision.counting_policy);
+  assertGoalReady({ desired_outcome: desiredOutcome, qualified_action: qualifiedAction, success_criterion: successCriterion, customer_geography: customerGeography, counting_policy: countingPolicy });
+  if (normalizedMeaning(input.current.revision.desired_outcome) === desiredOutcome
+    && normalizedMeaning(input.current.revision.qualified_action) === qualifiedAction
+    && JSON.stringify(input.current.revision.success_criterion ?? null) === JSON.stringify(successCriterion ?? null)
+    && input.current.revision.customer_geography === customerGeography
+    && JSON.stringify(input.current.revision.counting_policy) === JSON.stringify(countingPolicy)) {
     return { material_change: false, current: clone(input.current) };
   }
 
@@ -177,18 +191,22 @@ export async function reviseCurrentGoal(input: {
     desired_outcome: desiredOutcome,
     qualified_action: qualifiedAction,
     success_criterion: successCriterion ?? null,
+    customer_geography: customerGeography,
+    ...(!typed ? { counting_policy: countingPolicy } : {}),
   };
   const correctionReference = await ownerInputReference({
     input_id: correctionInputId,
-    schema_version: "p0-owner-goal-correction-v2",
+    schema_version: typed ? "p0-owner-goal-correction-v4" : "p0-owner-goal-correction-v3",
     revision_id: `goal-correction:${input.current.revision.version + 1}`,
     material: correctionMaterial,
   });
   const previousInputIds = input.current.revision.exact_inputs.map((reference) => reference.input_id);
   const candidate: GoalCandidate = {
-    schema_version: GOAL_CANDIDATE_SCHEMA,
+    schema_version: typed ? GOAL_CANDIDATE_SCHEMA_V4 : goalTotalBudgetRub(successCriterion) !== null ? GOAL_CANDIDATE_SCHEMA_V3 : GOAL_CANDIDATE_SCHEMA_V2,
     desired_outcome: desiredOutcome,
     qualified_action: qualifiedAction,
+    customer_geography: customerGeography,
+    ...(!typed ? { counting_policy: countingPolicy } : {}),
     used_input_ids: [...previousInputIds, correctionInputId],
     provenance: [{
       supports: "DESIRED_OUTCOME",
@@ -200,8 +218,18 @@ export async function reviseCurrentGoal(input: {
       input_id: correctionInputId,
       locator: "owner_correction.qualified_action",
       evidence: qualifiedAction,
-    }],
-    known_constraints: [],
+    }, {
+      supports: "CUSTOMER_GEOGRAPHY",
+      input_id: correctionInputId,
+      locator: "owner_correction.customer_geography",
+      evidence: customerGeography,
+    }, ...(!typed ? [{
+      supports: "COUNTING_POLICY" as const,
+      input_id: correctionInputId,
+      locator: "owner_correction.counting_policy",
+      evidence: GOAL_COUNTING_RULE,
+    }] : [])],
+    known_constraints: clone(input.current.revision.known_constraints),
     material_ambiguity: null,
   };
   if (successCriterion) {
@@ -210,7 +238,7 @@ export async function reviseCurrentGoal(input: {
       supports: "SUCCESS_CRITERION",
       input_id: correctionInputId,
       locator: "owner_correction.success_criterion",
-      evidence: `${successCriterion.target_count} результатов до ${successCriterion.deadline}, не дороже ${successCriterion.max_result_cost_rub} ₽`,
+      evidence: describeGoalCriterion(successCriterion),
     });
   }
   const result = await verifyGoalCandidate({

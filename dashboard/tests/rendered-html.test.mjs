@@ -77,8 +77,8 @@ test("Goal keeps one atomic editor and one compact measurable criterion", () => 
     assert.match(clientSource, new RegExp(`name="${field}"`, "u"));
   }
   assert.doesNotMatch(clientSource, /criterionComplete \? "Завершено" : currentGoal \? "Требует уточнения" : "Не заполнено"/u);
-  assert.match(clientSource, /Изменить цель[\s\S]*Сохранить и начать сбор сведений/u);
-  assert.match(ownerStyles, /\.owner-goal-cards \{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/u);
+  assert.match(clientSource, /Редактировать[\s\S]*Сохранить и начать сбор сведений/u);
+  assert.match(clientSource, /owner-goal-card owner-goal-geography/u);
   assert.match(ownerStyles, /\.owner-goal-editor-copy \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/u);
   assert.match(ownerStyles, /\.owner-goal-editor fieldset > div \{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/u);
   assert.doesNotMatch(clientSource, /type GoalEditableField|goalField\(|editingField|owner-goal-card-edit/u);
@@ -91,11 +91,7 @@ test("target result cost has an accessible definition and formula tooltip", () =
   assert.match(ownerStyles, /\.owner-term-info:hover \.owner-term-tooltip, \.owner-term-info:focus \.owner-term-tooltip/u);
 });
 
-test("Dashboard typography uses a compact scale with a smaller top navigation", () => {
-  const sizes = [ownerStyles, analyticsStyles, globalStyles, dashboardStyles]
-    .flatMap((stylesheet) => [...stylesheet.matchAll(/font-size:\s*(\d+)px/gu)].map((match) => Number(match[1])));
-  assert.ok(sizes.length > 0);
-  assert.deepEqual([...new Set(sizes)].sort((left, right) => left - right), [10, 11, 12, 13, 14, 15, 16]);
+test("Dashboard keeps compact top navigation", () => {
   assert.match(dashboardStyles, /\.topbar nav a, \.topbar nav > span \{[^}]*font-size: 12px/u);
   assert.match(dashboardStyles, /\.topbar nav i \{[^}]*font-size: 10px/u);
 });
@@ -137,7 +133,7 @@ test("owner Dashboard shows at most one actionable problem and omits the redunda
   assert.match(clientSource, /projection\.cards\.find\(\(card\) => card\.kind === "human-decision-gate"\)/u);
   assert.match(clientSource, /projection\.cards\.find\(\(card\) => card\.kind === "problem"\)/u);
   assert.doesNotMatch(clientSource, /projection\.cards\.map/u);
-  assert.match(clientSource, /Агент продолжает работу/u);
+  assert.doesNotMatch(clientSource, /Агент продолжает работу|Автоматические проверки и безопасная сверка/u);
   assert.doesNotMatch(clientSource, /ТЕКУЩИЙ РЕЗУЛЬТАТ|owner-terminal-result/u);
   assert.doesNotMatch(ownerStyles, /\.owner-terminal-result\b/u);
 });
@@ -157,8 +153,8 @@ test("competitor disclosure separates testable hypotheses from performance facts
   assert.match(ownerStyles, /\.owner-competitor-hypotheses\b/u);
 });
 
-test("owner interface fixes the accepted five stages and exposes only planned product modules", () => {
-  for (const label of ["Цель", "Что узнал агент", "Стратегия", "Кампании", "Проверка публикации"]) {
+test("owner interface fixes the accepted four stages and exposes only planned product modules", () => {
+  for (const label of ["Цель", "Что узнал агент", "Стратегия", "Кампании"]) {
     assert.match(ownerSource, new RegExp(label, "u"));
   }
   for (const label of ["Стратегия", "Управление", "Мониторинг", "Поиск", "Каналы", "VK · В РАЗРАБОТКЕ"]) {

@@ -109,7 +109,9 @@ export type FocusOpportunityCard = {
   disposition: "LAUNCH_NOW" | "ALTERNATIVE" | "BLOCKED" | "INSUFFICIENT_EVIDENCE";
   market_opportunity: FocusDimension & {
     status: "AVAILABLE" | "PARTIAL" | "UNAVAILABLE";
-    observed_lower_bound: number | null;
+    /** Read-only compatibility with older snapshots. */
+    observed_lower_bound?: number | null;
+    observed_phrase_frequency_sum?: number | null;
     demand_cluster_ids: string[];
   };
   launch_readiness: FocusDimension & {
@@ -472,11 +474,11 @@ export async function buildProductFocusArtifacts({
       market_opportunity: {
         status: marketStatus,
         score: marketScore,
-        observed_lower_bound: observed,
+        observed_phrase_frequency_sum: observed,
         demand_cluster_ids: matches.map((item) => item.cluster_id),
         reasons: marketStatus === "UNAVAILABLE"
           ? [{ code: "MARKET_OPPORTUNITY_UNAVAILABLE", detail: "Нет официального наблюдения спроса в сопоставимом охвате." }]
-          : [{ code: "WORDSTAT_LOWER_BOUND", detail: "Рыночная возможность использует наблюдаемую нижнюю границу запросов, а не прогноз." }],
+          : [{ code: "WORDSTAT_PHRASE_FREQUENCY_SUM", detail: "Сумма частот исследованных фраз используется для сравнения. Пересечения запросов не устранены; уникальный спрос и продажи не оценены." }],
       },
       launch_readiness: {
         status: launch.status,

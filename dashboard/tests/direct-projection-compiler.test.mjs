@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { buildPublishProjection } from "../lib/campaign-draft.ts";
+import { buildBrandClaimsContract } from "../lib/campaign-creation-profile.ts";
 import {
   compileDirectProjection,
   DIRECT_PROFILE_APPLICABILITY_REGISTRY,
@@ -133,6 +134,34 @@ test("compiles one complete EPK Search WB_MAXIMUM_CLICKS graph without an extern
   assert.equal("AutotargetingSettings" in compiled.local_graph.keywords[0].provider_fields, false);
   assert.equal("Bid" in compiled.local_graph.keywords[0].provider_fields, false);
   assert.equal("ContextBid" in compiled.local_graph.keywords[0].provider_fields, false);
+});
+
+test("accepts one through seven responsive titles and rejects an eighth before compilation", async () => {
+  for (const count of [1, 7, 8]) {
+    const candidate = projection();
+    const ad = candidate.direct.ad.ResponsiveAd;
+    ad.Titles = Array.from({ length: count }, (_, index) => `Заголовок ${index + 1}`);
+    candidate.brand_claims_contract = buildBrandClaimsContract({
+      strategyRevisionId: candidate.lineage.strategy_revision_id,
+      titles: ad.Titles,
+      texts: ad.Texts,
+    });
+
+    if (count <= 7) {
+      const compiled = await compileDirectProjection(input({ projection: candidate }));
+      assert.deepEqual(compiled.local_graph.ads[0].provider_fields.ResponsiveAd.Titles, ad.Titles);
+      assert.equal(compiled.validation.external_write_sent, false);
+    } else {
+      await assert.rejects(compileDirectProjection(input({ projection: candidate })), (error) => {
+        assert.ok(error instanceof DirectProjectionCompilationError);
+        assert.deepEqual(error.violations.map(({ code, pointer }) => ({ code, pointer })), [{
+          code: "RESPONSIVE_TITLES_INVALID",
+          pointer: "/direct/ad/ResponsiveAd/Titles",
+        }]);
+        return true;
+      });
+    }
+  }
 });
 
 test("resolves every versioned profile field to a value, proven absence or NOT_APPLICABLE", async () => {

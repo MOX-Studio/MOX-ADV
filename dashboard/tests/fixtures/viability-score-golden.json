@@ -35,9 +35,9 @@
       ],
       "ranking": {
         "status": "RANKED",
-        "recommendation_set_id": "recommendation-set-f8c72668671a5cc24c86",
+        "recommendation_set_id": "recommendation-set-caea6950658d43ddbab7",
         "cohort_id": "capability-cohort:aa66a0d301b1512bf76f74c7",
-        "comparable_set_id": "comparable-set:300183009582e647fdb3e76e",
+        "comparable_set_id": "comparable-set:119e87b192b2e2eb2a12433b",
         "rank": 1,
         "tied_draft_ids": [
           "draft-156eb13673e8cf2331ef"

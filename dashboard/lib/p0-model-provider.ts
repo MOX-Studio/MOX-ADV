@@ -4,7 +4,7 @@ import type { P0ModelAdapter } from "./p0-agent-runtime.ts";
 
 export type P0ModelProviderConfiguration = {
   provider: string;
-  model: string;
+  model?: string;
   openaiApiKey: string;
   codexBridgeUrl: string;
   codexBridgeToken: string;
@@ -24,18 +24,19 @@ export function createP0ModelAdapter(
   fetcher: typeof fetch = fetch,
 ): P0ModelAdapter {
   const provider = configuration.provider.trim();
+  const model = configuration.model ?? "gpt-6-astra";
   if (provider === "codex-subscription") {
     return new CodexSubscriptionModelAdapter({
       endpoint: configuration.codexBridgeUrl,
       bridgeToken: configuration.codexBridgeToken,
-      model: configuration.model,
+      model,
       fetcher,
     });
   }
   if (provider === "openai-api") {
     return new OpenAIResponsesModelAdapter({
       apiKey: configuration.openaiApiKey,
-      model: configuration.model,
+      model,
       fetcher,
     });
   }

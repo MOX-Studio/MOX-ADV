@@ -1,6 +1,7 @@
 import type { OwnerJourneyProjection } from "./p0-owner-journey.ts";
 import { OWNER_JOURNEY_STAGES } from "./p0-owner-journey.ts";
 import type { OwnerPipelineProjection } from "./pipeline-owner-dashboard.ts";
+import { codexExecutionLabel } from "./codex-dispatch.ts";
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -14,7 +15,51 @@ function text(value: unknown) {
   return String(value ?? "").normalize("NFKC").replace(/\s+/gu, " ").trim();
 }
 
-function currentPreflight(state: Record<string, unknown>) {
+function currentPreflight(state: Record<string, unknown>, products?: OwnerPipelineProjection["currentProducts"]) {
+  const localPairs = products?.campaignPairs.filter((pair) => ["p0-direct-projection-v5", "p0-direct-projection-v6"].includes(String(pair.publishProjection.schema_version))) ?? [];
+  if (localPairs.length) {
+    const blockerLabels: Record<string, string> = {
+      LOCAL_PROFILE_WRITE_UNIMPLEMENTED: "Публикация полного графа",
+      CLAIMS_FACT_CHECK_REQUIRED: "Факты рекламных обещаний",
+      PROVIDER_KEYWORD_IDENTITY_UNVERIFIED: "Критерии Директа",
+      GENERATION_MEASUREMENT_UNAVAILABLE: "Измерение конверсий",
+      DIRECT_ACCOUNT_CAPABILITY_UNAVAILABLE: "Возможности рекламного аккаунта",
+      DIRECT_ACCOUNT_ELIGIBILITY_UNAVAILABLE: "Права рекламного аккаунта",
+      DIRECT_ACCOUNT_CAPACITY_UNAVAILABLE: "Лимиты рекламного аккаунта",
+      SEMANTIC_COVERAGE_UNVERIFIED: "Покрытие поисковых намерений",
+      TEST_SCENARIO_INPUTS: "Тестовые подстановки",
+      AUDIENCE_NOT_READY: "Доступность аудиторий",
+    };
+    const gates = localPairs.flatMap((pair, index) => {
+      const name = text(record(record(pair.publishProjection.direct).campaign).Name) || `Кампания ${index + 1}`;
+      const ready = pair.publicationReadiness;
+      const blockers = [...(ready?.blockers ?? [])];
+      if (pair.searchSemantics && pair.searchSemantics.coverage.status !== "REVIEWED"
+        && !blockers.some((blocker) => blocker.code === "SEMANTIC_COVERAGE_UNVERIFIED")) blockers.push({
+        code: "SEMANTIC_COVERAGE_UNVERIFIED", message: "Покрытие поисковых намерений не подтверждено. Проверьте семантику по текущим источникам перед публикацией.",
+      });
+      if (!blockers.some((blocker) => blocker.code === "LOCAL_PROFILE_WRITE_UNIMPLEMENTED")) blockers.unshift({
+        code: "LOCAL_PROFILE_WRITE_UNIMPLEMENTED",
+        message: "Публикация этого профиля пока недоступна: запись полного графа и сверка с Директом не реализованы.",
+      });
+      return [{
+        label: `${name}: содержание черновика`,
+        status: ready?.localContentValid ? "Пройдено" as const : "Заблокировано" as const,
+        explanation: ready?.localContentValid ? "Все выбранные группы, фразы и объявления сохранены в полном локальном черновике." : "Полнота текущего локального черновика требует повторной проверки.",
+      }, ...blockers.map((blocker) => ({
+        label: `${name}: ${blockerLabels[blocker.code] ?? "подготовка публикации"}`,
+        status: "Заблокировано" as const,
+        explanation: blocker.message || "Требуется проверить готовность текущей редакции перед публикацией.",
+      }))];
+    });
+    return {
+      status: localPairs.every((pair) => pair.publicationReadiness?.localContentValid)
+        ? "LOCAL_PREPARED_PUBLICATION_UNAVAILABLE" : "LOCAL_REVIEW_INCOMPLETE_PUBLICATION_UNAVAILABLE",
+      passed: gates.filter((gate) => gate.status === "Пройдено").length,
+      total: gates.length,
+      preflightGates: gates,
+    };
+  }
   const packageReview = record(state.package_review);
   const humanGate = record(state.human_decision_gate);
   const businessProjection = record(packageReview.business_projection ?? humanGate.business_projection);
@@ -56,7 +101,17 @@ export function projectCurrentPipelineContract(
   const goal = pipeline.goalFormation.status === "VERIFIED"
     ? pipeline.goalFormation.desiredOutcome
     : null;
-  const summary = pipeline.status === "NOT_STARTED"
+  const mono = pipeline.singleCodex;
+  if (mono && pipeline.active && mono.phase !== "LEGACY") {
+    const status = mono.workingCampaigns ? "Требует обоснования" : codexExecutionLabel(mono);
+    pipeline = { ...pipeline, stages: pipeline.stages.map(stage => stage.id === pipeline.currentStage
+      ? { ...stage, status, tone: mono.workingCampaigns ? "returned" : stage.tone, icon: status === "Требует обоснования" ? "!" : status === "Ожидает агента" || status === "В очереди" ? "○" : status === "Ошибка передачи" ? "!" : "…" } : stage) };
+  }
+  const summary = mono && pipeline.active
+    ? mono.workingCampaigns ? mono.workingCampaigns.readiness.summary : mono.phase === "COLLECTING" ? "Скрипты собирают сведения. После сбора Codex продолжит работу."
+      : mono.phase === "COMMITTING" ? "Сохранение проверенного результата этапа."
+        : codexExecutionLabel(mono)
+    : pipeline.status === "NOT_STARTED"
     ? "Исторические документы сохранены только как входные evidence. Новый запуск сформирует текущие объекты заново."
     : pipeline.stateText;
   const currentStage = pipeline.currentStage;
@@ -72,7 +127,7 @@ export function projectCurrentPipelineContract(
     schemaVersion: "p0-current-pipeline-owner-result-v1",
     stateRevision: pipeline.currentProducts?.stateRevision ?? null,
     products: pipeline.currentProducts,
-    preflight: currentPreflight(context.historicalState ?? {}),
+    preflight: currentPreflight(context.historicalState ?? {}, pipeline.currentProducts),
     reproducibilityVersions,
     playbookGovernance: context.playbookGovernance ? structuredClone(context.playbookGovernance) : null,
     questions: [
@@ -99,10 +154,11 @@ export function projectCurrentPipelineContract(
     },
     introduction: {
       title: "Campaign Draft Pipeline",
-      body: "Текущий результат определяется пятью этапами Pipeline Orchestrator; внешняя запись, публикация и расходы не разрешены.",
+      body: "Текущий результат определяется четырьмя этапами Pipeline Orchestrator; внешняя запись, публикация и расходы не разрешены.",
     },
     businessOutcome: {
-      status: pipeline.status === "COMPLETED" ? "complete" : pipeline.active ? "working" : pipeline.status === "FAILED" ? "blocked" : "ready",
+      // Finishing local preparation does not record attainment of the owner's business goal.
+      status: pipeline.active ? "working" : pipeline.status === "FAILED" ? "blocked" : "ready",
       headline: goal ?? (pipeline.status === "NOT_STARTED" ? "Готово к новому запуску" : pipeline.currentTask),
       summary,
     },
@@ -116,7 +172,7 @@ export function projectCurrentPipelineContract(
     appliedPractice: null,
     businessReadiness: null,
     materialUnknowns: [],
-    agentActivity: pipeline.active ? {
+    agentActivity: !mono && pipeline.active ? {
       status: "working",
       summary: `${pipeline.currentTask} ${pipeline.stateText}`,
       completed: pipeline.stages.filter((stage) => stage.tone === "complete").length,
@@ -139,15 +195,22 @@ export function projectCurrentPipelineContract(
 
 export const CURRENT_PIPELINE_ACTIONS = [
   "START",
+  "CLAIM_CONTROL",
+  "DISPATCH_CODEX",
+  "RELEASE_CONTROL",
+  "COLLECT_EVIDENCE",
+  "IMPORT_EVIDENCE",
+  "REQUEST_RESEARCH",
+  "GET_STAGE_TASK",
+  "SUBMIT_STAGE_RESULT",
+  "RESUME_COMMIT",
   "STOP",
   "CORRECT_GOAL",
   "REFRESH_EVIDENCE",
-  "REFRESH_COMPETITOR_ANALYSIS",
-  "CORRECT_STRATEGY",
+  "REGENERATE_FROM_EVIDENCE",
   "EDIT_CAMPAIGN_PAIR",
   "EXPLAIN",
   "PLAYBOOK_STEWARD_DECISION",
-  "PROPOSE_PLAYBOOK_CANDIDATE",
 ] as const;
 
 export type CurrentPipelineAction = (typeof CURRENT_PIPELINE_ACTIONS)[number];

@@ -1,4 +1,13 @@
+import { assessGoalPortfolioReadiness } from "./goal-portfolio-analysis.ts";
+import { hasCompletedLocalPreparation } from "./campaign-preparation-completion.ts";
+import { buildReadableEvidence, collectReadableEvidenceRefs, type ReadableEvidenceFact } from "./readable-evidence.ts";
+import { buildFindingsReport, type FindingsReport } from "./findings-research.ts";
+import { projectResearchMaterials, type ResearchMaterials } from "./research-material-presentation.ts";
+import { assertGoalReady, goalReadinessErrors, goalResultCostCeiling, goalTotalBudgetRub, goalTargetValue, goalCountTarget, isTypedGoalCriterion, normalizeOwnerGoalInput, type GoalCountingPolicy } from "./goal-revision.ts";
+import type { GoalComparison, GoalMetricDefinition } from "./goal-metric.ts";
 import { validateCampaignPairs } from "./campaign-pair-validation.ts";
+import { projectCampaignKeywords, type CampaignKeywordPresentation } from "./campaign-keyword-presentation.ts";
+import { pipelineCompetitorComparisonScope } from "./competitor-comparison.ts";
 import {
   projectCompetitorAnalysisForDashboard,
   type OwnerCompetitorAnalysis,
@@ -36,9 +45,11 @@ import {
   type ProductionPipelineEvidenceCollector,
 } from "./pipeline-production-executor.ts";
 import {
+  resolvePriorStrategyInput,
   saveVerifiedPipelineProduct,
   type PipelineCurrentProducts,
   type PipelineCurrentProductStore,
+  type PipelineVerifiedProduct,
 } from "./pipeline-current-products.ts";
 import {
   refreshCurrentPipelineCompetitorEvidence,
@@ -52,6 +63,16 @@ import type { CampaignStrategyCorrectionChanges } from "./campaign-strategy-corr
 import type { CampaignPairEditRequest } from "./campaign-pair-edit.ts";
 import type { ProductionStageAgents } from "./production-stage-agents.ts";
 import {
+  assessPipelineEvidenceReuse,
+  retainVerifiedPipelineEvidence,
+  unavailableEvidenceReuse,
+  verifiedEvidenceSourceEvent,
+  type OwnerEvidenceReuse,
+  type PipelineEvidenceReusePlan,
+  type PipelineVerifiedEvidenceInput,
+} from "./pipeline-evidence-reuse.ts";
+import { abortPipelineExecution, runPipelineExecutionOnce } from "./pipeline-execution-cancellation.ts";
+import {
   PIPELINE_INPUT_VERSIONS_SCHEMA,
   PIPELINE_STAGES,
   PipelineOrchestrator,
@@ -61,10 +82,11 @@ import {
   type PipelineRunStore,
   type PipelineStageId,
   type PipelineStageStatus,
+  type PipelineAuditEvent,
 } from "./pipeline-orchestrator.ts";
 
-export type OwnerPipelineStageId = "goal" | "findings" | "strategy" | "campaigns" | "review";
-export type OwnerPipelineStageStatus = "Завершён" | "Выполняется" | "Ожидает" | "Возвращён" | "Остановлен" | "Требует уточнения" | "Не заполнено";
+export type OwnerPipelineStageId = "goal" | "findings" | "strategy" | "campaigns";
+export type OwnerPipelineStageStatus = "Завершён" | "Выполняется" | "Ожидает" | "Возвращён" | "Остановлен" | "Требует уточнения" | "Требует обоснования" | "Не заполнено" | "Ожидает агента" | "В очереди" | "У агента" | "Передача агенту" | "Ошибка передачи" | "Сбор источников" | "Сохранение";
 
 export type OwnerPipelineProjection = {
   runId: string | null;
@@ -73,6 +95,8 @@ export type OwnerPipelineProjection = {
   status: "NOT_STARTED" | PipelineRunState["status"];
   active: boolean;
   editingLocked: boolean;
+  evidenceReuse?: OwnerEvidenceReuse;
+  singleCodex?: import("./single-codex-pipeline.ts").SingleCodexProjection;
   currentStage: OwnerPipelineStageId;
   currentTask: string;
   stateText: string;
@@ -96,16 +120,23 @@ export type OwnerPipelineProjection = {
     currentStage: OwnerPipelineStageId;
     updatedAt: string;
     evidence: {
+      sourceFacts?: ReadableEvidenceFact[];
+      formationResearch?: import("./campaign-formation-method.ts").FormationResearch;
+      formationSummary?: string;
+      researchMaterials?: ResearchMaterials;
       schemaVersion: string;
       revisionId: string;
       generatedAt: string;
       asOf: string;
       provenance: OwnerPipelineEvidenceSnapshot;
+      findings?: FindingsReport;
       competitorRefresh: null | { revisionId: string; refreshedAt: string };
       competitorAnalysis: OwnerCompetitorAnalysis;
     } | null;
+    previousEvidence?: { generatedAt: string; goal: string; matchesCurrentGoal?: boolean; findings: FindingsReport; competitorAnalysis: OwnerCompetitorAnalysis; provenance: OwnerPipelineEvidenceSnapshot; demandCostResearch?: OwnerJourneyProjection["demandCostResearch"]; researchMaterials?: ResearchMaterials } | null;
     demandCostResearch: OwnerJourneyProjection["demandCostResearch"];
     strategy: {
+      formationPlan?: import("./campaign-formation-method.ts").FormationPlan;
       revisionId: string;
       status: string;
       dimensions: Array<{ id: string; value: unknown; confidence: string; rationale: string }>;
@@ -117,17 +148,15 @@ export type OwnerPipelineProjection = {
       hypothesis: Record<string, unknown>;
       publishProjection: Record<string, unknown>;
       auctionProtocol: Record<string, unknown>;
+      searchSemantics?: CampaignKeywordPresentation;
+      publicationReadiness?: {
+        status: "UNAVAILABLE";
+        localContentValid: boolean;
+        blockers: Array<{ code: string; message: string }>;
+      };
       reproducibility: Array<{ label: string; value: string }>;
     }>;
     pairValidation: { status: string; disposition: string; violations: string[] };
-    publicationReview: null | {
-      status: string;
-      pairCount: number;
-      externalWrite: "DENIED";
-      publication: "NOT_AUTHORIZED";
-      impressions: 0;
-      spendMicros: 0;
-    };
   };
   goalFormation:
     | { status: "PENDING" }
@@ -136,10 +165,17 @@ export type OwnerPipelineProjection = {
         versionLabel: string;
         desiredOutcome: string;
         qualifiedAction: string;
+        customerGeography: string | null;
+        countingPolicy: GoalCountingPolicy | null;
+        readinessErrors: string[];
         successCriterion: null | {
-          targetCount: number;
+          targetCount: number | null;
+          targetValue?: number;
+          comparison?: GoalComparison;
+          metric?: GoalMetricDefinition;
           deadline: string;
-          maxResultCostRub: number;
+          maxResultCostRub: number | null;
+          totalBudgetRub?: number | null;
         };
         criterionComplete: boolean;
         provenance: string[];
@@ -175,23 +211,20 @@ const OWNER_STAGE_BY_PIPELINE: Record<PipelineStageId, OwnerPipelineStageId> = {
   EVIDENCE_COLLECTION: "findings",
   STRATEGY: "strategy",
   CAMPAIGNS: "campaigns",
-  PUBLICATION_REVIEW: "review",
 };
 
 const OWNER_STAGE_LABEL_BY_PIPELINE: Record<PipelineStageId, string> = {
-  CAMPAIGN_GOAL: "Цели",
+  CAMPAIGN_GOAL: "Цель",
   EVIDENCE_COLLECTION: "Сбор сведений",
   STRATEGY: "Стратегия",
   CAMPAIGNS: "Кампании",
-  PUBLICATION_REVIEW: "Проверка публикации",
 };
 
 const TASK_BY_STAGE: Record<PipelineStageId, string> = {
-  CAMPAIGN_GOAL: "Формирую полный желаемый бизнес-результат и известные ограничения.",
+  CAMPAIGN_GOAL: "Человек задаёт и подтверждает цель, результат и ограничения.",
   EVIDENCE_COLLECTION: "Собираю и проверяю разрешённые сведения для текущей цели.",
-  STRATEGY: "Формирую и проверяю одну текущую Campaign Strategy.",
-  CAMPAIGNS: "Собираю полные пары Campaign Hypothesis + Campaign Draft.",
-  PUBLICATION_REVIEW: "Проверяю готовые черновики без публикации и внешней записи.",
+  STRATEGY: "Определяю аудитории, предложения, бюджет и гипотезы по собранным сведениям.",
+  CAMPAIGNS: "Формирую кампании, группы и объявления; проверяю связь с исследованием.",
 };
 
 const PRESENTATION_BY_STATUS: Record<PipelineStageStatus, {
@@ -286,7 +319,12 @@ export async function pipelineInputVersions(view: PipelineHistoricalView): Promi
     business_model: state.business_model ?? null,
     business_goal_decision: context.business_goal_decision ?? null,
     strategy_review: state.strategy_review ?? null,
+    current_pipeline_strategy: state.current_pipeline_strategy ?? null,
+    current_pipeline_strategy_source: state.current_pipeline_strategy_source ?? null,
   };
+  const historicalState = { ...state };
+  delete historicalState.current_pipeline_strategy;
+  delete historicalState.current_pipeline_strategy_source;
   const campaignPairChecks = await validateCampaignPairs({
     recommendationSet,
     strategy,
@@ -321,7 +359,7 @@ export async function pipelineInputVersions(view: PipelineHistoricalView): Promi
     historical_document: {
       schema_version: schema(state, "p0-application-document"),
       revision: view.revision,
-      digest: await pipelineDigest(state),
+      digest: await pipelineDigest(historicalState),
     },
     business_input: await versionReference(
       businessInput,
@@ -362,6 +400,8 @@ function currentProductProjection(value: Awaited<ReturnType<PipelineCurrentProdu
     financial_competitor_intelligence: structuredClone(competitorRefresh.financial_competitor_intelligence),
     competitor_observations: structuredClone(competitorRefresh.competitor_observations),
     competitor_assessment: structuredClone(competitorRefresh.competitor_assessment),
+    competitor_discovery: structuredClone(competitorRefresh.competitor_discovery),
+    competitor_ranking: structuredClone(competitorRefresh.competitor_ranking),
   } : evidence;
   const strategyProduct = record(value.campaign_strategy);
   const strategy = record(strategyProduct.strategy ?? strategyProduct);
@@ -388,6 +428,14 @@ function currentProductProjection(value: Awaited<ReturnType<PipelineCurrentProdu
       hypothesis: structuredClone(hypothesis),
       publishProjection: structuredClone(publishProjection),
       auctionProtocol: structuredClone(record(draft.auction_protocol)),
+      searchSemantics: publishProjection.schema_version === "p0-direct-projection-v6" ? undefined : projectCampaignKeywords({ snapshot: evidence, projection: publishProjection, design: pair.design, fingerprint: draft.publish_fingerprint }),
+      ...(["p0-direct-projection-v5", "p0-direct-projection-v6"].includes(String(publishProjection.schema_version)) ? {
+        publicationReadiness: {
+          status: "UNAVAILABLE" as const,
+          localContentValid: record(draft.validation).status === "VALID" && record(draft.validation).scope === "LOCAL_CONTENT_REVIEW",
+          blockers: list(record(draft.publication_readiness).blockers).map(record).map((blocker) => ({ code: text(blocker.code), message: text(blocker.message) })),
+        },
+      } : {}),
       reproducibility: [
         { label: "Direct Compiler", value: text(draft.schema_version) || "direct-v501-projection-compiler" },
         { label: "Профиль", value: [text(draft.profile_id), text(draft.profile_version)].filter(Boolean).join(" · ") || "p0-campaign-creation-profile-v1" },
@@ -397,12 +445,25 @@ function currentProductProjection(value: Awaited<ReturnType<PipelineCurrentProdu
     };
   });
   const pairChecks = record(value.campaign_pair_checks);
-  const publication = value.publication_review ? record(value.publication_review) : null;
   return {
     stateRevision: value.state_revision,
     currentStage: OWNER_STAGE_BY_PIPELINE[value.current_stage],
     updatedAt: value.updated_at,
     evidence: Object.keys(evidence).length ? {
+      researchMaterials: projectResearchMaterials(evidence),
+      sourceFacts: buildReadableEvidence(evidence, {
+        references: collectReadableEvidenceRefs([
+          value.evidence_interpretation?.formation_research,
+          strategyProduct.formation_plan,
+          ...campaignPairs.map(pair => pair.publishProjection.formation),
+        ]),
+        catalog: record(record(record(strategyProduct.inputs).analytics_evidence_snapshot).content).grounding_catalog,
+        strategy,
+      }),
+      ...(value.evidence_interpretation?.formation_research ? {
+        formationResearch: structuredClone(value.evidence_interpretation.formation_research),
+        formationSummary: text(value.evidence_interpretation.summary),
+      } : {}),
       schemaVersion: text(evidence.schema_version),
       revisionId: identifier(
         evidence.snapshot_revision_id ?? evidence.snapshot_id,
@@ -411,14 +472,29 @@ function currentProductProjection(value: Awaited<ReturnType<PipelineCurrentProdu
       generatedAt: text(evidence.generated_at),
       asOf: text(evidence.as_of),
       provenance: projectEvidenceSnapshotForDashboard(evidence),
+      findings: buildFindingsReport(competitorEvidence),
       competitorRefresh: Object.keys(competitorRefresh).length ? {
         revisionId: identifier(competitorRefresh.revision_id, "current-competitor-refresh"),
         refreshedAt: text(competitorRefresh.refreshed_at),
       } : null,
-      competitorAnalysis: projectCompetitorAnalysisForDashboard(competitorEvidence),
+      competitorAnalysis: projectCompetitorAnalysisForDashboard(competitorEvidence, pipelineCompetitorComparisonScope(value)),
+    } : null,
+    previousEvidence: value.prior_verified_evidence && value.prior_verified_evidence.snapshot.snapshot_id !== evidence.snapshot_id ? {
+      researchMaterials: projectResearchMaterials(value.prior_verified_evidence.snapshot),
+      generatedAt: value.prior_verified_evidence.collected_at,
+      goal: text(record(value.prior_verified_evidence.snapshot.goal_context).desired_outcome),
+      matchesCurrentGoal: Boolean(value.goal_revision?.goal_revision_id && value.goal_revision.goal_revision_id === record(value.prior_verified_evidence.snapshot.goal_context).goal_revision_id),
+      findings: buildFindingsReport(value.prior_verified_evidence.snapshot),
+      demandCostResearch: projectDemandCostResearchForOwner(value.prior_verified_evidence.snapshot),
+      competitorAnalysis: projectCompetitorAnalysisForDashboard(value.prior_verified_evidence.snapshot, pipelineCompetitorComparisonScope({
+        goal_revision: value.prior_verified_evidence.snapshot.goal_context,
+        analytics_evidence_snapshot: value.prior_verified_evidence.snapshot,
+      })),
+      provenance: projectEvidenceSnapshotForDashboard(value.prior_verified_evidence.snapshot),
     } : null,
     demandCostResearch: projectDemandCostResearchForOwner(evidence),
     strategy: Object.keys(strategy).length ? {
+      ...(strategyProduct.formation_plan ? { formationPlan: structuredClone(strategyProduct.formation_plan) as import("./campaign-formation-method.ts").FormationPlan } : {}),
       revisionId: identifier(strategy.strategy_revision_id, "current-strategy"),
       status: text(strategy.status),
       dimensions,
@@ -429,14 +505,6 @@ function currentProductProjection(value: Awaited<ReturnType<PipelineCurrentProdu
       disposition: text(pairChecks.set_disposition),
       violations: list(pairChecks.violations).map((violation) => text(record(violation).message || violation)).filter(Boolean),
     },
-    publicationReview: publication ? {
-      status: text(publication.status),
-      pairCount: Number(publication.pair_count ?? campaignPairs.length),
-      externalWrite: "DENIED",
-      publication: "NOT_AUTHORIZED",
-      impressions: 0,
-      spendMicros: 0,
-    } : null,
   };
 }
 
@@ -485,7 +553,7 @@ export function projectOwnerPipeline(
   campaignDossiers: OwnerCampaignPairDossier[] = campaignDossier ? [campaignDossier] : [],
 ): OwnerPipelineProjection {
   if (!run) {
-    const goalCriterionIncomplete = !currentGoal?.revision.success_criterion;
+    const goalCriterionIncomplete = goalReadinessErrors(currentGoal?.revision, true).length > 0;
     return {
       runId: null,
       provenance: null,
@@ -494,9 +562,9 @@ export function projectOwnerPipeline(
       active: false,
       editingLocked: false,
       currentStage: "goal",
-      currentTask: goalCriterionIncomplete ? "Заполните три блока Цели." : "Сохранённая Цель готова к сбору сведений.",
+      currentTask: goalCriterionIncomplete ? "Уточните обязательные данные Цели." : "Сохранённая Цель готова к сбору сведений.",
       stateText: goalCriterionIncomplete
-        ? "Заполните бизнес-цель, квалифицированный результат и измеримый критерий успеха."
+        ? goalReadinessErrors(currentGoal?.revision, true).join(" ")
         : "Запуск ещё не начат. Редактирование доступно.",
       stages: PIPELINE_STAGES.map((stage, index) => ({
         id: OWNER_STAGE_BY_PIPELINE[stage.id],
@@ -515,12 +583,17 @@ export function projectOwnerPipeline(
         versionLabel: `Версия ${currentGoal.revision.version}`,
         desiredOutcome: currentGoal.revision.desired_outcome,
         qualifiedAction: currentGoal.revision.qualified_action,
+        customerGeography: currentGoal.revision.customer_geography ?? null,
+        countingPolicy: currentGoal.revision.counting_policy ?? null,
+        readinessErrors: goalReadinessErrors(currentGoal.revision, true),
         successCriterion: currentGoal.revision.success_criterion ? {
-          targetCount: currentGoal.revision.success_criterion.target_count,
+          targetCount: goalCountTarget(currentGoal.revision.success_criterion),
+          ...(isTypedGoalCriterion(currentGoal.revision.success_criterion) ? { targetValue: goalTargetValue(currentGoal.revision.success_criterion)!, comparison: currentGoal.revision.success_criterion.comparison, metric: structuredClone(currentGoal.revision.success_criterion.metric) } : {}),
           deadline: currentGoal.revision.success_criterion.deadline,
-          maxResultCostRub: currentGoal.revision.success_criterion.max_result_cost_rub,
+          maxResultCostRub: goalResultCostCeiling(currentGoal.revision.success_criterion),
+          totalBudgetRub: goalTotalBudgetRub(currentGoal.revision.success_criterion),
         } : null,
-        criterionComplete: Boolean(currentGoal.revision.success_criterion),
+        criterionComplete: goalReadinessErrors(currentGoal.revision, true).length === 0,
         provenance: currentGoal.revision.provenance.map((item) => `${item.evidence} · ${item.locator}`),
         knownConstraints: currentGoal.revision.known_constraints.map((item) => item.constraint),
         ownerConfirmationRequired: false,
@@ -540,10 +613,15 @@ export function projectOwnerPipeline(
   const persistedGoalFormation = currentGoal
     ? { status: "VERIFIED" as const, revision: currentGoal.revision }
     : run.goal_formation;
-  const goalCriterionIncomplete = persistedGoalFormation.status === "VERIFIED"
-    && !persistedGoalFormation.revision.success_criterion;
-  const stateText = goalCriterionIncomplete
-    ? "Укажите целевое количество, срок и максимальную стоимость результата."
+  const goalCriterionIncomplete = persistedGoalFormation.status !== "VERIFIED"
+    || goalReadinessErrors(persistedGoalFormation.revision, true).length > 0;
+  const needsGoalCorrection = goalCriterionIncomplete && run.status !== "ACTIVE";
+  const savedFormation = currentProducts?.campaignPairs[0]?.publishProjection.formation as import("./campaign-formation-portfolio.ts").FormationBundle | undefined;
+  const goalReadiness = savedFormation?.plan.goal_preparation ? assessGoalPortfolioReadiness(savedFormation.plan.goal_preparation, savedFormation.portfolio.goal_review, savedFormation.research.mode === "TEST_SCENARIO") : null;
+  const preparationComplete = Boolean(savedFormation && goalReadiness?.status !== "NEEDS_REWORK" && hasCompletedLocalPreparation(savedFormation.plan, savedFormation.portfolio.goal_review));
+  const needsGoalSupport = !preparationComplete && run.status === "COMPLETED" && goalReadiness && ["NEEDS_EVIDENCE", "NEEDS_REWORK"].includes(goalReadiness.status);
+  const stateText = needsGoalCorrection
+    ? goalReadinessErrors(persistedGoalFormation.status === "VERIFIED" ? persistedGoalFormation.revision : null, true).join(" ")
     : goalInvalidated
       ? "Текущая Цель исправлена. Зависимые результаты помечены для пересборки в новом запуске."
       : run.status === "ACTIVE"
@@ -553,7 +631,7 @@ export function projectOwnerPipeline(
           ? `${run.last_transition.reason} Следующий запуск будет новым.`
           : `Запуск остановлен на этапе «${stageLabel(run.current_stage)}». Следующий запуск будет новым.`
         : run.status === "COMPLETED"
-          ? "Пять этапов завершены. Внешняя запись не выполнялась."
+          ? preparationComplete ? "Кампании подготовлены для проверки. Результативность и достижение цели ещё не измерены; публикация и расходы не выполнялись." : needsGoalSupport ? goalReadiness.summary : "Подготовка кампаний завершена. Внешняя запись не выполнялась."
           : "Запуск завершён технической ошибкой без внешней записи.";
   const goalFormation: OwnerPipelineProjection["goalFormation"] = persistedGoalFormation.status === "VERIFIED"
     ? {
@@ -561,12 +639,17 @@ export function projectOwnerPipeline(
         versionLabel: `Версия ${persistedGoalFormation.revision.version}`,
         desiredOutcome: persistedGoalFormation.revision.desired_outcome,
         qualifiedAction: persistedGoalFormation.revision.qualified_action,
+        customerGeography: persistedGoalFormation.revision.customer_geography ?? null,
+        countingPolicy: persistedGoalFormation.revision.counting_policy ?? null,
+        readinessErrors: goalReadinessErrors(persistedGoalFormation.revision, true),
         successCriterion: persistedGoalFormation.revision.success_criterion ? {
-          targetCount: persistedGoalFormation.revision.success_criterion.target_count,
+          targetCount: goalCountTarget(persistedGoalFormation.revision.success_criterion),
+          ...(isTypedGoalCriterion(persistedGoalFormation.revision.success_criterion) ? { targetValue: goalTargetValue(persistedGoalFormation.revision.success_criterion)!, comparison: persistedGoalFormation.revision.success_criterion.comparison, metric: structuredClone(persistedGoalFormation.revision.success_criterion.metric) } : {}),
           deadline: persistedGoalFormation.revision.success_criterion.deadline,
-          maxResultCostRub: persistedGoalFormation.revision.success_criterion.max_result_cost_rub,
+          maxResultCostRub: goalResultCostCeiling(persistedGoalFormation.revision.success_criterion),
+          totalBudgetRub: goalTotalBudgetRub(persistedGoalFormation.revision.success_criterion),
         } : null,
-        criterionComplete: Boolean(persistedGoalFormation.revision.success_criterion),
+        criterionComplete: goalReadinessErrors(persistedGoalFormation.revision, true).length === 0,
         provenance: persistedGoalFormation.revision.provenance.map((item) => `${item.evidence} · ${item.locator}`),
         knownConstraints: persistedGoalFormation.revision.known_constraints.map((item) => item.constraint),
         ownerConfirmationRequired: false,
@@ -597,9 +680,9 @@ export function projectOwnerPipeline(
     status: run.status,
     active: run.status === "ACTIVE",
     editingLocked: run.status === "ACTIVE",
-    currentStage: goalCriterionIncomplete || goalInvalidated ? "goal" : OWNER_STAGE_BY_PIPELINE[run.current_stage],
-    currentTask: goalCriterionIncomplete
-      ? "Уточните измеримый критерий успеха."
+    currentStage: needsGoalCorrection || goalInvalidated ? "goal" : OWNER_STAGE_BY_PIPELINE[run.current_stage],
+    currentTask: needsGoalCorrection
+      ? "Уточните обязательные данные Цели."
       : goalInvalidated
         ? "Сохранённая правка Цели готова для нового запуска."
         : run.status === "ACTIVE" ? TASK_BY_STAGE[run.current_stage] : stateText,
@@ -608,13 +691,13 @@ export function projectOwnerPipeline(
       id: OWNER_STAGE_BY_PIPELINE[stage.id],
       pipelineStageId: stage.id,
       label: OWNER_STAGE_LABEL_BY_PIPELINE[stage.id],
-      ...(goalCriterionIncomplete
+      ...(needsGoalCorrection
         ? index === 0
           ? { status: "Требует уточнения", icon: "!" as const, tone: "returned" as const }
           : PRESENTATION_BY_STATUS["PENDING"]
         : goalInvalidated
           ? PRESENTATION_BY_STATUS[index === 0 ? "COMPLETED" : "PENDING"]
-          : PRESENTATION_BY_STATUS[stage.status]),
+          : needsGoalSupport && stage.id === "CAMPAIGNS" ? { status: "Требует обоснования" as const, icon: "!" as const, tone: "returned" as const } : PRESENTATION_BY_STATUS[stage.status]),
     })),
     return: run.last_transition.kind === "RETURN" && run.last_transition.source_stage && run.last_transition.target_stage
       ? {
@@ -634,6 +717,7 @@ export function projectOwnerPipeline(
 
 export class OwnerPipelineController {
   private readonly orchestrator: PipelineOrchestrator;
+  private readonly runStore: PipelineRunStore;
   private readonly goalStore: CurrentGoalStore | null;
   private readonly stageAgents: ProductionStageAgents | null;
   private readonly evidenceCollector: ProductionPipelineEvidenceCollector | null;
@@ -653,6 +737,7 @@ export class OwnerPipelineController {
       competitorCollector?: PipelineCompetitorEvidenceCollector;
     } = {},
   ) {
+    this.runStore = store;
     this.orchestrator = new PipelineOrchestrator({ store, ...input });
     this.goalStore = input.goalStore ?? null;
     this.stageAgents = input.stageAgents ?? null;
@@ -685,11 +770,24 @@ export class OwnerPipelineController {
     return this.project(await this.orchestrator.current(ownerKey), ownerKey);
   }
 
-  private async frozenInputVersions(ownerKey: string, view: PipelineHistoricalView) {
-    const [versions, currentGoal] = await Promise.all([
-      pipelineInputVersions(view),
+  async frozenInputVersions(ownerKey: string, view: PipelineHistoricalView) {
+    const frozenView = structuredClone(view);
+    const [currentProducts, currentGoal] = await Promise.all([
+      this.productStore?.loadCurrent(ownerKey) ?? null,
       this.goalStore?.loadCurrent(ownerKey) ?? null,
     ]);
+    if (currentProducts && currentProducts.owner_key !== ownerKey) {
+      throw new Error("Текущая Strategy принадлежит другому владельцу; вход нового запуска отклонён.");
+    }
+    const priorStrategyInput = await resolvePriorStrategyInput(currentProducts);
+    frozenView.state.current_pipeline_strategy = structuredClone(priorStrategyInput?.artifact ?? null);
+    frozenView.state.current_pipeline_strategy_source = priorStrategyInput ? {
+      schema_version: "p0-current-strategy-input-source-v1",
+      run_id: priorStrategyInput.source_run_id,
+      state_revision: priorStrategyInput.source_state_revision,
+      strategy_digest: priorStrategyInput.reference.digest,
+    } : null;
+    const versions = await pipelineInputVersions(frozenView);
     if (currentGoal) {
       versions.goal_revision = {
         schema_version: currentGoal.revision.schema_version,
@@ -697,14 +795,177 @@ export class OwnerPipelineController {
         digest: currentGoal.revision.digest,
       };
     }
-    return { versions, currentGoal };
+    return { versions, currentGoal, currentProducts, view: frozenView };
+  }
+
+  private async retainedEvidenceSource(ownerKey: string, products: PipelineCurrentProducts | null): Promise<{
+    evidence: PipelineVerifiedEvidenceInput; run: PipelineRunState; audit: PipelineAuditEvent[];
+  } | null> {
+    const candidates = products ? [products] : [];
+    // Prefer the retained verified source; read immutable history only for upgrade recovery.
+    const inspect = async (candidate: PipelineCurrentProducts) => {
+      if (candidate.owner_key !== ownerKey) return null;
+      const retained = candidate.prior_verified_evidence;
+      const sourceRunId = retained?.source_run_id ?? candidate.run_id;
+      const run = await this.runStore.load(sourceRunId);
+      if (!run || run.owner_key !== ownerKey) return null;
+      const audit = await this.orchestrator.audit(sourceRunId);
+      // Recover the accepted Analyst result from deployments that retained the older
+      // interpreter-less source even after a fresh interpretation had been verified.
+      if (retained?.interpretation === null && candidate.analytics_evidence_snapshot && candidate.evidence_interpretation) {
+        const currentRun = candidate.run_id === sourceRunId ? run : await this.runStore.load(candidate.run_id);
+        if (currentRun?.owner_key === ownerKey && currentRun.goal_formation.status === "VERIFIED"
+          && candidate.goal_revision?.digest === currentRun.goal_formation.revision.digest
+          && candidate.goal_revision.goal_revision_id === currentRun.goal_formation.revision.goal_revision_id) {
+          const currentAudit = candidate.run_id === sourceRunId ? audit : await this.orchestrator.audit(candidate.run_id);
+          const snapshotDigest = await pipelineDigest(candidate.analytics_evidence_snapshot);
+          const event = currentAudit.find((item) => item.stage === "EVIDENCE_COLLECTION" && item.event_kind === "STAGE_VERIFIED"
+            && item.actor.actor_type === "AGENT" && item.actor.role === "EVIDENCE_ANALYST"
+            && item.output.status === "VERIFIED" && item.output.reference?.digest === snapshotDigest
+            && item.output.reference.revision_id === candidate.analytics_evidence_snapshot?.snapshot_id);
+          if (event && snapshotDigest === retained.evidence_reference.digest) {
+            const enriched = await retainVerifiedPipelineEvidence({
+              run: currentRun, snapshot: candidate.analytics_evidence_snapshot, interpretation: candidate.evidence_interpretation,
+              stateRevision: candidate.state_revision, sourceRunVersion: event.run_version, verifiedAt: event.recorded_at,
+              researchScopeDigest: retained.research_scope_digest,
+            });
+            if (enriched?.interpretation && await verifiedEvidenceSourceEvent({ evidence: enriched, run: currentRun, audit: currentAudit })) {
+              return { evidence: enriched, run: currentRun, audit: currentAudit };
+            }
+          }
+        }
+      }
+      if (retained) return await verifiedEvidenceSourceEvent({ evidence: retained, run, audit })
+        ? { evidence: structuredClone(retained), run, audit } : null;
+      const snapshot = candidate.analytics_evidence_snapshot;
+      if (!snapshot || run.goal_formation.status !== "VERIFIED"
+        || candidate.goal_revision?.digest !== run.goal_formation.revision.digest
+        || candidate.goal_revision.goal_revision_id !== run.goal_formation.revision.goal_revision_id) return null;
+      const snapshotDigest = await pipelineDigest(snapshot);
+      const event = audit.find((item) => item.stage === "EVIDENCE_COLLECTION" && item.event_kind === "STAGE_VERIFIED"
+        && item.output.status === "VERIFIED" && item.output.reference?.digest === snapshotDigest
+        && item.output.reference.revision_id === snapshot.snapshot_id);
+      if (!event) return null;
+      const evidence = await retainVerifiedPipelineEvidence({
+        run, snapshot, interpretation: candidate.evidence_interpretation,
+        stateRevision: candidate.state_revision, sourceRunVersion: event.run_version, verifiedAt: event.recorded_at,
+      });
+      return evidence && await verifiedEvidenceSourceEvent({ evidence, run, audit }) ? { evidence, run, audit } : null;
+    };
+    let uninterpretedSource: Awaited<ReturnType<typeof inspect>> = null;
+    for (const candidate of candidates) {
+      const source = await inspect(candidate);
+      if (source?.evidence.interpretation) return source;
+      if (source) uninterpretedSource = source;
+    }
+    for (const candidate of await this.productStore?.loadEvidenceCandidates?.(ownerKey) ?? []) {
+      if (candidate.state_revision === products?.state_revision) continue;
+      const source = await inspect(candidate);
+      if (!source) continue;
+      if (uninterpretedSource && (source.evidence.evidence_reference.digest !== uninterpretedSource.evidence.evidence_reference.digest
+        || source.evidence.goal_reference.digest !== uninterpretedSource.evidence.goal_reference.digest)) continue;
+      if (source.evidence.interpretation) return source;
+      uninterpretedSource ??= source;
+    }
+    return uninterpretedSource;
+  }
+
+  async prepareEvidenceReuse(ownerKey: string, frozen: Awaited<ReturnType<OwnerPipelineController["frozenInputVersions"]>>) {
+    if (!frozen.currentGoal || goalReadinessErrors(frozen.currentGoal.revision).length > 0 || !frozen.currentProducts) return {
+      availability: unavailableEvidenceReuse("Сначала сохраните цель и получите проверенный срез источников."), plan: null,
+    };
+    const source = await this.retainedEvidenceSource(ownerKey, frozen.currentProducts);
+    if (!source) return {
+      availability: unavailableEvidenceReuse("Проверенный срез источников не найден. Обновите источники.", { stateRevision: frozen.currentProducts.state_revision, goal: frozen.currentGoal.revision }), plan: null,
+    };
+    return assessPipelineEvidenceReuse({
+      currentOwnerKey: ownerKey,
+      evidence: source.evidence, sourceRun: source.run, sourceAudit: source.audit,
+      currentGoal: frozen.currentGoal.revision, currentVersions: frozen.versions, currentState: frozen.view.state,
+      stateRevision: frozen.currentProducts.state_revision, evaluatedAt: this.now(),
+    });
+  }
+
+  async evidenceReuse(ownerKey: string, view: PipelineHistoricalView): Promise<OwnerEvidenceReuse> {
+    const current = await this.orchestrator.current(ownerKey);
+    if (current?.status === "ACTIVE") return unavailableEvidenceReuse("Дождитесь завершения текущего запуска или остановите его.");
+    try {
+      return (await this.prepareEvidenceReuse(ownerKey, await this.frozenInputVersions(ownerKey, view))).availability;
+    } catch {
+      return unavailableEvidenceReuse("Не удалось подтвердить неизменность проверенных данных. Обновите источники.");
+    }
+  }
+
+  async startFromEvidence(ownerKey: string, view: PipelineHistoricalView, input: { expectedStateRevision: number; reuseToken: string }) {
+    if (!this.productStore || !this.stageAgents) throw new Error("Повторная генерация не настроена.");
+    const frozen = await this.frozenInputVersions(ownerKey, view);
+    assertGoalReady(frozen.currentGoal?.revision);
+    if (!Number.isSafeInteger(input.expectedStateRevision) || input.expectedStateRevision !== frozen.currentProducts?.state_revision) {
+      throw new Error("Текущая подготовка изменилась. Обновите Dashboard перед повторной генерацией.");
+    }
+    const reuse = await this.prepareEvidenceReuse(ownerKey, frozen);
+    if (!reuse.plan || !reuse.availability.available) throw new Error(reuse.availability.reason);
+    if (input.reuseToken !== reuse.plan.reuse_token) throw new Error("Область повторной генерации изменилась. Обновите Dashboard.");
+    const versions = { ...frozen.versions, analytics_evidence_snapshot: structuredClone(reuse.plan.evidence.evidence_reference) };
+    const started = await this.orchestrator.start(ownerKey, versions);
+    return { pipeline: await this.project(started, ownerKey), plan: reuse.plan };
+  }
+
+  async executeFromEvidence(ownerKey: string, runId: string, view: PipelineHistoricalView, requested: PipelineEvidenceReusePlan) {
+    if (!this.stageAgents) throw new Error("Агенты повторной генерации не настроены.");
+    return runPipelineExecutionOnce({
+      ownerKey, runId,
+      checkCancelled: async () => { const current = await this.orchestrator.current(ownerKey); return current?.run_id !== runId || current.status !== "ACTIVE"; },
+      work: async (signal) => {
+        const started = await this.orchestrator.current(ownerKey);
+        if (!started || started.run_id !== runId) throw new Error("Запуск повторной генерации изменился.");
+        if (started.status !== "ACTIVE" || started.current_stage !== "CAMPAIGN_GOAL") return this.project(started, ownerKey);
+        try {
+          signal.throwIfAborted();
+          const frozen = await this.frozenInputVersions(ownerKey, view);
+          if (frozen.currentProducts?.state_revision !== requested.expected_state_revision) throw new Error("Проверенные данные изменились до начала повторной генерации.");
+          const reuse = await this.prepareEvidenceReuse(ownerKey, frozen);
+          if (!reuse.plan || reuse.plan.reuse_token !== requested.reuse_token) throw new Error(reuse.availability.reason);
+          const versions = { ...frozen.versions, analytics_evidence_snapshot: structuredClone(reuse.plan.evidence.evidence_reference) };
+          if (await pipelineDigest(versions) !== started.input_versions_digest) throw new Error("Входные данные повторной генерации изменились.");
+          const replayView = structuredClone(frozen.view);
+          replayView.state.pipeline_evidence_replay = structuredClone(reuse.plan.assessment);
+          const completed = await executeProductionPipeline({
+            orchestrator: this.orchestrator, run: started, view: replayView, currentGoal: frozen.currentGoal,
+            agents: this.stageAgents!, signal, reusedEvidence: reuse.plan, replayEvaluatedAt: this.now(),
+            evidenceCollector: async () => { throw new Error("Повторная генерация не может запускать сбор источников."); },
+            onVerifiedProduct: this.verifiedProductRecorder(frozen.currentProducts, reuse.plan.evidence),
+          });
+          return this.project(completed, ownerKey);
+        } catch (error) {
+          const current = await this.orchestrator.current(ownerKey);
+          if (current?.run_id === runId && current.status === "STOPPED") return this.project(current, ownerKey);
+          if (current?.run_id === runId && current.status === "ACTIVE") await this.orchestrator.stop({ run_id: runId, expected_version: current.version, reason_code: "PRODUCTION_EXECUTION_FAILED", reason: productionFailureReason(error) });
+          throw error;
+        }
+      },
+    });
+  }
+
+  private verifiedProductRecorder(sourceProducts: PipelineCurrentProducts | null, preservedEvidence?: PipelineVerifiedEvidenceInput | null) {
+    const store = this.productStore;
+    if (!store) return undefined;
+    let firstProduct = true;
+    return async ({ run, product }: { run: PipelineRunState; product: PipelineVerifiedProduct }) => {
+      // The first CAS must use the input revision, even if an earlier owner
+      // correction completes between the frozen-input check and this write.
+      const targetStore: PipelineCurrentProductStore = firstProduct ? {
+        loadCurrent: async () => sourceProducts ? { ...structuredClone(sourceProducts), ...(preservedEvidence ? { prior_verified_evidence: structuredClone(preservedEvidence) } : {}) } : null,
+        compareAndSwap: (ownerKey, expectedRevision, current) => store.compareAndSwap(ownerKey, expectedRevision, current),
+      } : store;
+      await saveVerifiedPipelineProduct({ store: targetStore, run, product, recordedAt: this.now() });
+      firstProduct = false;
+    };
   }
 
   async start(ownerKey: string, view: PipelineHistoricalView) {
     const { versions, currentGoal } = await this.frozenInputVersions(ownerKey, view);
-    if (!currentGoal?.revision.success_criterion) {
-      throw new Error("Сначала сохраните бизнес-цель, квалифицированный результат и измеримый критерий успеха.");
-    }
+    assertGoalReady(currentGoal?.revision);
     return this.project(await this.orchestrator.start(ownerKey, versions), ownerKey);
   }
 
@@ -712,80 +973,49 @@ export class OwnerPipelineController {
     if (!this.stageAgents || !this.evidenceCollector) {
       throw new Error("Production stage agents and evidence collectors are not configured; deterministic substitution is forbidden.");
     }
-    const [started, currentGoal, evidenceSeedProducts] = await Promise.all([
-      this.orchestrator.current(ownerKey),
-      this.goalStore?.loadCurrent(ownerKey) ?? null,
-      this.productStore?.loadCurrent(ownerKey) ?? null,
-    ]);
-    if (!started || started.run_id !== runId) throw new Error("Активный запуск изменился до начала исполнения.");
-    if (started.status !== "ACTIVE") return this.project(started, ownerKey);
-    try {
-      const completed = await executeProductionPipeline({
-        orchestrator: this.orchestrator,
-        run: started,
-        view,
-        currentGoal,
-        agents: this.stageAgents,
-        evidenceCollector: this.evidenceCollector,
-        evidenceSeedSnapshot: evidenceSeedProducts?.analytics_evidence_snapshot ?? null,
-        onVerifiedProduct: this.productStore
-          ? ({ run, product }) => saveVerifiedPipelineProduct({ store: this.productStore!, run, product, recordedAt: this.now() }).then(() => undefined)
-          : undefined,
-      });
-      return this.project(completed, ownerKey);
-    } catch (error) {
-      const current = await this.orchestrator.current(ownerKey);
-      if (current?.run_id === runId && current.status === "STOPPED") return this.project(current, ownerKey);
-      if (current?.run_id === runId && current.status === "ACTIVE") {
-        await this.orchestrator.stop({
-          run_id: current.run_id,
-          expected_version: current.version,
-          reason_code: "PRODUCTION_EXECUTION_FAILED",
-          reason: productionFailureReason(error),
-        });
-      }
-      throw error;
-    }
+    return runPipelineExecutionOnce({
+      ownerKey, runId,
+      checkCancelled: async () => { const current = await this.orchestrator.current(ownerKey); return current?.run_id !== runId || current.status !== "ACTIVE"; },
+      work: async (signal) => {
+        const started = await this.orchestrator.current(ownerKey);
+        if (!started || started.run_id !== runId) throw new Error("Активный запуск изменился до начала исполнения.");
+        if (started.status !== "ACTIVE" || started.current_stage !== "CAMPAIGN_GOAL") return this.project(started, ownerKey);
+        try {
+          signal.throwIfAborted();
+          const frozen = await this.frozenInputVersions(ownerKey, view);
+          if (await pipelineDigest(frozen.versions) !== started.input_versions_digest) {
+            throw Object.assign(new Error("Сохранённые входные данные или текущая Strategy изменились после начала запуска. Начните новый запуск, чтобы учесть последнюю редакцию."), { code: "PRODUCTION_INPUTS_CHANGED" });
+          }
+          const priorEvidence = await this.retainedEvidenceSource(ownerKey, frozen.currentProducts);
+          signal.throwIfAborted();
+          const completed = await executeProductionPipeline({
+            orchestrator: this.orchestrator, run: started, view: frozen.view,
+            currentGoal: frozen.currentGoal, agents: this.stageAgents!, evidenceCollector: this.evidenceCollector!, signal,
+            evidenceSeedSnapshot: frozen.currentProducts?.analytics_evidence_snapshot ?? null,
+            onVerifiedProduct: this.verifiedProductRecorder(frozen.currentProducts, priorEvidence?.evidence),
+          });
+          return this.project(completed, ownerKey);
+        } catch (error) {
+          const current = await this.orchestrator.current(ownerKey);
+          if (current?.run_id === runId && current.status === "STOPPED") return this.project(current, ownerKey);
+          if (current?.run_id === runId && current.status === "ACTIVE") await this.orchestrator.stop({
+            run_id: current.run_id, expected_version: current.version,
+            reason_code: "PRODUCTION_EXECUTION_FAILED", reason: productionFailureReason(error),
+          });
+          throw error;
+        }
+      },
+    });
   }
 
   async startAndExecute(ownerKey: string, view: PipelineHistoricalView) {
     if (!this.stageAgents || !this.evidenceCollector) {
       throw new Error("Production stage agents and evidence collectors are not configured; deterministic substitution is forbidden.");
     }
-    const [{ versions, currentGoal }, evidenceSeedProducts] = await Promise.all([
-      this.frozenInputVersions(ownerKey, view),
-      this.productStore?.loadCurrent(ownerKey) ?? null,
-    ]);
-    if (!currentGoal?.revision.success_criterion) {
-      throw new Error("Сначала сохраните бизнес-цель, квалифицированный результат и измеримый критерий успеха.");
-    }
+    const { versions, currentGoal } = await this.frozenInputVersions(ownerKey, view);
+    assertGoalReady(currentGoal?.revision);
     const started = await this.orchestrator.start(ownerKey, versions);
-    try {
-      const completed = await executeProductionPipeline({
-        orchestrator: this.orchestrator,
-        run: started,
-        view,
-        currentGoal,
-        agents: this.stageAgents,
-        evidenceCollector: this.evidenceCollector,
-        evidenceSeedSnapshot: evidenceSeedProducts?.analytics_evidence_snapshot ?? null,
-        onVerifiedProduct: this.productStore
-          ? ({ run, product }) => saveVerifiedPipelineProduct({ store: this.productStore!, run, product, recordedAt: this.now() }).then(() => undefined)
-          : undefined,
-      });
-      return this.project(completed, ownerKey);
-    } catch (error) {
-      const current = await this.orchestrator.current(ownerKey);
-      if (current?.run_id === started.run_id && current.status === "ACTIVE") {
-        await this.orchestrator.stop({
-          run_id: current.run_id,
-          expected_version: current.version,
-          reason_code: "PRODUCTION_EXECUTION_FAILED",
-          reason: productionFailureReason(error),
-        });
-      }
-      throw error;
-    }
+    return this.execute(ownerKey, started.run_id, view);
   }
 
   async explain(ownerKey: string, input: { question: unknown; pairKey?: unknown }): Promise<OwnerResultExplanation> {
@@ -803,11 +1033,17 @@ export class OwnerPipelineController {
   }
 
   async correctGoal(ownerKey: string, input: {
-    desiredOutcome: string;
-    qualifiedAction: string;
-    targetCount: number;
-    deadline: string;
-    maxResultCostRub: number;
+    desiredOutcome: unknown;
+    qualifiedAction: unknown;
+    targetCount?: unknown;
+    targetValue?: unknown;
+    metric?: unknown;
+    comparison?: unknown;
+    deadline: unknown;
+    maxResultCostRub?: unknown;
+    totalBudgetRub?: unknown;
+    customerGeography: unknown;
+    countingPolicy?: unknown;
   }) {
     if (!this.goalStore) throw new Error("Хранилище текущей Цели недоступно.");
     const [run, currentGoal] = await Promise.all([
@@ -815,17 +1051,21 @@ export class OwnerPipelineController {
       this.goalStore.loadCurrent(ownerKey),
     ]);
     if (run?.status === "ACTIVE") throw new Error("Остановите активный запуск перед изменением Цели.");
-    const successCriterion = {
-      target_count: input.targetCount,
-      deadline: input.deadline,
-      max_result_cost_rub: input.maxResultCostRub,
-    };
+    const goalInput = normalizeOwnerGoalInput({
+      desired_outcome: input.desiredOutcome,
+      qualified_action: input.qualifiedAction,
+      success_criterion: {
+        ...(input.metric !== undefined ? { target_value: input.targetValue, metric: input.metric, comparison: input.comparison } : { target_count: input.targetCount }),
+        deadline: input.deadline,
+        ...(Object.hasOwn(input, "totalBudgetRub") ? { total_budget_rub: input.totalBudgetRub } : { max_result_cost_rub: input.maxResultCostRub }),
+      },
+      customer_geography: input.customerGeography,
+      counting_policy: input.countingPolicy,
+    });
     if (!currentGoal) {
       const created = await createCurrentGoal({
         owner_key: ownerKey,
-        desired_outcome: input.desiredOutcome,
-        qualified_action: input.qualifiedAction,
-        success_criterion: successCriterion,
+        ...goalInput,
         created_at: this.now(),
       });
       if (!await this.goalStore.append(created, null)) {
@@ -835,9 +1075,7 @@ export class OwnerPipelineController {
     }
     const result = await reviseCurrentGoal({
       current: currentGoal,
-      desired_outcome: input.desiredOutcome,
-      qualified_action: input.qualifiedAction,
-      success_criterion: successCriterion,
+      ...goalInput,
       corrected_at: this.now(),
       dependencies: run ? goalDependencies(run.input_versions) : [],
     });
@@ -853,16 +1091,20 @@ export class OwnerPipelineController {
       throw new Error("Публичная проверка конкурентов через Evidence Analyst не настроена.");
     }
     const run = await this.orchestrator.current(ownerKey);
-    if (run?.status === "ACTIVE") throw new Error("Дождитесь завершения текущего запуска перед обновлением конкурентов.");
+    if (run?.status === "ACTIVE" && run.current_stage !== "CAMPAIGNS") {
+      throw new Error("Дождитесь формирования цели, сведений и стратегии перед поиском конкурентов.");
+    }
     await refreshCurrentPipelineCompetitorEvidence({
       store: this.productStore,
       ownerKey,
       expectedStateRevision: input.expectedStateRevision,
       collector: this.competitorCollector,
       analyst: this.stageAgents.assessCompetitorEvidence,
+      discoverer: this.stageAgents.discoverCompetitorCandidates,
+      rankingAgent: this.stageAgents.rankCompetitorEvidence,
       refreshedAt: this.now(),
     });
-    return this.project(run, ownerKey);
+    return this.project(await this.orchestrator.current(ownerKey), ownerKey);
   }
 
   async correctStrategy(ownerKey: string, input: {
@@ -913,6 +1155,7 @@ export class OwnerPipelineController {
       run_id: input.runId,
       expected_version: input.expectedVersion,
     });
+    abortPipelineExecution(ownerKey, input.runId);
     return this.project(stopped, ownerKey);
   }
 }

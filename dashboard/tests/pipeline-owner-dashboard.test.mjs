@@ -6,7 +6,8 @@ import {
   pipelineInputVersions,
   projectOwnerPipeline,
 } from "../lib/pipeline-owner-dashboard.ts";
-import { PipelineOrchestrator } from "../lib/pipeline-orchestrator.ts";
+import { PipelineOrchestrator, pipelineDigest } from "../lib/pipeline-orchestrator.ts";
+import { GOAL_COUNTING_RULE, QUALIFIED_REQUEST_COUNTING_POLICY } from "../lib/goal-revision.ts";
 
 class MemoryCurrentProductStore {
   constructor(current = null) { this.current = current ? structuredClone(current) : null; }
@@ -74,15 +75,19 @@ class MemoryPipelineStore {
 
 function goalCandidate(materialAmbiguity = null) {
   return {
-    schema_version: "p0-goal-candidate-v1",
+    schema_version: "p0-goal-candidate-v3",
+    customer_geography: "Россия",
+    counting_policy: QUALIFIED_REQUEST_COUNTING_POLICY,
     desired_outcome: "Получать квалифицированные заявки",
     qualified_action: "Клиент подтвердил потребность и готов обсудить предложение",
-    success_criterion: { target_count: 30, deadline: "2027-06-30", max_result_cost_rub: 30_000 },
+    success_criterion: { target_count: 30, deadline: "2027-06-30", total_budget_rub: 30_000 },
     used_input_ids: ["business_input"],
     provenance: [
       { supports: "DESIRED_OUTCOME", input_id: "business_input", locator: "business_goal_decision.value", evidence: "Сохранённый бизнес-вход" },
       { supports: "QUALIFIED_ACTION", input_id: "business_input", locator: "business_model.qualified_outcome", evidence: "Критерий квалификации" },
-      { supports: "SUCCESS_CRITERION", input_id: "business_input", locator: "success_criterion", evidence: "30 результатов до 2027-06-30, не дороже 30000 ₽" },
+      { supports: "SUCCESS_CRITERION", input_id: "business_input", locator: "success_criterion", evidence: "30 результатов до 2027-06-30, общий бюджет 30000 ₽" },
+      { supports: "CUSTOMER_GEOGRAPHY", input_id: "business_input", locator: "customer_geography", evidence: "Россия" },
+      { supports: "COUNTING_POLICY", input_id: "business_input", locator: "counting_policy", evidence: GOAL_COUNTING_RULE },
     ],
     known_constraints: [{ constraint: "Исключить случайные обращения", input_ids: ["business_input"] }],
     material_ambiguity: materialAmbiguity,
@@ -92,10 +97,11 @@ function goalCandidate(materialAmbiguity = null) {
 async function saveOwnerGoal(controller) {
   return controller.correctGoal("owner", {
     desiredOutcome: "Получать квалифицированные заявки",
+    customerGeography: "Россия",
     qualifiedAction: "Клиент подтвердил потребность и готов обсудить предложение",
     targetCount: 30,
     deadline: "2027-06-30",
-    maxResultCostRub: 30_000,
+    totalBudgetRub: 30_000,
   });
 }
 
@@ -162,6 +168,80 @@ function historicalView(goal = "Получать квалифицированн�
   };
 }
 
+function priorStrategyProduct() {
+  return {
+    schema_version: "p0-strategy-stage-product-v1",
+    strategy: {
+      schema_version: "p0-autonomous-campaign-strategy-v1",
+      strategy_revision_id: "owner-corrected-strategy",
+      status: "AGENT_ACCEPTED",
+      dimensions: [
+        { dimension_id: "weekly_budget", value: 80_000, confidence: "HIGH", rationale: "Owner budget" },
+        { dimension_id: "geography", value: "Москва", confidence: "HIGH", rationale: "Owner geography" },
+        { dimension_id: "core_message", value: "Участие со стендом", confidence: "HIGH", rationale: "Owner message correction" },
+      ],
+    },
+    inputs: {
+      schema_version: "p0-campaign-strategy-agent-input-v1",
+      business_input: {
+        content: {
+          owner_strategy_correction: { precedence: "PRIORITY_BUSINESS_INPUT", changes: { core_message: "Участие со стендом" } },
+          base_business_input: { content: { owner_strategy_correction: { precedence: "PRIORITY_BUSINESS_INPUT", changes: { exclusions: "Исключить посетителей" } } } },
+        },
+      },
+    },
+  };
+}
+
+function priorProducts(strategy = priorStrategyProduct()) {
+  return {
+    schema_version: "p0-pipeline-current-products-v1",
+    owner_key: "owner",
+    state_revision: 4,
+    run_id: "previous-run",
+    run_version: 8,
+    current_stage: "STRATEGY",
+    updated_at: "2026-09-01T10:00:00.000Z",
+    historical_source: { schema_version: "p0-application-document-v19", revision: 16, digest: `sha256:${"1".repeat(64)}` },
+    goal_revision: null,
+    analytics_evidence_snapshot: { schema_version: "p0-analytics-evidence-v7", snapshot_id: "prior-current-product-evidence" },
+    competitor_evidence_refresh: null,
+    campaign_strategy: strategy,
+    campaign_pairs: [],
+    campaign_pair_checks: { status: "VALID", set_disposition: "NO_CURRENT_PAIRS", pairs: [], required_request_package: null },
+    campaign_playbook: { schema_version: "campaign-playbook-binding-v1", revision_id: "playbook", digest: `sha256:${"2".repeat(64)}` },
+    publication_review: null,
+    authority: { external_write: "DENIED", publication: "NOT_AUTHORIZED", impressions: 0, spend_micros: 0 },
+  };
+}
+
+function recordingStageAgents(calls, products) {
+  const result = (role, output, artifact, evidence) => ({
+    actor: { actor_id: role.toLowerCase(), actor_type: "AGENT", role },
+    output, artifact, evidence,
+    check_id: `${role}_VERIFIED`,
+    schema: auditReference(`${role.toLowerCase()}-schema`, "a"),
+    summary: `${role} completed.`,
+  });
+  return {
+    model_id: "continuity-stage-model",
+    async analyzeEvidence(input) {
+      calls.push({ stage: "EVIDENCE", input: structuredClone(input) });
+      return result("EVIDENCE_ANALYST", input.evidence, input.snapshot, [input.goal, input.evidence]);
+    },
+    async formStrategy(input) {
+      calls.push({ stage: "STRATEGY", input: structuredClone(input), stored_strategy_at_call: structuredClone(products.current.campaign_strategy) });
+      const artifact = structuredClone(input.view.state.current_pipeline_strategy);
+      artifact.strategy.strategy_revision_id = "next-generated-strategy";
+      return { ...result("STRATEGY_AGENT", auditReference("next-strategy", "b"), artifact, [input.goal, input.evidence]), autonomous_strategy: artifact.strategy };
+    },
+    async designCampaigns(input) {
+      calls.push({ stage: "CAMPAIGNS", input: structuredClone(input) });
+      return result("CAMPAIGN_DESIGN_AGENT", input.pairSet, [], [input.strategy, input.evidence]);
+    },
+  };
+}
+
 test("owner Start freezes saved edits and Stop makes the next Start a new run", async () => {
   const store = new MemoryPipelineStore();
   const ids = ["pipeline-owner-first", "pipeline-owner-second"];
@@ -177,11 +257,10 @@ test("owner Start freezes saved edits and Stop makes the next Start a new run", 
   assert.equal(initial.status, "NOT_STARTED");
   assert.equal(initial.canStart, false);
   assert.deepEqual(initial.stages.map((stage) => [stage.label, stage.status, stage.icon]), [
-    ["Цели", "Не заполнено", "!"],
+    ["Цель", "Не заполнено", "!"],
     ["Сбор сведений", "Ожидает", "○"],
     ["Стратегия", "Ожидает", "○"],
     ["Кампании", "Ожидает", "○"],
-    ["Проверка публикации", "Ожидает", "○"],
   ]);
 
   const ready = await saveOwnerGoal(controller);
@@ -305,6 +384,135 @@ test("execution passes the prior current Evidence Snapshot content to the fresh 
   assert.equal(products.current.run_id, "pipeline-prior-product-seed");
   assert.equal(products.current.goal_revision.desired_outcome, "Получать квалифицированные заявки");
   assert.equal(products.current.analytics_evidence_snapshot, null);
+});
+
+test("a complete next run receives the exact current Strategy and correction chain after current stage products are replaced", async () => {
+  const store = new MemoryPipelineStore();
+  const goals = new MemoryGoalStore();
+  const initialProducts = priorProducts();
+  const products = new MemoryCurrentProductStore(initialProducts);
+  const calls = [];
+  let collectedView;
+  const controller = new OwnerPipelineController(store, {
+    goalStore: goals, productStore: products,
+    newRunId: () => "pipeline-strategy-continuity",
+    stageAgents: recordingStageAgents(calls, products),
+    evidenceCollector: async ({ view }) => {
+      collectedView = structuredClone(view);
+      return structuredClone(view.state.analytics_evidence_snapshot);
+    },
+  });
+  await saveOwnerGoal(controller);
+  const view = historicalView();
+  view.state.recommendation_set = { drafts: [] };
+  const originalView = structuredClone(view);
+  const completed = await controller.startAndExecute("owner", view);
+  assert.equal(completed.status, "COMPLETED");
+  const run = await store.loadCurrent("owner");
+  assert.deepEqual(view, originalView);
+  assert.deepEqual(collectedView.state.current_pipeline_strategy, initialProducts.campaign_strategy);
+  assert.equal(collectedView.state.current_pipeline_strategy_source.state_revision, initialProducts.state_revision);
+  assert.equal(collectedView.state.current_pipeline_strategy_source.strategy_digest, await pipelineDigest(initialProducts.campaign_strategy));
+  const strategyCall = calls.find((call) => call.stage === "STRATEGY");
+  assert.equal(strategyCall.stored_strategy_at_call, null);
+  assert.deepEqual(strategyCall.input.view.state.current_pipeline_strategy, initialProducts.campaign_strategy);
+  assert.deepEqual(calls.find((call) => call.stage === "CAMPAIGNS").input.view.state.current_pipeline_strategy, initialProducts.campaign_strategy);
+  const frozen = await pipelineInputVersions(collectedView);
+  assert.equal(run.input_versions.business_input.digest, frozen.business_input.digest);
+  assert.equal(run.input_versions.historical_document.digest, await pipelineDigest(originalView.state));
+  assert.deepEqual(products.current.campaign_strategy.inputs.business_input.content, initialProducts.campaign_strategy.inputs.business_input.content);
+  assert.equal(products.current.campaign_strategy.strategy.strategy_revision_id, "next-generated-strategy");
+});
+
+test("a Strategy correction completed after Start invalidates frozen inputs before any evidence or agent work", async () => {
+  const store = new MemoryPipelineStore();
+  const goals = new MemoryGoalStore();
+  const products = new MemoryCurrentProductStore(priorProducts());
+  const calls = [];
+  const controller = new OwnerPipelineController(store, {
+    goalStore: goals, productStore: products,
+    newRunId: () => "pipeline-strategy-changed-after-start",
+    stageAgents: recordingStageAgents(calls, products),
+    evidenceCollector: async () => { calls.push({ stage: "COLLECT" }); throw new Error("must not collect"); },
+  });
+  await saveOwnerGoal(controller);
+  const view = historicalView();
+  const started = await controller.start("owner", view);
+  products.current.state_revision += 1;
+  products.current.campaign_strategy.strategy.dimensions[0].value = 120_000;
+  const corrected = structuredClone(products.current);
+  await assert.rejects(controller.execute("owner", started.runId, view), { code: "PRODUCTION_INPUTS_CHANGED" });
+  assert.deepEqual(calls, []);
+  assert.deepEqual(products.current, corrected);
+  assert.equal((await store.loadCurrent("owner")).status, "STOPPED");
+  assert.match((await controller.current("owner")).stateText, /PRODUCTION_INPUTS_CHANGED/u);
+});
+
+test("an in-flight owner correction wins over first product persistence and is never overwritten", async () => {
+  const store = new MemoryPipelineStore();
+  const goals = new MemoryGoalStore();
+  const products = new MemoryCurrentProductStore(priorProducts());
+  const calls = [];
+  const originalCompareAndSwap = store.compareAndSwap.bind(store);
+  let corrected;
+  store.compareAndSwap = async (runId, expectedVersion, state, event) => {
+    if (event.event_kind === "STAGE_VERIFIED" && event.stage === "CAMPAIGN_GOAL") {
+      products.current.state_revision += 1;
+      products.current.campaign_strategy.strategy.dimensions[0].value = 150_000;
+      corrected = structuredClone(products.current);
+    }
+    return originalCompareAndSwap(runId, expectedVersion, state, event);
+  };
+  const controller = new OwnerPipelineController(store, {
+    goalStore: goals, productStore: products,
+    newRunId: () => "pipeline-strategy-first-product-race",
+    stageAgents: recordingStageAgents(calls, products),
+    evidenceCollector: async () => { calls.push({ stage: "COLLECT" }); throw new Error("must not collect"); },
+  });
+  await saveOwnerGoal(controller);
+  await assert.rejects(controller.startAndExecute("owner", historicalView()), /changed before verified stage persistence/u);
+  assert.ok(corrected);
+  assert.deepEqual(products.current, corrected);
+  assert.deepEqual(calls, []);
+  assert.equal((await store.loadCurrent("owner")).status, "STOPPED");
+});
+
+test("a failed evidence run preserves prior Strategy input for a complete retry after controller restart", async () => {
+  const store = new MemoryPipelineStore();
+  const goals = new MemoryGoalStore();
+  const initialProducts = priorProducts();
+  const products = new MemoryCurrentProductStore(initialProducts);
+  const calls = [];
+  const failing = new OwnerPipelineController(store, {
+    goalStore: goals, productStore: products,
+    newRunId: () => "pipeline-failed-before-strategy",
+    stageAgents: recordingStageAgents(calls, products),
+    evidenceCollector: async () => { throw new Error("temporary evidence failure"); },
+  });
+  await saveOwnerGoal(failing);
+  const view = historicalView();
+  view.state.recommendation_set = { drafts: [] };
+  await assert.rejects(failing.startAndExecute("owner", view), /temporary evidence failure/u);
+  assert.equal(products.current.campaign_strategy, null);
+  assert.deepEqual(products.current.prior_strategy_input.artifact, initialProducts.campaign_strategy);
+  assert.equal(products.current.prior_strategy_input.reference.digest, await pipelineDigest(initialProducts.campaign_strategy));
+  const priorInput = structuredClone(products.current.prior_strategy_input);
+  const restartedProducts = new MemoryCurrentProductStore(JSON.parse(JSON.stringify(products.current)));
+  const restartedCalls = [];
+  const restarted = new OwnerPipelineController(store, {
+    goalStore: goals, productStore: restartedProducts,
+    newRunId: () => "pipeline-retry-after-restart",
+    stageAgents: recordingStageAgents(restartedCalls, restartedProducts),
+    evidenceCollector: async ({ view }) => structuredClone(view.state.analytics_evidence_snapshot),
+  });
+  const completed = await restarted.startAndExecute("owner", view);
+  assert.equal(completed.status, "COMPLETED");
+  const strategyCall = restartedCalls.find((call) => call.stage === "STRATEGY");
+  assert.deepEqual(strategyCall.input.view.state.current_pipeline_strategy, priorInput.artifact);
+  assert.equal(strategyCall.input.view.state.current_pipeline_strategy_source.run_id, priorInput.source_run_id);
+  assert.equal(strategyCall.input.view.state.current_pipeline_strategy_source.state_revision, priorInput.source_state_revision);
+  assert.equal(restartedProducts.current.prior_strategy_input.reference.revision_id, "next-generated-strategy");
+  assert.notEqual(restartedProducts.current.prior_strategy_input.reference.digest, priorInput.reference.digest);
 });
 
 test("failed evidence refresh exposes the exact typed collection error in the stopped Dashboard", async () => {
@@ -466,7 +674,8 @@ test("Dashboard projects the complete Goal saved directly by the owner", async (
   assert.deepEqual(projection.goalFormation.successCriterion, {
     targetCount: 30,
     deadline: "2027-06-30",
-    maxResultCostRub: 30_000,
+    totalBudgetRub: 30_000,
+    maxResultCostRub: 1_000,
   });
   assert.deepEqual(projection.goalFormation.knownConstraints, []);
   assert.equal(projection.canStart, true);
@@ -488,8 +697,9 @@ test("Dashboard requires human Goal input before Start", async () => {
   assert.equal(projection.goalFormation.status, "PENDING");
   assert.equal(projection.stages[0].status, "Не заполнено");
   assert.equal(projection.canStart, false);
-  assert.match(projection.stateText, /Заполните бизнес-цель, квалифицированный результат/u);
-  await assert.rejects(controller.start("owner", historicalView()), /Сначала сохраните бизнес-цель/u);
+  assert.match(projection.stateText, /Бизнес-цель и рекламируемый предмет/u);
+  assert.match(projection.stateText, /географию клиентов/u);
+  await assert.rejects(controller.start("owner", historicalView()), { code: "GOAL_INCOMPLETE" });
 });
 
 test("Dashboard projection names the return source, exact reason and deterministic target", async () => {

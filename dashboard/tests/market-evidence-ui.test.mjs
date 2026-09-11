@@ -72,7 +72,7 @@ test("Model disclosure renders scoped lower-bound frequency, batch, unique rows 
   assert.match(html, /NO_QUALIFIED_PRELAUNCH_COST_SOURCE/);
 });
 
-test("Wordstat formulation browser presentation covers full, partial, quota-exhausted and unavailable batches without provider IDs", async (t) => {
+test("Wordstat formulation browser presentation renders only phrases with usable results", async (t) => {
   const MarketEvidenceDisclosure = await loadComponent(t);
   const research_plan = {
     seeds: [
@@ -84,35 +84,34 @@ test("Wordstat formulation browser presentation covers full, partial, quota-exha
     {
       name: "full",
       frequency: { status: "AVAILABLE", seed_matched_row_counts: [{ seed_id: "provider-seed-a", value: 41 }, { seed_id: "provider-seed-b", value: 19 }], gaps: [] },
-      expected: [/41 запрос/iu, /19 запросов/iu, /Сравнить формулировки/iu],
+      visible: [/участие в выставке/iu, /подать заявку на участие/iu, /41 запрос/iu, /19 запросов/iu, /Сравнить результативные формулировки/iu],
+      hidden: [/Частота недоступна/iu],
     },
     {
       name: "partial",
       frequency: { status: "PARTIAL", seed_matched_row_counts: [{ seed_id: "provider-seed-a", value: 41 }, { seed_id: "provider-seed-b", value: null }], gaps: [{ code: "WORDSTAT_RESPONSE_PARTIAL" }] },
-      expected: [/41 запрос/iu, /Частота недоступна/iu, /Повторить только недоступные/iu],
+      visible: [/участие в выставке/iu, /41 запрос/iu, /Использовать только подтверждённые формулировки/iu],
+      hidden: [/подать заявку на участие/iu, /Частота недоступна/iu],
     },
     {
       name: "quota-exhausted",
       frequency: { status: "UNAVAILABLE", seed_matched_row_counts: [], gaps: [{ code: "WORDSTAT_QUOTA_EXHAUSTED" }] },
-      expected: [/Квота Wordstat исчерпана/iu, /восстановления квоты/iu],
+      visible: [/Квота Wordstat исчерпана/iu],
+      hidden: [/участие в выставке/iu, /подать заявку на участие/iu, /Частота недоступна/iu, /Частоты нескольких формулировок/iu],
     },
     {
       name: "unavailable",
       frequency: { status: "UNAVAILABLE", seed_matched_row_counts: [], gaps: [{ code: "WORDSTAT_AUTHORITY_UNAVAILABLE" }] },
-      expected: [/Доступ к Wordstat недоступен/iu, /Восстановить доступ/iu],
+      visible: [/Доступ к Wordstat недоступен/iu],
+      hidden: [/участие в выставке/iu, /подать заявку на участие/iu, /Частота недоступна/iu, /Частоты нескольких формулировок/iu],
     },
   ];
   for (const item of cases) {
     const baseline = evidence();
     const frequency = { ...baseline.frequency, ...item.frequency };
     const html = renderToStaticMarkup(React.createElement(MarketEvidenceDisclosure, { evidence: evidence({ research_plan, frequency }), context: "model" }));
-    assert.match(html, /участие в выставке/iu, item.name);
-    assert.match(html, /подать заявку на участие/iu, item.name);
-    assert.match(html, /Популярные запросы Wordstat · \/v1\/topRequests/iu, item.name);
-    assert.match(html, /Широкая формулировка/iu, item.name);
-    assert.match(html, /Москва · компьютеры/iu, item.name);
-    assert.match(html, /2026-08-21T10:00:04.000Z/iu, item.name);
-    for (const expected of item.expected) assert.match(html, expected, item.name);
+    for (const expected of item.visible) assert.match(html, expected, item.name);
+    for (const hidden of item.hidden) assert.doesNotMatch(html, hidden, item.name);
     assert.doesNotMatch(html, /provider-seed|WORDSTAT_/iu, item.name);
   }
 });

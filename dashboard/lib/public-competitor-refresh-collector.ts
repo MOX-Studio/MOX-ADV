@@ -105,6 +105,12 @@ function matrixRow(value: unknown): CompetitorMatrixRowInput | null {
   };
 }
 
+export function collectedCompetitorMatrix(candidateSet: CompetitorCandidateSet, observations: JsonRecord[]) {
+  return buildCompetitorMatrix({ candidateSet, rows: observations
+    .map((observation) => matrixRow(record(observation).matrix_row))
+    .filter((row): row is CompetitorMatrixRowInput => row !== null) });
+}
+
 function researchConfiguration(candidateSet: CompetitorCandidateSet, input: PipelineCompetitorCollectorInput) {
   return JSON.stringify({
     rule: candidateSet.competitor_set_rule,
@@ -144,12 +150,7 @@ export async function collectPublicCompetitorRefresh(
     ),
     dependencies.readFinancialCompetitorIntelligence?.(structuredClone(input)) ?? null,
   ]);
-  const competitorMatrix = buildCompetitorMatrix({
-    candidateSet: research.competitor_candidate_set,
-    rows: research.competitor_observations
-      .map((observation) => matrixRow(record(observation).matrix_row))
-      .filter((row): row is CompetitorMatrixRowInput => row !== null),
-  });
+  const competitorMatrix = collectedCompetitorMatrix(research.competitor_candidate_set, research.competitor_observations);
   return {
     evidencePackId: `public-competitor:${(await pipelineDigest({
       candidate_set: competitorMatrix.candidate_set,
@@ -157,6 +158,7 @@ export async function collectPublicCompetitorRefresh(
     })).slice(7, 31)}`,
     competitorMatrix: competitorMatrix as unknown as JsonRecord,
     competitorObservations: research.competitor_observations.map((observation) => structuredClone(observation)),
+    collectionFailures: research.competitor_collection_failures,
     financialCompetitorIntelligence: financialCompetitorIntelligence
       ? structuredClone(financialCompetitorIntelligence)
       : unavailableFinancialEvidence(input.generatedAt),

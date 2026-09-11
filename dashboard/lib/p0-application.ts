@@ -1,4 +1,7 @@
+import { buildFindingsResearchPlan, type FindingsResearchPlan, type BusinessResearchResult } from "./findings-research.ts";
 import { buildAdTitle } from "./ad-copy.ts";
+import { goalResearchModel, verifyGoalEvidenceScope, type GoalEvidenceScope } from "./goal-evidence-scope.ts";
+import type { GoalRevision } from "./goal-revision.ts";
 import {
   buildAuctionProtocol,
   reviseAuctionProtocol,
@@ -492,24 +495,29 @@ export type P0ExternalWriteConfiguration = {
 
 export interface P0ApplicationAdapters {
   now(): string;
-  readContext(input?: { owner_key: string }): Promise<P0Context>;
+  readContext(input?: { owner_key: string; signal?: AbortSignal }): Promise<P0Context>;
   readDirectAudit?(input: { owner_key: string }): Promise<DirectAuditSummary>;
-  researchSite(url: string): Promise<SiteAnalysis>;
+  researchSite(url: string, signal?: AbortSignal, plan?: FindingsResearchPlan): Promise<SiteAnalysis>;
+  researchBusinessEvidence?(input: { site: SiteAnalysis; plan: FindingsResearchPlan; signal?: AbortSignal }): Promise<{ site: SiteAnalysis; result: BusinessResearchResult }>;
   readCurrencyLimits(): Promise<{ minimum_weekly_budget_rub: number | null }>;
   readMarketEvidence?(input: {
     ownerKey: string;
     model: BusinessModel;
     context: P0Context;
     generatedAt: string;
+    signal?: AbortSignal;
   }): Promise<MarketEvidenceInput>;
   readCompetitorResearch?(input: {
+    ownerKey: string;
     model: BusinessModel;
     site: SiteAnalysis;
     generatedAt: string;
     candidateSet?: Record<string, unknown>;
+    signal?: AbortSignal;
   }): Promise<{
     competitor_candidate_set: Record<string, unknown>;
     competitor_observations: Array<Record<string, unknown>>;
+    competitor_research?: import("./pipeline-competitor-research.ts").PipelineCompetitorResearch;
   } | null>;
   readFinancialCompetitorIntelligence?(input: {
     ownerKey: string;
@@ -517,6 +525,7 @@ export interface P0ApplicationAdapters {
     site: SiteAnalysis;
     context: P0Context;
     generatedAt: string;
+    signal?: AbortSignal;
   }): Promise<FinancialCompetitorIntelligenceInput | null>;
   landingAdvisory?: LandingAdvisoryAdapter;
   destinationInspection?: DestinationReadinessAdapter;
@@ -581,11 +590,14 @@ export type SiteAnalysis = PageEvidence & {
   research: {
     pages_analyzed: number;
     links_discovered: number;
+    candidate_urls?: string[];
     scope: string;
   };
 };
 
 export type BusinessModel = {
+  business_research?: BusinessResearchResult;
+  goal_research_scope?: GoalRevision;
   product: string;
   audience: string;
   value: string;
@@ -624,6 +636,8 @@ export type BusinessModel = {
       owner_confirmed?: boolean;
       owner_confirmed_at?: string;
       owner_edited?: boolean;
+      goal_revision_id?: string;
+      goal_digest?: string;
     }
   >;
 };
@@ -1013,7 +1027,7 @@ function sanitizeSiteAnalysis(input: SiteAnalysis): SiteAnalysis {
     forms_detected: Math.max(0, Number(page.forms_detected ?? 0)),
     text_excerpt: artifactText(page.text_excerpt, 8_000),
   });
-  const pages = input.pages.slice(0, 6).map(sanitizePage);
+  const pages = input.pages.map(sanitizePage);
   const entry = sanitizePage(input);
   return {
     ...entry,
@@ -1022,6 +1036,7 @@ function sanitizeSiteAnalysis(input: SiteAnalysis): SiteAnalysis {
     research: {
       pages_analyzed: pages.length,
       links_discovered: Math.max(0, Number(input.research.links_discovered ?? 0)),
+      ...(input.research.candidate_urls ? { candidate_urls: input.research.candidate_urls.map(url => normalizePublicHttpsUrl(url).toString()) } : {}),
       scope: cleanText(String(input.research.scope ?? ""), 100),
     },
   };
@@ -1477,13 +1492,6 @@ function pageEconomics(page: PageEvidence) {
   const evidence = cleanText(`${page.description} ${page.headings.join(" ")} ${page.text_excerpt}`, 8_000);
   const match = evidence.match(/(?:от\s*)?\d[\d\s.,]{1,18}\s*(?:₽|руб(?:л(?:ей|я)?)?|rub|usd|eur|€|\$)|(?:тариф|пакет|стоимост|цена)[^.!?]{0,100}/iu);
   return cleanText(match?.[0] ?? "", 200);
-}
-
-function rubAmount(value: unknown) {
-  const match = cleanText(String(value ?? ""), 500).match(/\d[\d\s]*(?:[.,]\d+)?/u);
-  if (!match) return null;
-  const amount = Number(match[0].replace(/\s/gu, "").replace(",", "."));
-  return Number.isFinite(amount) && amount > 0 ? Math.round(amount * 100) / 100 : null;
 }
 
 function normalizedTerms(value: unknown) {
@@ -2521,7 +2529,6 @@ async function inferModel(site: SiteAnalysis, context: P0Context): Promise<Busin
   const sources = ["PUBLIC_FIRST_PARTY_SITE"];
   if (context.direct.ready === true) sources.push("DIRECT_REAL_ACCOUNT");
   if (context.metrika.ready === true) sources.push("METRIKA_REAL_COUNTER");
-  const publishedEconomics = cleanText(String(primaryCandidate?.economics ?? ""), 500);
   const ownerContract = await buildBusinessModelContract({
     observedAt: site.fetched_at,
     discovered: {
@@ -2538,10 +2545,12 @@ async function inferModel(site: SiteAnalysis, context: P0Context): Promise<Busin
         confidence: facts.audience.confidence,
       },
       average_sale_value_rub: {
-        value: rubAmount(publishedEconomics),
-        source_url: cleanText(String(primaryCandidate?.destination ?? ""), 2_000),
-        quote: publishedEconomics,
-        confidence: publishedEconomics ? "MEDIUM" : "LOW",
+        // A listed item price (including an accessory or registration fee)
+        // does not establish the average realized value of the advertised sale.
+        value: null,
+        source_url: "",
+        quote: "",
+        confidence: "LOW",
       },
       exclusions: {
         value: facts.exclusions.value,
@@ -2602,7 +2611,7 @@ async function inferModel(site: SiteAnalysis, context: P0Context): Promise<Busin
         return [field, {
           confidence: contractField.confidence,
           source_url: contractField.provenance.source_url ?? "",
-          quote: field === "average_sale_value_rub" ? publishedEconomics : "",
+          quote: "",
         }];
       }),
     ]),
@@ -4007,9 +4016,7 @@ export class P0Application {
       if (JSON.stringify(Object.keys(argumentsValue)) !== JSON.stringify(["expected_revision"])) {
         fail("P0_AGENT_TOOL_INPUT_INVALID", "Owner journey read input не соответствует closed schema.");
       }
-      const journeyStage = state.package_review
-        ? "review"
-        : state.strategy
+      const journeyStage = state.package_review || state.strategy
           ? "campaigns"
           : record(state.business_model).source === "REAL_SITE_RESEARCH_PLUS_OWNER_CONFIRMATION"
             ? "strategy"
@@ -4061,7 +4068,7 @@ export class P0Application {
             status: String(frequency.status ?? "UNAVAILABLE"),
             source: "Яндекс Wordstat",
             observed_at: String(market.batch_finished_at ?? ""),
-            observed_lower_bound: record(frequency.observed_unique_count).value ?? null,
+            observed_phrase_frequency_sum: record(frequency.observed_unique_count).value ?? null,
             scope: {
               regions: planRegions.map((item) => String(record(item).name ?? "")).filter(Boolean),
               devices: planDevices.map(String),
@@ -4662,13 +4669,20 @@ export class P0Application {
     context: P0Context,
     generatedAt: string,
     candidateSet?: Record<string, unknown>,
+    signal?: AbortSignal,
   ) {
+    signal?.throwIfAborted();
+    const collect = async <T>(read: () => Promise<T> | undefined) => {
+      signal?.throwIfAborted();
+      return read();
+    };
     const [marketEvidenceInput, competitorResearch, financialCompetitorIntelligenceInput] = await Promise.all([
-      this.adapters.readMarketEvidence?.({ ownerKey, model, context, generatedAt }),
-      this.adapters.readCompetitorResearch?.({ model, site, generatedAt, candidateSet }),
-      this.adapters.readFinancialCompetitorIntelligence?.({ ownerKey, model, site, context, generatedAt }),
+      collect(() => this.adapters.readMarketEvidence?.({ ownerKey, model, context, generatedAt, signal })),
+      collect(() => this.adapters.readCompetitorResearch?.({ ownerKey, model, site, generatedAt, candidateSet, signal })),
+      collect(() => this.adapters.readFinancialCompetitorIntelligence?.({ ownerKey, model, site, context, generatedAt, signal })),
     ]);
-    return buildAnalyticsEvidence({
+    signal?.throwIfAborted();
+    const snapshot = await buildAnalyticsEvidence({
       site: site as unknown as Record<string, unknown>,
       model: model as unknown as Record<string, unknown>,
       context: {
@@ -4679,6 +4693,8 @@ export class P0Application {
       },
       generatedAt,
     });
+    signal?.throwIfAborted();
+    return snapshot;
   }
 
   private async buildMeasurementDestinationReadiness(ownerKey: string, state: P0Document) {
@@ -4794,8 +4810,14 @@ export class P0Application {
     key: string,
     seedSnapshotValue: Record<string, unknown> | null = null,
     firstPartySiteUrl = "",
+    signal?: AbortSignal,
+    goalScope?: GoalEvidenceScope,
   ): Promise<AnalyticsEvidenceBundle> {
+    signal?.throwIfAborted();
+    if (goalScope) await verifyGoalEvidenceScope(goalScope);
+    signal?.throwIfAborted();
     const current = await this.load(key);
+    signal?.throwIfAborted();
     const state = current.state;
     const rawSeed = seedSnapshotValue ?? state.analytics_evidence_snapshot;
     let seed: AnalyticsEvidenceBundle | null = null;
@@ -4806,6 +4828,7 @@ export class P0Application {
       }
       seed = structuredClone(candidate);
     }
+    signal?.throwIfAborted();
     let configuredSiteUrl = "";
     if (firstPartySiteUrl) {
       try {
@@ -4822,8 +4845,9 @@ export class P0Application {
     const collectedAt = this.adapters.now();
     let context: P0Context;
     try {
-      context = sanitizeContext(await this.adapters.readContext({ owner_key: key }));
+      context = sanitizeContext(await this.adapters.readContext({ owner_key: key, signal }));
     } catch (error) {
+      signal?.throwIfAborted();
       context = unavailablePrivateProviderResearchContext(
         state.context_state,
         collectedAt,
@@ -4831,16 +4855,29 @@ export class P0Application {
         seed?.scope ?? null,
       );
     }
+    signal?.throwIfAborted();
     this.assertResearchContextPreflight(context, collectedAt);
     this.assertPersistedResearchBindings(state, context);
-    const site = sanitizeSiteAnalysis(await this.adapters.researchSite(siteUrl));
+    const researchPlan = goalScope ? buildFindingsResearchPlan(goalScope.goalRevision) : undefined;
+    let site = sanitizeSiteAnalysis(await this.adapters.researchSite(siteUrl, signal, researchPlan));
+    const businessResearch = researchPlan && this.adapters.researchBusinessEvidence
+      ? await this.adapters.researchBusinessEvidence({ site, plan: researchPlan, signal }) : null;
+    if (businessResearch) site = sanitizeSiteAnalysis(businessResearch.site);
+    signal?.throwIfAborted();
     const persistedModel = state.business_model
       ?? (seed ? await businessModelFromEvidenceSeed(seed, siteUrl) : null);
-    const model = persistedModel
+    const researchedModel = persistedModel
       ? await refreshModelEvidence(persistedModel, site, context, collectedAt)
       : await inferModel(site, context);
-    const previousMatrix = record((state.analytics_evidence_snapshot ?? seed)?.competitor_matrix);
-    const candidateSet = record(previousMatrix.candidate_set);
+    const model = goalScope ? await goalResearchModel(researchedModel, goalScope.goalRevision) : researchedModel;
+    if (businessResearch) model.business_research = businessResearch.result;
+    signal?.throwIfAborted();
+    const previousEvidence = seed ?? state.analytics_evidence_snapshot;
+    const previousMatrix = record(previousEvidence?.competitor_matrix);
+    const discoveredSet = record(record(record(previousEvidence?.competitor_research).discovery).candidate_set);
+    // Revisit the researched pool, including candidates lost to transport or
+    // decoding failures; a filtered prior top is not the market boundary.
+    const candidateSet = Object.keys(discoveredSet).length ? discoveredSet : record(previousMatrix.candidate_set);
     return this.buildModelEvidence(
       key,
       site,
@@ -4848,6 +4885,7 @@ export class P0Application {
       context,
       collectedAt,
       Object.keys(candidateSet).length ? candidateSet : undefined,
+      signal,
     );
   }
 
@@ -4939,6 +4977,16 @@ export class P0Application {
     if (corrected && question?.target) state.owner_goal_interview_pending_answer = corrected;
     await this.persistOwnerGoalInterviewCheckpoint(key, current.revision, state);
     return this.query(key);
+  }
+
+  /** Frozen business input for Pipeline reads; viewing a result must not refresh providers. */
+  async persistedPipelineInput(key: string) {
+    const stored = await this.load(key);
+    return {
+      revision: stored.revision,
+      updated_at: stored.updated_at,
+      state: structuredClone(stored.state),
+    };
   }
 
   async query(key: string) {

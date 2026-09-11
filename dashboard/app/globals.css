@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "./owner-journey.css";
 @import "./analytics-summary.css";
+@import "./findings-readiness.css";
 
 :root {
   --ink: #13221a;

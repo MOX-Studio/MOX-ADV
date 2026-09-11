@@ -159,7 +159,7 @@ function fixture(database) {
   };
 }
 
-test("Start persists a new zero-write run at Campaign Goal with five canonical stages and exact inputs", async () => {
+test("Start persists a new zero-write run at Campaign Goal with four canonical stages and exact inputs", async () => {
   const database = new DatabaseSync(":memory:");
   database.exec("CREATE TABLE p0_state(user_key TEXT PRIMARY KEY, revision INTEGER NOT NULL, updated_at TEXT NOT NULL, value_json TEXT NOT NULL)");
   const historical = JSON.stringify({ schema_version: "p0-application-document-v19", draft: { name: "Исторический документ" } });
@@ -212,18 +212,19 @@ test("durable 1.1 Goal-stage runs upgrade to pending formation without inventing
   const started = await orchestrator.start("owner", inputVersions());
   const legacy = structuredClone(started);
   legacy.contract.version = "1.1.0";
+  legacy.stages.push({ id: "PUBLICATION_REVIEW", label: "Проверка публикации", status: "PENDING" });
   delete legacy.goal_formation;
   database.prepare("UPDATE p0_pipeline_runs SET value_json = ? WHERE run_id = ?").run(JSON.stringify(legacy), started.run_id);
 
   const loaded = await new D1PipelineRunStore(d1Shim(database)).load(started.run_id);
 
-  assert.equal(loaded.contract.version, "1.2.0");
+  assert.equal(loaded.contract.version, "1.3.0");
   assert.deepEqual(loaded.goal_formation, { status: "PENDING" });
   assert.equal(loaded.current_stage, "CAMPAIGN_GOAL");
   database.close();
 });
 
-test("a successful full run ends at publication review with zero Direct writes, impressions, or spend", async () => {
+test("a successful full run ends at Campaigns with zero Direct writes, impressions, or spend", async () => {
   const database = new DatabaseSync(":memory:");
   const { orchestrator } = fixture(database);
   const externalEffects = {
@@ -244,7 +245,7 @@ test("a successful full run ends at publication review with zero Direct writes, 
   const completions = [
     ["EVIDENCE_COLLECTION", "EVIDENCE_VERIFIED", "Разрешённые сведения проверены.", "b"],
     ["STRATEGY", "STRATEGY_VERIFIED", "Текущая стратегия проверена.", "c"],
-    ["CAMPAIGNS", "DRAFTS_COMPLETE", "Полные текущие Draft готовы к проверке публикации.", "d"],
+    ["CAMPAIGNS", "DRAFTS_COMPLETE", "Полные текущие Draft подготовлены.", "d"],
   ];
 
   for (const [source_stage, reason_code, reason, character] of completions) {
@@ -259,10 +260,10 @@ test("a successful full run ends at publication review with zero Direct writes, 
   }
 
   assert.equal(run.status, "COMPLETED");
-  assert.equal(run.current_stage, "PUBLICATION_REVIEW");
+  assert.equal(run.current_stage, "CAMPAIGNS");
   assert.equal(run.last_transition.kind, "COMPLETE");
   assert.equal(run.last_transition.source_stage, "CAMPAIGNS");
-  assert.equal(run.last_transition.target_stage, "PUBLICATION_REVIEW");
+  assert.equal(run.last_transition.target_stage, null);
   assert.equal(run.work_control.issue_actions, false);
   assert.deepEqual(run.authority.external_write_operations, []);
   assert.equal(run.authority.external_write, "DENIED");
@@ -276,6 +277,46 @@ test("a successful full run ends at publication review with zero Direct writes, 
     spend: 0,
   });
   assert.doesNotMatch(JSON.stringify(run), /APPROVED_FOR_PUBLICATION/u);
+
+  // A historical completed run is read as Campaigns without rewriting its
+  // persisted revision or immutable audit trail.
+  const legacy = structuredClone(run);
+  legacy.contract.version = "1.2.0";
+  legacy.current_stage = "PUBLICATION_REVIEW";
+  legacy.stages.push({ id: "PUBLICATION_REVIEW", label: "Проверка публикации", status: "COMPLETED" });
+  legacy.last_transition.target_stage = "PUBLICATION_REVIEW";
+  const original = JSON.stringify(legacy);
+  const auditBefore = await orchestrator.audit(run.run_id);
+  database.prepare("UPDATE p0_pipeline_runs SET value_json = ? WHERE run_id = ?").run(original, run.run_id);
+  const loaded = await new D1PipelineRunStore(d1Shim(database)).load(run.run_id);
+  assert.deepEqual(loaded, run);
+  assert.deepEqual(await orchestrator.audit(run.run_id), auditBefore);
+  assert.equal(database.prepare("SELECT value_json FROM p0_pipeline_runs WHERE run_id = ?").get(run.run_id).value_json, original);
+  const corruptLegacy = structuredClone(legacy);
+  corruptLegacy.stages.at(-1).status = "ACTIVE";
+  await assert.rejects(verifyPipelineRunState(corruptLegacy), { code: "PIPELINE_RUN_CORRUPT" });
+  database.close();
+});
+
+test("an active 1.2 run continues with four stages and keeps its verified audit history", async () => {
+  const database = new DatabaseSync(":memory:");
+  const { store, orchestrator } = fixture(database);
+  const started = await orchestrator.start("owner", inputVersions());
+  const legacy = structuredClone(started);
+  legacy.contract.version = "1.2.0";
+  legacy.stages.push({ id: "PUBLICATION_REVIEW", label: "Проверка публикации", status: "PENDING" });
+  database.prepare("UPDATE p0_pipeline_runs SET value_json = ? WHERE run_id = ?").run(JSON.stringify(legacy), started.run_id);
+  const auditBefore = await orchestrator.audit(started.run_id);
+  const advanced = await orchestrator.recordGoalCandidate({
+    run_id: started.run_id,
+    expected_version: started.version,
+    candidate: goalCandidate(),
+  });
+  assert.equal(advanced.current_stage, "EVIDENCE_COLLECTION");
+  assert.equal(advanced.contract.version, "1.3.0");
+  assert.equal(advanced.stages.length, 4);
+  assert.deepEqual(await store.load(started.run_id), advanced);
+  assert.deepEqual((await orchestrator.audit(started.run_id)).slice(0, auditBefore.length), auditBefore);
   database.close();
 });
 

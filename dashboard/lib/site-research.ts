@@ -1,4 +1,5 @@
 import { isPublicIpAddress, normalizePublicHttpsUrl, requirePublicHttpsUrl } from "./site-url.ts";
+import type { FindingsResearchPlan } from "./findings-research.ts";
 import { cleanText } from "./text.ts";
 import type { PageEvidence, SiteAnalysis } from "./p0-application.ts";
 
@@ -32,6 +33,8 @@ export type SiteResearchDependencies = {
   resolveHostname(hostname: string): Promise<string[]>;
   now(): string;
   limits?: Partial<SiteResearchLimits>;
+  plan?: FindingsResearchPlan;
+  signal?: AbortSignal;
 };
 
 export type PublicCompetitorResearchPolicy = {
@@ -90,7 +93,7 @@ function firstParty(base: string, candidate: string) {
 
 function exactLimits(input?: Partial<SiteResearchLimits>): SiteResearchLimits {
   return {
-    maximumPages: Math.max(1, Math.min(6, Math.trunc(input?.maximumPages ?? DEFAULT_LIMITS.maximumPages))),
+    maximumPages: Math.max(1, Math.min(10, Math.trunc(input?.maximumPages ?? DEFAULT_LIMITS.maximumPages))),
     maximumRedirects: Math.max(0, Math.min(4, Math.trunc(input?.maximumRedirects ?? DEFAULT_LIMITS.maximumRedirects))),
     maximumTotalBytes: Math.max(1, Math.min(5_000_000, Math.trunc(input?.maximumTotalBytes ?? DEFAULT_LIMITS.maximumTotalBytes))),
     requestTimeoutMs: Math.max(10, Math.min(120_000, Math.trunc(input?.requestTimeoutMs ?? DEFAULT_LIMITS.requestTimeoutMs))),
@@ -152,11 +155,10 @@ async function boundedText(response: Response, maximumBytes: number) {
     await response.body?.cancel();
     fail("SITE_RESPONSE_TOO_LARGE", "Ответ сайта превышает безопасный лимит размера.");
   }
-  if (!response.body) return { text: "", bytes: 0 };
+  if (!response.body) return { text: "", bytes: 0, data: new Uint8Array() };
   const reader = response.body.getReader();
-  const decoder = new TextDecoder();
   let bytes = 0;
-  let text = "";
+  const chunks: Uint8Array[] = [];
   while (true) {
     const chunk = await reader.read();
     if (chunk.done) break;
@@ -165,10 +167,20 @@ async function boundedText(response: Response, maximumBytes: number) {
       await reader.cancel("size limit");
       fail("SITE_RESPONSE_TOO_LARGE", "Ответ сайта превышает безопасный лимит размера.");
     }
-    text += decoder.decode(chunk.value, { stream: true });
+    chunks.push(chunk.value);
   }
-  text += decoder.decode();
-  return { text, bytes };
+  const body = new Uint8Array(bytes);
+  let offset = 0;
+  for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.byteLength; }
+  const headerCharset = /charset\s*=\s*["']?([^;\s"']+)/iu.exec(response.headers.get("content-type") ?? "")?.[1];
+  // Charset declarations are ASCII, including on Windows-1251 exhibition sites.
+  // Sniff only a bounded prefix and honor the HTTP declaration before HTML meta.
+  const prefix = new TextDecoder("windows-1252").decode(body.subarray(0, 16_384));
+  const metaCharset = /<meta\b[^>]*\bcharset\s*=\s*["']?([^\s"'/>;]+)/iu.exec(prefix)?.[1];
+  const charset = headerCharset || metaCharset || "utf-8";
+  let decoder: TextDecoder;
+  try { decoder = new TextDecoder(charset); } catch { decoder = new TextDecoder("utf-8"); }
+  return { text: decoder.decode(body), bytes, data: body };
 }
 
 async function fetchPage(
@@ -191,7 +203,8 @@ async function fetchPage(
     if (exactAllowedDestinations && !exactAllowedDestinations.has(current.toString())) {
       fail("SITE_DESTINATION_NOT_ALLOWLISTED", "Public research URL отсутствует в exact destination allowlist.");
     }
-    const requestSignal = AbortSignal.timeout(limits.requestTimeoutMs);
+    const timeoutSignal = AbortSignal.timeout(limits.requestTimeoutMs);
+    const requestSignal = dependencies.signal ? AbortSignal.any([timeoutSignal, dependencies.signal]) : timeoutSignal;
     try {
       await boundedBySignal(assertPublicResolution(current, dependencies.resolveHostname), requestSignal);
     } catch (error) {
@@ -240,6 +253,23 @@ async function fetchPage(
     }
     if (!response.ok) fail("SITE_HTTP_UNAVAILABLE", `Сайт вернул HTTP ${response.status}.`);
     const contentType = response.headers.get("content-type") ?? "";
+    if (dependencies.plan && /application\/pdf/iu.test(contentType)) {
+      const body = await boundedBySignal(boundedText(response, remainingBytes), requestSignal);
+      const { getDocumentProxy } = await import("unpdf");
+      const pdf = await boundedBySignal(getDocumentProxy(body.data), requestSignal);
+      const chunks: string[] = [];
+      try {
+        for (let pageNumber = 1; pageNumber <= Math.min(pdf.numPages, 12); pageNumber++) {
+          requestSignal.throwIfAborted();
+          const page = await boundedBySignal(pdf.getPage(pageNumber), requestSignal);
+          const content = await boundedBySignal(page.getTextContent(), requestSignal);
+          chunks.push(content.items.map(item => "str" in item ? item.str : "").join(" "));
+        }
+      } finally { await pdf.loadingTask.destroy(); }
+      const excerpt = cleanText(chunks.join(" "), 8000);
+      if (!excerpt) fail("SITE_PDF_TEXT_UNAVAILABLE", "PDF не содержит доступного текстового слоя.");
+      return { bytes: body.bytes, links: [], page: { url: current.toString(), title: "Документ PDF", description: "Прочитано до 12 страниц документа", headings: [], forms_detected: 0, text_excerpt: excerpt } satisfies PageEvidence };
+    }
     if (!/text\/html|application\/xhtml\+xml/iu.test(contentType)) {
       fail("SITE_CONTENT_UNSUPPORTED", "Страница не вернула HTML.");
     }
@@ -280,12 +310,12 @@ async function fetchPage(
   }
 }
 
-function rankedLinks(baseUrl: string, links: string[]) {
+function rankedLinks(baseUrl: string, links: string[], plan?: FindingsResearchPlan) {
   const base = new URL(baseUrl);
   const baseHost = normalizeHost(base.hostname);
   const scores = new Map<string, number>();
   for (const href of links) {
-    if (/^(mailto:|tel:|javascript:)/iu.test(href) || /privacy|cookie|login|logout|\.pdf|\.zip/iu.test(href)) continue;
+    if (/^(mailto:|tel:|javascript:)/iu.test(href) || /privacy|cookie|login|logout|\.zip/iu.test(href) || (!plan && /\.pdf/iu.test(href))) continue;
     let candidate: URL;
     try {
       candidate = requirePublicHttpsUrl(new URL(href, base).toString());
@@ -297,13 +327,19 @@ function rankedLinks(baseUrl: string, links: string[]) {
     candidate.search = "";
     candidate.hash = "";
     if (candidate.toString().replace(/\/$/u, "") === base.toString().replace(/\/$/u, "")) continue;
-    const haystack = candidate.pathname.toLowerCase();
+    let haystack = candidate.pathname.toLowerCase();
+    try { haystack = decodeURIComponent(haystack); } catch { /* Keep encoded path. */ }
     let score = RESEARCH_TERMS.reduce((total, term) => total + (haystack.includes(term) ? 3 : 0), 0);
     if (candidateHost !== baseHost) score += 6;
     if (/terms.*particip|услов.*участ/iu.test(haystack)) score += 10;
     if (/become|стать-участ/iu.test(haystack)) score += 8;
     if (/participants|partner-country|list/iu.test(haystack)) score -= 4;
-    if (score > 0) scores.set(candidate.toString(), Math.max(score, scores.get(candidate.toString()) ?? -100));
+    if (plan) {
+      const terms = [...plan.questions.flatMap(q => q.terms), ...plan.goal.desired_outcome.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(t => t.length >= 5)];
+      score += terms.filter(term => haystack.includes(term)).length * 4;
+      if (/\.pdf$/iu.test(haystack)) score += 2;
+    }
+    if (plan || score > 0) scores.set(candidate.toString(), Math.max(score, scores.get(candidate.toString()) ?? -100));
   }
   return [...scores.entries()].sort((left, right) => right[1] - left[1]).map(([url]) => url);
 }
@@ -375,7 +411,8 @@ export async function researchPublicFirstPartySite(
   rawUrl: string,
   dependencies: SiteResearchDependencies,
 ): Promise<SiteAnalysis> {
-  const limits = exactLimits(dependencies.limits);
+  // Goal-scoped research starts with the entry page; the specialist chooses subsequent sources.
+  const limits = exactLimits({ ...dependencies.limits, ...(dependencies.plan ? { maximumPages: 1 } : {}) });
   const requested = normalizePublicHttpsUrl(rawUrl);
   const requestedHost = normalizeHost(requested.hostname);
   let consumedBytes = 0;
@@ -390,8 +427,12 @@ export async function researchPublicFirstPartySite(
   const entryHost = normalizeHost(new URL(entry.page.url).hostname);
   const pages = [entry.page];
   const attempted = new Set<string>();
-  let candidates = rankedLinks(entry.page.url, entry.links);
-  while (candidates.length && pages.length < limits.maximumPages) {
+  const startedAt = Date.now();
+  let candidates = rankedLinks(entry.page.url, entry.links, dependencies.plan);
+  const discovered = new Set(candidates);
+  while (candidates.length && pages.length < limits.maximumPages && attempted.size < limits.maximumPages * 2
+    && Date.now() - startedAt < (dependencies.plan ? dependencies.plan.limits.max_elapsed_ms ?? Infinity : 180_000)) {
+    dependencies.signal?.throwIfAborted();
     const candidate = candidates.shift()!;
     if (attempted.has(candidate)) continue;
     attempted.add(candidate);
@@ -408,10 +449,12 @@ export async function researchPublicFirstPartySite(
       if (!firstParty(entryHost, pageHost) || pages.some((item) => item.url === result.page.url)) continue;
       pages.push(result.page);
       candidates = [
-        ...rankedLinks(result.page.url, result.links).filter((item) => !attempted.has(item)),
+        ...rankedLinks(result.page.url, result.links, dependencies.plan).filter((item) => !attempted.has(item)),
         ...candidates,
       ];
+      candidates.forEach(url => discovered.add(url));
     } catch (error) {
+      dependencies.signal?.throwIfAborted();
       if (error instanceof SiteResearchError && error.code === "SITE_RESPONSE_TOO_LARGE") {
         // The entry page remains authoritative evidence. Stop before the total byte budget is exceeded;
         // never turn an oversized secondary page into a failure or partial page observation.
@@ -429,7 +472,8 @@ export async function researchPublicFirstPartySite(
     pages,
     research: {
       pages_analyzed: pages.length,
-      links_discovered: entry.links.length,
+      links_discovered: discovered.size,
+      ...(dependencies.plan ? { candidate_urls: [...discovered].filter(url => !pages.some(page => page.url === url)) } : {}),
       scope: "FIRST_PARTY_PUBLIC_HTTPS",
     },
   };

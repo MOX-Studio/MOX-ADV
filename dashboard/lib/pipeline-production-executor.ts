@@ -1,6 +1,9 @@
+import { assertGoalReady, type GoalRevision } from "./goal-revision.ts";
+import { verifyGoalEvidenceScope } from "./goal-evidence-scope.ts";
 import type { CurrentGoal } from "./goal-revision-lifecycle.ts";
 import type { PipelineVerifiedProduct } from "./pipeline-current-products.ts";
-import type { ProductionStageAgents } from "./production-stage-agents.ts";
+import type { ProductionStageAgents, ProductionStageAgentResult } from "./production-stage-agents.ts";
+import { assessPipelineEvidenceReuse, pipelineEvidenceResearchScope, type PipelineEvidenceReusePlan } from "./pipeline-evidence-reuse.ts";
 import {
   PipelineOrchestrator,
   pipelineDigest,
@@ -25,12 +28,20 @@ type ProductionHistoricalView = {
   state: Record<string, unknown>;
 };
 
+function transitionSummary(summary: string): string {
+  const normalized = summary.normalize("NFKC").replace(/\s+/gu, " ").trim();
+  return normalized.length <= 1000 ? normalized : `${normalized.slice(0, 997)}...`;
+}
+
 export type ProductionPipelineEvidenceCollector = (input: {
+  wordstatResearch?: import("./wordstat-query-research.ts").WordstatQueryResearch;
   ownerKey: string;
   view: ProductionHistoricalView;
   goal: PipelineVersionReference;
+  goalRevision: GoalRevision;
   seed: PipelineVersionReference | null;
   seedSnapshot: Record<string, unknown> | null;
+  signal?: AbortSignal;
 }) => Promise<Record<string, unknown>>;
 
 async function schemaReference(name: string): Promise<PipelineVersionReference> {
@@ -101,7 +112,7 @@ async function campaignSeedReference(run: PipelineRunState) {
 
 async function verifiedAttempt(input: {
   run: PipelineRunState;
-  stage: Exclude<PipelineStageId, "CAMPAIGN_GOAL" | "PUBLICATION_REVIEW">;
+  stage: Exclude<PipelineStageId, "CAMPAIGN_GOAL">;
   inputs: PipelineVersionReference[];
   evidence: PipelineVersionReference[];
   output: PipelineVersionReference;
@@ -131,7 +142,7 @@ async function verifiedAttempt(input: {
 }
 
 /**
- * Verifies and seals the real persisted P0 artifacts in the five-stage audit run.
+ * Verifies and seals the real persisted P0 artifacts in the four-stage audit run.
  * All evidence and outputs are exact references created by production P0 adapters;
  * this function neither generates substitute evidence nor performs external writes.
  */
@@ -143,20 +154,40 @@ export async function executeProductionPipeline(input: {
   agents: ProductionStageAgents;
   evidenceCollector: ProductionPipelineEvidenceCollector;
   evidenceSeedSnapshot?: Record<string, unknown> | null;
+  reusedEvidence?: PipelineEvidenceReusePlan;
+  replayEvaluatedAt?: string;
+  signal?: AbortSignal;
   onVerifiedProduct?: (input: { run: PipelineRunState; product: PipelineVerifiedProduct }) => Promise<void>;
 }) {
+  const checkpoint = () => input.signal?.throwIfAborted();
+  checkpoint();
   if (input.run.status !== "ACTIVE" || input.run.current_stage !== "CAMPAIGN_GOAL") {
     throw new ProductionPipelineExecutionError(
       "PRODUCTION_PIPELINE_NOT_AT_START",
       "Production executor requires a newly started Campaign Goal stage.",
     );
   }
-  if (!input.currentGoal?.revision.success_criterion) {
-    throw new ProductionPipelineExecutionError(
-      "PRODUCTION_OWNER_GOAL_REQUIRED",
-      "Сначала сохраните бизнес-цель, квалифицированный результат и измеримый критерий успеха.",
-    );
+  if (!input.currentGoal) throw new ProductionPipelineExecutionError("PRODUCTION_OWNER_GOAL_REQUIRED", "Сначала сохраните Цель.");
+  assertGoalReady(input.currentGoal.revision);
+  let replay: PipelineEvidenceReusePlan | null = null;
+  if (input.reusedEvidence) {
+    const checked = await assessPipelineEvidenceReuse({
+      currentOwnerKey: input.run.owner_key,
+      evidence: input.reusedEvidence.evidence, sourceRun: input.reusedEvidence.source_run,
+      sourceAudit: await input.orchestrator.audit(input.reusedEvidence.evidence.source_run_id),
+      currentGoal: input.currentGoal.revision, currentVersions: input.run.input_versions,
+      currentState: input.view.state, stateRevision: input.reusedEvidence.expected_state_revision,
+      evaluatedAt: input.replayEvaluatedAt ?? new Date().toISOString(),
+    });
+    if (!checked.plan || checked.plan.reuse_token !== input.reusedEvidence.reuse_token) {
+      throw new ProductionPipelineExecutionError("EVIDENCE_REUSE_INVALID", checked.availability.reason);
+    }
+    replay = checked.plan;
+    if (input.run.input_versions.analytics_evidence_snapshot?.digest !== replay.evidence.evidence_reference.digest) {
+      throw new ProductionPipelineExecutionError("EVIDENCE_REUSE_INPUT_MISMATCH", "Новый запуск не связан с точным проверенным срезом источников.");
+    }
   }
+  checkpoint();
   let run = await input.orchestrator.acceptGoalRevision({
     run_id: input.run.run_id,
     expected_version: input.run.version,
@@ -177,29 +208,49 @@ export async function executeProductionPipeline(input: {
     run,
     product: { stage: "CAMPAIGN_GOAL", value: structuredClone(run.goal_formation.revision) },
   });
+  checkpoint();
   const evidenceSeed = run.input_versions.analytics_evidence_snapshot
     ? structuredClone(run.input_versions.analytics_evidence_snapshot)
     : null;
-  const collectedSnapshot = await input.evidenceCollector({
+  const collectedSnapshot = replay ? structuredClone(replay.evidence.snapshot) : await input.evidenceCollector({
     ownerKey: run.owner_key,
     view: structuredClone(input.view),
     goal: structuredClone(goalReference),
+    goalRevision: structuredClone(run.goal_formation.revision),
     seed: structuredClone(evidenceSeed),
     seedSnapshot: input.evidenceSeedSnapshot ? structuredClone(input.evidenceSeedSnapshot) : null,
+    signal: input.signal,
   });
+  checkpoint();
   const collectedEvidence = await collectedEvidenceReference(collectedSnapshot);
-  const evidenceAgent = await input.agents.analyzeEvidence({
+  if (Object.hasOwn(collectedSnapshot, "goal_context")) {
+    await verifyGoalEvidenceScope({ goal: goalReference, goalRevision: collectedSnapshot.goal_context as GoalRevision });
+  }
+  const evidenceAgent: ProductionStageAgentResult<Record<string, unknown>> = replay?.evidence.interpretation ? {
+    actor: { actor_id: "verified-evidence-replay", actor_type: "DETERMINISTIC_SERVICE", role: "EVIDENCE_REPLAY_VALIDATOR" },
+    output: collectedEvidence, artifact: structuredClone(collectedSnapshot),
+    evidence: [goalReference, collectedEvidence, {
+      schema_version: "p0-evidence-source-audit-v1", revision_id: `evidence-source:${replay.assessment.source_event_digest.slice(7, 39)}`, digest: replay.assessment.source_event_digest,
+    }],
+    check_id: "IMMUTABLE_EVIDENCE_REPLAY_VERIFIED",
+    schema: await schemaReference("p0-evidence-planning-replay"),
+    summary: "Использованы исходный проверенный срез и его сохранённый анализ. Сбор источников не выполнялся; готовность публикации не переносится.",
+    interpretation: structuredClone(replay.evidence.interpretation),
+  } : await input.agents.analyzeEvidence({
+    signal: input.signal,
     run,
     goal: goalReference,
     evidence: collectedEvidence,
     snapshot: structuredClone(collectedSnapshot),
+    ...(replay ? { replayAssessment: structuredClone(replay.assessment) } : {}),
   });
+  checkpoint();
   run = await input.orchestrator.advance({
     run_id: run.run_id,
     expected_version: run.version,
     source_stage: "EVIDENCE_COLLECTION",
-    reason_code: "PRODUCTION_EVIDENCE_VERIFIED",
-    reason: evidenceAgent.summary,
+    reason_code: replay ? "PRODUCTION_EVIDENCE_REUSED" : "PRODUCTION_EVIDENCE_VERIFIED",
+    reason: transitionSummary(evidenceAgent.summary),
     attempt: await verifiedAttempt({
       run,
       stage: "EVIDENCE_COLLECTION",
@@ -214,22 +265,30 @@ export async function executeProductionPipeline(input: {
   });
   await input.onVerifiedProduct?.({
     run,
-    product: { stage: "EVIDENCE_COLLECTION", value: structuredClone(evidenceAgent.artifact) },
+    product: {
+      stage: "EVIDENCE_COLLECTION", value: structuredClone(evidenceAgent.artifact),
+      interpretation: evidenceAgent.interpretation ? structuredClone(evidenceAgent.interpretation) : null,
+      researchScopeDigest: await pipelineEvidenceResearchScope({ versions: input.run.input_versions, state: input.view.state }),
+      ...(replay ? { reusedEvidence: structuredClone(replay.evidence) } : {}),
+    },
   });
 
+  checkpoint();
   const strategyAgent = await input.agents.formStrategy({
     run,
     view: input.view,
     goal: goalReference,
     evidence: evidenceAgent.output,
     evidenceSnapshot: structuredClone(collectedSnapshot),
+    evidenceInterpretation: evidenceAgent.interpretation ? structuredClone(evidenceAgent.interpretation) : undefined,
   });
+  checkpoint();
   run = await input.orchestrator.advance({
     run_id: run.run_id,
     expected_version: run.version,
     source_stage: "STRATEGY",
     reason_code: "PRODUCTION_STRATEGY_VERIFIED",
-    reason: strategyAgent.summary,
+    reason: transitionSummary(strategyAgent.summary),
     attempt: await verifiedAttempt({
       run,
       stage: "STRATEGY",
@@ -247,6 +306,7 @@ export async function executeProductionPipeline(input: {
     product: { stage: "STRATEGY", value: structuredClone(strategyAgent.artifact) as Record<string, unknown> },
   });
 
+  checkpoint();
   const designAgent = await input.agents.designCampaigns({
     run,
     view: input.view,
@@ -254,14 +314,16 @@ export async function executeProductionPipeline(input: {
     strategy: strategyAgent.output,
     evidence: evidenceAgent.output,
     evidenceSnapshot: structuredClone(collectedSnapshot),
+    evidenceInterpretation: evidenceAgent.interpretation ? structuredClone(evidenceAgent.interpretation) : undefined,
     pairSet: await campaignSeedReference(run),
   });
+  checkpoint();
   run = await input.orchestrator.advance({
     run_id: run.run_id,
     expected_version: run.version,
     source_stage: "CAMPAIGNS",
     reason_code: "PRODUCTION_CAMPAIGN_PAIRS_VERIFIED",
-    reason: designAgent.summary,
+    reason: transitionSummary(designAgent.summary),
     attempt: await verifiedAttempt({
       run,
       stage: "CAMPAIGNS",

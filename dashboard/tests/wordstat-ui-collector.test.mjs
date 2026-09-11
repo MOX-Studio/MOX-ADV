@@ -105,7 +105,7 @@ function deterministicRuntime() {
   };
 }
 
-async function collect({ plan = planWithSeeds(), readSurface, cleanup, store = memoryStore(), events = [] } = {}) {
+async function collect({ plan = planWithSeeds(), readSurface, cleanup, store = memoryStore(), events = [], signal, wait } = {}) {
   const runtime = deterministicRuntime();
   const calls = [];
   const batch = await collectAndSaveWordstatBatch({
@@ -116,7 +116,8 @@ async function collect({ plan = planWithSeeds(), readSurface, cleanup, store = m
     uiParserVersion: "wordstat-ui-parser/1.0",
     now: runtime.now,
     clock: runtime.clock,
-    wait: runtime.wait,
+    wait: wait ?? runtime.wait,
+    signal,
     driver: {
       async readSurface(value) {
         calls.push({ seed: value.seed.seed_id, surface: value.surface, attempt: value.attempt, at: runtime.clock() });
@@ -132,22 +133,40 @@ async function collect({ plan = planWithSeeds(), readSurface, cleanup, store = m
   return { batch, calls, waits: runtime.waits, store };
 }
 
-test("freezes no more than eight exact formulations and detects plan mutation", async () => {
-  const plan = planWithSeeds(8);
+test("freezes no more than twenty exact formulations per phase and detects plan mutation", async () => {
+  const plan = planWithSeeds(20);
 
   assert.equal(plan.schema_version, "wordstat-ui-collection-plan-v1");
-  assert.equal(plan.seeds.length, 8);
+  assert.equal(plan.seeds.length, 20);
   assert.equal(plan.seeds[0].exact_query, '  "!виброизоляция пола"  ');
   assert.equal(plan.seeds[0].normalized_query, '"!виброизоляция пола"');
   assert.deepEqual(plan.surfaces, ["TOP_POPULAR", "TOP_SIMILAR", "DYNAMICS", "REGIONS"]);
-  assert.deepEqual(plan.limits, { maximum_seeds: 8, parallel_queries: 1 });
+  assert.deepEqual(plan.limits, { maximum_seeds: 20, maximum_surface_reads: 80, parallel_queries: 1 });
   assert.match(plan.plan_digest, /^sha256:[a-f0-9]{64}$/u);
   assert.equal(Object.isFrozen(plan), true);
-  assert.throws(() => planWithSeeds(9), (error) => error instanceof WordstatCollectionError && error.code === "PLAN_LIMIT_EXCEEDED");
+  assert.throws(() => planWithSeeds(21), (error) => error instanceof WordstatCollectionError && error.code === "PLAN_LIMIT_EXCEEDED");
 
   const changed = structuredClone(plan);
   changed.seeds[0].exact_query = "changed after browser opening";
   await assert.rejects(collectAndSaveWordstatBatch({ plan: changed }), (error) => error.code === "PLAN_INVALID");
+});
+
+test("supports a frozen subset of surfaces for phased discovery", async () => {
+  const plan = buildWordstatCollectionPlan({
+    seeds: [{ seed_id: "seed-top", exact_query: "промышленная выставка", operator_profile: "BROAD_CONTAINING" }],
+    surfaces: ["TOP_POPULAR", "TOP_SIMILAR"],
+    scope: {
+      regions: [{ provider_id: 213, label: "Москва" }],
+      device: "ALL",
+      dynamics: { granularity: "MONTH", from_date: "2025-01-01", to_date: "2025-12-31" },
+    },
+  });
+  const result = await collect({ plan });
+
+  assert.deepEqual(plan.surfaces, ["TOP_POPULAR", "TOP_SIMILAR"]);
+  assert.deepEqual(result.calls.map((call) => call.surface), ["TOP_POPULAR", "TOP_SIMILAR"]);
+  assert.equal(result.batch.status, "COMPLETE");
+  assert.equal(result.batch.observations.length, 2);
 });
 
 test("collects every surface sequentially with at least three seconds between reads and saves only sanitized evidence", async () => {
@@ -287,6 +306,64 @@ test("stop and explicit access block terminate collection immediately and still 
     assert.equal(result.calls.length, 1);
     assert.equal(result.batch.failures[0].code, code);
   }
+});
+
+test("abort interrupts an in-flight owned surface, retains prior verified observations and cleans up before saving", { timeout: 1_000 }, async () => {
+  const controller = new AbortController();
+  const events = [];
+  const store = memoryStore(events);
+  let started;
+  const pendingRead = new Promise((resolve) => { started = resolve; });
+  let lateResult;
+  const run = collect({
+    signal: controller.signal, events, store,
+    readSurface: (value) => {
+      if (value.surface === "TOP_POPULAR") return completeResult(value);
+      started();
+      return new Promise((resolve) => { lateResult = () => resolve(completeResult(value)); });
+    },
+  });
+  await pendingRead;
+  controller.abort();
+  const result = await run;
+  assert.equal(result.calls.length, 2);
+  assert.equal(result.batch.status, "UNAVAILABLE");
+  assert.equal(result.batch.failures.at(-1).code, "STOPPED");
+  assert.equal(result.batch.observations.length, 1);
+  assert.equal(result.batch.observations[0].surface, "TOP_POPULAR");
+  assert.deepEqual(result.batch.observations[0].rows, rowsBySurface.TOP_POPULAR);
+  assert.deepEqual(events.slice(-2), ["cleanup", "save-batch"]);
+  lateResult();
+  await Promise.resolve();
+  assert.equal(store.csv.length, 1);
+  assert.equal(store.batches.length, 1);
+});
+
+test("abort during a retry delay prevents further reads and still releases the owned driver", { timeout: 1_000 }, async () => {
+  const controller = new AbortController();
+  let cleanupCalls = 0;
+  const result = await collect({
+    signal: controller.signal,
+    readSurface: () => ({ state: "UNAVAILABLE", failure_code: "LOAD_TIMEOUT" }),
+    wait: async () => {
+      controller.abort();
+      return new Promise(() => {});
+    },
+    cleanup: () => { cleanupCalls += 1; return { cleanup_status: "COMPLETE" }; },
+  });
+  assert.equal(result.calls.length, 1);
+  assert.equal(result.batch.failures.at(-1).code, "STOPPED");
+  assert.equal(cleanupCalls, 1);
+});
+
+test("an already aborted collection performs no source reads and records explicit cancellation", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  const result = await collect({ signal: controller.signal });
+  assert.equal(result.calls.length, 0);
+  assert.equal(result.batch.cleanup_status, "COMPLETE");
+  assert.equal(result.batch.failures[0].code, "STOPPED");
+  assert.deepEqual(result.batch.observations, []);
 });
 
 test("controlled fixture evidence cannot enter a production Analytics Evidence Snapshot", async () => {

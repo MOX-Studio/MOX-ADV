@@ -298,7 +298,11 @@ async function fixtureMarketEvidence(scenario: P0E2EFixtureScenario): Promise<Ma
         intent: seed.dimension === "HIGH_INTENT_ACTION" ? seed.phrase : "коммерческое действие",
         offer: seed.phrase,
       },
-      classification: { version: "demand-relevance-rules-v1", excluded_tokens: researchPlan.exclusions },
+      classification: {
+        version: "demand-relevance-rules-v1",
+        required_any_tokens: seed.relevance_tokens,
+        excluded_tokens: researchPlan.exclusions,
+      },
     })),
     cost_observations: [{
       observation_id: "fixture-comparable-history",

@@ -1,0 +1,21 @@
+.archive { min-width: 0; }
+.tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 18px 0; border-bottom: 1px solid #dbe2dc; }
+.tools label { color: #354b3b; font-size: 14px; font-weight: 650; }
+.tools input { width: min(440px, 100%); min-height: 42px; padding: 10px 12px; border: 1px solid #a8b9ae; border-radius: 6px; background: white; color: #26382c; font: inherit; font-size: 15px; }
+.tools input::placeholder { color: #6c796f; }
+.tools button { min-height: 38px; padding: 8px 12px; border: 1px solid #ccd8ce; border-radius: 6px; color: #28513a; background: #fff; font: inherit; font-size: 14px; cursor: pointer; }
+.tools [role="status"] { color: #647568; font-size: 13px; }
+.layout { display: grid; grid-template-columns: 235px minmax(0, 1fr); align-items: start; gap: 26px; padding-top: 18px; }
+.chapters { position: sticky; top: 90px; display: grid; gap: 4px; max-height: calc(100vh - 120px); overflow-y: auto; padding-right: 10px; }
+.chapters a { display: block; padding: 10px 12px; border-left: 3px solid transparent; border-radius: 0 5px 5px 0; color: #46614e; font-size: 14px; line-height: 1.45; text-decoration: none; overflow-wrap: anywhere; }
+.chapters a:hover { background: #f0f5f0; }
+.chapters a[aria-current] { border-left-color: #2f7951; background: #edf5ee; color: #214f34; font-weight: 650; }
+.chapters a small { display: block; margin-top: 6px; color: #657469; font-size: 12px; font-weight: 400; line-height: 1.5; }
+.content, .records { min-width: 0; }
+.records [data-archive-hidden="true"] { display: none !important; }
+.records [data-archive-chapter], .records :is(h2, h3, h4, p, li, td, dd, small, blockquote)[tabindex="-1"] { scroll-margin-top: 90px; }
+.records :focus { outline: 2px solid #8bb69a; outline-offset: 5px; }
+.empty { margin: 0; padding: 18px; background: #f4f7f3; color: #4d6052; font-size: 15px; line-height: 1.5; }
+.archive :is(input, button, a):focus-visible { outline: 2px solid #397b53; outline-offset: 3px; }
+@media (max-width: 900px) { .layout { grid-template-columns: 190px minmax(0, 1fr); gap: 18px; } }
+@media (max-width: 650px) { .layout { grid-template-columns: 1fr; } .chapters { position: static; max-height: 240px; } .tools input { width: 100%; } }

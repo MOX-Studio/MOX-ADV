@@ -6,6 +6,7 @@ import { fingerprintDirectProjection } from "../lib/campaign-fanout.ts";
 import { projectCampaignPairDossier } from "../lib/campaign-pair-dossier.ts";
 import { compileDirectProjection } from "../lib/direct-projection-compiler.ts";
 import { saveCurrentPipelineCampaignPairEdit } from "../lib/pipeline-current-edits.ts";
+import { buildLocalCampaignGenerationProjection } from "../lib/campaign-generation-profile.ts";
 
 const STRATEGY_REVISION_ID = "campaign-strategy:edit-fixture";
 const HYPOTHESIS_REVISION_ID = "campaign-hypothesis:edit-fixture";
@@ -140,7 +141,7 @@ async function currentProducts() {
     state_revision: 4,
     run_id: "run-completed",
     run_version: 9,
-    current_stage: "PUBLICATION_REVIEW",
+    current_stage: "CAMPAIGNS",
     updated_at: "2026-09-01T10:00:00.000Z",
     historical_source: { schema_version: "p0-application-document-v19", revision_id: "historical-document:67", digest: `sha256:${"a".repeat(64)}` },
     goal_revision: { schema_version: "goal-v1", revision_id: "goal-r1", digest: `sha256:${"1".repeat(64)}` },
@@ -198,6 +199,96 @@ function applicabilityValue(draft, pointer) {
   return draft.applicability.find((item) => item.pointer === pointer)?.value;
 }
 
+async function localCurrentProducts() {
+  const current = await currentProducts();
+  const local = buildLocalCampaignGenerationProjection({
+    baselineProjection: projection(),
+    content: {
+      campaign_name: "Два намерения", allocated_weekly_budget_rub: 25_000, bidding_strategy: "WB_MAXIMUM_CLICKS",
+      groups: [1, 2].map((index) => ({
+        name: `Намерение ${index}`, keywords: [`иннопром стенд ${index}`, `стенд выставка ${index}`], negative_keywords: [],
+        titles: [`Стенд ИННОПРОМ ${index}`], texts: [`Проектирование стенда ${index}.`], landing_page: `https://owner.example/stand/${index}`,
+        evidence_refs: [`evidence:group:${index}`],
+      })),
+    },
+  });
+  const draft = await compileDirectProjection({ projection: local, capability_snapshot: null, allowed_landing_hosts: ["owner.example"], applicability_proofs: [] });
+  current.campaign_pairs[0].draft = { ...draft, auction_protocol: {} };
+  current.campaign_pairs[0].publish_fingerprint = draft.publish_fingerprint;
+  current.campaign_pairs[0].edit_context = {
+    schema_version: "p0-campaign-pair-edit-context-v1", capability_snapshot: null, allowed_landing_hosts: ["owner.example"], applicability_proofs: [],
+  };
+  current.publication_review.publish_fingerprints = [draft.publish_fingerprint];
+  return current;
+}
+
+function localEdit(technical_changes, extra = {}) {
+  return {
+    pair_id: "pair-r1", expected_hypothesis_revision_id: HYPOTHESIS_REVISION_ID, expected_draft_revision_id: DRAFT_REVISION_ID,
+    group_ref: "ad-group:1", technical_changes, ...extra,
+  };
+}
+
+test("local group edit preserves all sibling groups and recompiles without fabricated provider capability", async () => {
+  const before = await localCurrentProducts();
+  const original = before.campaign_pairs[0].draft.publish_projection.direct;
+  const store = new MemoryProducts(before);
+  const result = await saveCurrentPipelineCampaignPairEdit({
+    store, ownerKey: "owner", runStatus: "COMPLETED", expectedStateRevision: 4, editedAt: "2026-09-05T12:00:00.000Z",
+    edit: localEdit({ keywords: "иннопром стенд 1\nиндивидуальный стенд\nзаказ выставочного стенда", ad_title: "Индивидуальный стенд\nСтенд под задачи бизнеса", landing_page: "https://owner.example/stand/individual", negative_keywords: "" }),
+  });
+  assert.equal(result.status, "SAVED");
+  const pair = store.current.campaign_pairs[0];
+  const graph = pair.draft.publish_projection.direct;
+  assert.deepEqual(graph.ad_groups[1], original.ad_groups[1]);
+  assert.deepEqual(graph.keywords.filter((item) => item.ad_group_ref === "ad-group:2"), original.keywords.filter((item) => item.ad_group_ref === "ad-group:2"));
+  assert.deepEqual(graph.ads[1], original.ads[1]);
+  assert.deepEqual(graph.keywords.filter((item) => item.kind === "AUTOTARGETING"), original.keywords.filter((item) => item.kind === "AUTOTARGETING"));
+  assert.equal(graph.keywords.filter((item) => item.ad_group_ref === "ad-group:1" && item.kind === "EXPLICIT_KEYWORD").length, 3);
+  assert.equal(graph.keywords[0].local_ref, original.keywords[0].local_ref);
+  assert.deepEqual(graph.ad_groups[0].provider_fields.NegativeKeywords.Items, []);
+  assert.equal(pair.hypothesis.hypothesis_revision_id, HYPOTHESIS_REVISION_ID);
+  assert.deepEqual(pair.draft.local_graph.ads, graph.ads);
+  assert.equal(pair.draft.publication_readiness.status, "UNAVAILABLE");
+  assert.equal(pair.edit_context.capability_snapshot, null);
+  assert.equal(pair.draft.publish_projection.brand_claims_contract.status, "OWNER_EDIT_REQUIRES_FACT_CHECK");
+  assert.equal(pair.draft.publish_fingerprint, await fingerprintDirectProjection(pair.draft.publish_projection));
+  assert.ok(await projectCampaignPairDossier({ strategy: acceptedStrategy(), result: { status: "COMPLETED", pair } }));
+});
+
+test("local group editor rejects unknown groups, stale revisions, invalid landing and excessive creative before saving", async () => {
+  for (const edit of [
+    localEdit({ group_name: "Новое имя" }, { group_ref: "ad-group:unknown" }),
+    localEdit({ group_name: "Новое имя" }, { group_ref: undefined }),
+    localEdit({ group_name: "Новое имя" }, { expected_draft_revision_id: "stale" }),
+    localEdit({ landing_page: "https://unapproved.example/" }),
+    localEdit({ ad_title: Array.from({ length: 8 }, (_, index) => `Вариант ${index + 1}`).join("\n") }),
+    localEdit({ keyword: "legacy single phrase" }),
+    localEdit({ measurement_goal: "Silently changed outcome" }),
+  ]) {
+    const before = await localCurrentProducts();
+    const store = new MemoryProducts(before);
+    await assert.rejects(saveCurrentPipelineCampaignPairEdit({ store, ownerKey: "owner", runStatus: "COMPLETED", expectedStateRevision: 4, edit }));
+    assert.deepEqual(store.current, before);
+  }
+});
+
+test("unchanged local group fields remain a no-op and business semantics require Strategy regeneration", async () => {
+  const before = await localCurrentProducts();
+  const store = new MemoryProducts(before);
+  const result = await saveCurrentPipelineCampaignPairEdit({
+    store, ownerKey: "owner", runStatus: "COMPLETED", expectedStateRevision: 4,
+    edit: localEdit({ group_name: "Намерение 1", keywords: "иннопром стенд 1\nстенд выставка 1", negative_keywords: "" }),
+  });
+  assert.equal(result.status, "NO_OP");
+  assert.deepEqual(store.current, before);
+  await assert.rejects(saveCurrentPipelineCampaignPairEdit({
+    store, ownerKey: "owner", runStatus: "COMPLETED", expectedStateRevision: 4,
+    edit: { pair_id: "pair-r1", expected_hypothesis_revision_id: HYPOTHESIS_REVISION_ID, expected_draft_revision_id: DRAFT_REVISION_ID, semantic_changes: { qualified_result: "Продажа" } },
+  }), /regenerate the full local campaign design/u);
+  assert.deepEqual(store.current, before);
+});
+
 test("semantic Campaign Hypothesis edit rebinds lineage and deterministically recompiles one immutable pair revision", async () => {
   const store = new MemoryProducts(await currentProducts());
   const result = await saveCurrentPipelineCampaignPairEdit({
@@ -233,8 +324,9 @@ test("semantic Campaign Hypothesis edit rebinds lineage and deterministically re
   const dossier = await projectCampaignPairDossier({ strategy: acceptedStrategy(), result: { status: "COMPLETED", pair } });
   assert.ok(dossier);
   assert.equal(dossier.state, "Полная текущая пара");
-  assert.deepEqual(saved.publication_review.publish_fingerprints, [result.current_publish_fingerprint]);
-  assert.equal(saved.publication_review.external_write, "DENIED");
+  assert.equal(saved.publication_review, null);
+  assert.equal(saved.campaign_pairs[0].draft.publish_fingerprint, result.current_publish_fingerprint);
+  assert.equal(saved.authority.external_write, "DENIED");
 });
 
 test("technical Draft edit preserves Hypothesis identity and recompiles the exact Direct graph", async () => {
@@ -300,6 +392,35 @@ test("unchanged fields are a no-op, while protocol-only edits preserve the canon
   assert.equal(protocolEdit.current_publish_fingerprint, canonicalFingerprint);
   assert.equal(saved.campaign_pairs[0].draft.auction_protocol.measurement_goal, "Квалифицированная заявка");
   assert.match(saved.campaign_pairs[0].draft.draft_revision_id, /^campaign-draft:edit-fixture:r1:r/u);
+});
+
+test("seven responsive titles can be saved while an eighth leaves the current Campaign Draft untouched", async () => {
+  for (const count of [7, 8]) {
+    const before = await currentProducts();
+    const store = new MemoryProducts(before);
+    const titles = Array.from({ length: count }, (_, index) => `Заголовок ${index + 1}`);
+    const save = () => saveCurrentPipelineCampaignPairEdit({
+      store,
+      ownerKey: "owner",
+      runStatus: "COMPLETED",
+      expectedStateRevision: 4,
+      edit: {
+        pair_id: "pair-r1",
+        expected_hypothesis_revision_id: HYPOTHESIS_REVISION_ID,
+        expected_draft_revision_id: DRAFT_REVISION_ID,
+        technical_changes: { ad_title: titles.join("\n") },
+      },
+    });
+    if (count === 7) {
+      assert.equal((await save()).status, "SAVED");
+      const saved = await store.loadCurrent();
+      assert.deepEqual(saved.campaign_pairs[0].draft.publish_projection.direct.ad.ResponsiveAd.Titles, titles);
+      assert.equal(saved.state_revision, before.state_revision + 1);
+    } else {
+      await assert.rejects(save, /Edited list must contain 1-7 lines/u);
+      assert.deepEqual(await store.loadCurrent(), before);
+    }
+  }
 });
 
 test("multi-line creatives remain separate compiled values and missing compiler context fails closed", async () => {

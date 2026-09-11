@@ -16,7 +16,7 @@ const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$/u;
 const REASON_CODE = /^[A-Z][A-Z0-9_]{1,79}$/u;
 
 export const PIPELINE_ORCHESTRATOR_CONTRACT = "mox-adv.p0.pipeline-orchestrator";
-export const PIPELINE_ORCHESTRATOR_VERSION = "1.2.0";
+export const PIPELINE_ORCHESTRATOR_VERSION = "1.3.0";
 export const PIPELINE_RUN_SCHEMA = "p0-pipeline-run-v1";
 export const PIPELINE_INPUT_VERSIONS_SCHEMA = "p0-pipeline-input-versions-v2";
 export const PIPELINE_AUDIT_EVENT_SCHEMA = "p0-pipeline-audit-event-v1";
@@ -26,8 +26,11 @@ export const PIPELINE_STAGES = [
   { id: "EVIDENCE_COLLECTION", label: "Сбор сведений" },
   { id: "STRATEGY", label: "Стратегия" },
   { id: "CAMPAIGNS", label: "Кампании" },
-  { id: "PUBLICATION_REVIEW", label: "Проверка публикации" },
 ] as const;
+
+// Read compatibility only: new runs end with Campaigns. Historical records and
+// their immutable audit events retain their original stored representation.
+const LEGACY_PIPELINE_STAGES = [...PIPELINE_STAGES, { id: "PUBLICATION_REVIEW", label: "Проверка публикации" }];
 
 export type PipelineStageId = (typeof PIPELINE_STAGES)[number]["id"];
 export type PipelineStageStatus = "PENDING" | "ACTIVE" | "COMPLETED" | "RETURNED" | "STOPPED";
@@ -446,15 +449,15 @@ function stageId(value: unknown): value is PipelineStageId {
   return PIPELINE_STAGES.some((stage) => stage.id === value);
 }
 
-function assertTransition(value: unknown) {
+function assertTransition(value: unknown, legacy = false) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new PipelineOrchestratorError("PIPELINE_RUN_CORRUPT", "Pipeline transition is missing.");
   }
   const transition = value as PipelineTransition;
   if (!exactKeys(transition, ["kind", "source_stage", "target_stage", "reason_code", "reason", "recorded_at"])
     || !["START", "ADVANCE", "RETURN", "RETRY", "STOP", "COMPLETE"].includes(transition.kind)
-    || (transition.source_stage !== null && !stageId(transition.source_stage))
-    || (transition.target_stage !== null && !stageId(transition.target_stage))
+    || (transition.source_stage !== null && !stageId(transition.source_stage) && !(legacy && String(transition.source_stage) === "PUBLICATION_REVIEW"))
+    || (transition.target_stage !== null && !stageId(transition.target_stage) && !(legacy && String(transition.target_stage) === "PUBLICATION_REVIEW"))
     || !REASON_CODE.test(String(transition.reason_code))
     || !validText(transition.reason, 1_000)
     || !validText(transition.recorded_at)) {
@@ -491,24 +494,26 @@ export function assertPipelineRunState(value: unknown): asserts value is Pipelin
     throw new PipelineOrchestratorError("PIPELINE_RUN_CORRUPT", "Pipeline run contains fields outside the closed schema.");
   }
   assertPipelineInputVersions(run.input_versions);
-  assertTransition(run.last_transition);
+  const legacy = String(run.contract?.version) === "1.2.0";
+  const expectedStages = legacy ? LEGACY_PIPELINE_STAGES : PIPELINE_STAGES;
+  assertTransition(run.last_transition, legacy);
   if (run.schema_version !== PIPELINE_RUN_SCHEMA
     || run.contract?.name !== PIPELINE_ORCHESTRATOR_CONTRACT
-    || run.contract?.version !== PIPELINE_ORCHESTRATOR_VERSION
+    || (!legacy && run.contract?.version !== PIPELINE_ORCHESTRATOR_VERSION)
     || !IDENTIFIER.test(String(run.run_id))
     || !validText(run.owner_key)
     || !Number.isSafeInteger(run.version) || run.version < 0
     || !["ACTIVE", "STOPPED", "COMPLETED", "FAILED"].includes(run.status)
-    || !stageId(run.current_stage)
+    || (!stageId(run.current_stage) && !(legacy && run.status === "COMPLETED" && String(run.current_stage) === "PUBLICATION_REVIEW"))
     || !Number.isSafeInteger(run.stage_attempt) || run.stage_attempt < 1
     || !SHA256_DIGEST.test(String(run.input_versions_digest))
     || !validText(run.started_at) || !validText(run.updated_at)) {
     throw new PipelineOrchestratorError("PIPELINE_RUN_CORRUPT", "Pipeline run metadata is invalid.");
   }
-  if (!Array.isArray(run.stages) || run.stages.length !== PIPELINE_STAGES.length
+  if (!Array.isArray(run.stages) || run.stages.length !== expectedStages.length
     || run.stages.some((stage, index) => !exactKeys(stage, ["id", "label", "status"])
-      || stage.id !== PIPELINE_STAGES[index].id
-      || stage.label !== PIPELINE_STAGES[index].label
+      || stage.id !== expectedStages[index].id
+      || stage.label !== expectedStages[index].label
       || !["PENDING", "ACTIVE", "COMPLETED", "RETURNED", "STOPPED"].includes(stage.status))) {
     throw new PipelineOrchestratorError("PIPELINE_RUN_CORRUPT", "Pipeline stages do not match the canonical path.");
   }
@@ -517,7 +522,7 @@ export function assertPipelineRunState(value: unknown): asserts value is Pipelin
     || !["PENDING", "VERIFIED", "MATERIAL_DECISION_REQUIRED"].includes(run.goal_formation.status)) {
     throw new PipelineOrchestratorError("PIPELINE_RUN_CORRUPT", "Pipeline Goal formation state is invalid.");
   }
-  const currentStageIndex = PIPELINE_STAGES.findIndex((stage) => stage.id === run.current_stage);
+  const currentStageIndex = expectedStages.findIndex((stage) => stage.id === run.current_stage);
   if (currentStageIndex > 0 && run.goal_formation.status !== "VERIFIED") {
     throw new PipelineOrchestratorError("PIPELINE_RUN_CORRUPT", "A pipeline cannot pass Campaign Goal without a verified GoalRevision.");
   }
@@ -564,6 +569,16 @@ export async function verifyPipelineRunState(value: unknown): Promise<PipelineRu
     } catch (error) {
       throw new PipelineOrchestratorError("PIPELINE_RUN_CORRUPT", error instanceof Error ? error.message : "Pipeline Goal result is invalid.");
     }
+  }
+  if (String(value.contract.version) === "1.2.0") {
+    const current = clone(value);
+    current.contract.version = PIPELINE_ORCHESTRATOR_VERSION;
+    current.stages = current.stages.filter((stage) => stageId(stage.id));
+    if (String(current.current_stage) === "PUBLICATION_REVIEW") current.current_stage = "CAMPAIGNS";
+    if (String(current.last_transition.target_stage) === "PUBLICATION_REVIEW") current.last_transition.target_stage = null;
+    if (String(current.last_transition.source_stage) === "PUBLICATION_REVIEW") current.last_transition.source_stage = "CAMPAIGNS";
+    assertPipelineRunState(current);
+    return current;
   }
   return value;
 }
@@ -966,19 +981,16 @@ export class PipelineOrchestrator {
     next.version += 1;
     next.stage_attempt = 1;
     next.updated_at = timestamp;
-    // A successful base run hands complete Drafts to publication review; review is
-    // deliberately outside the run so it cannot acquire publication authority.
-    if (sourceIndex >= PIPELINE_STAGES.length - 2) {
-      const target = sourceIndex === PIPELINE_STAGES.length - 2
-        ? "PUBLICATION_REVIEW"
-        : null;
+    // Verified Campaigns are the final result; completing preparation grants no
+    // publication authority and schedules no further stage.
+    if (sourceIndex === PIPELINE_STAGES.length - 1) {
       next.status = "COMPLETED";
-      next.current_stage = "PUBLICATION_REVIEW";
+      next.current_stage = "CAMPAIGNS";
       next.stages = next.stages.map((stage) => ({ ...stage, status: "COMPLETED" }));
       next.last_transition = {
         kind: "COMPLETE",
         source_stage: current.current_stage,
-        target_stage: target,
+        target_stage: null,
         ...typedReason,
         recorded_at: timestamp,
       };
@@ -1133,9 +1145,9 @@ export class PipelineOrchestrator {
   }
 
   private async activeRun(runId: string, expectedVersion: number, sourceStage?: PipelineStageId) {
-    const current = await this.store.load(runId);
-    if (!current) throw new PipelineOrchestratorError("PIPELINE_RUN_NOT_FOUND", "Pipeline run was not found.");
-    await verifyPipelineRunState(current);
+    const stored = await this.store.load(runId);
+    if (!stored) throw new PipelineOrchestratorError("PIPELINE_RUN_NOT_FOUND", "Pipeline run was not found.");
+    const current = await verifyPipelineRunState(stored);
     if (current.status !== "ACTIVE" || !current.work_control.issue_actions) {
       throw new PipelineOrchestratorError("PIPELINE_RUN_NOT_ACTIVE", "Stopped or terminal pipeline runs cannot issue or accept work.");
     }

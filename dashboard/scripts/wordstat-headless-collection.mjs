@@ -10,6 +10,7 @@ import {
   createWordstatFileArtifactStore,
 } from "./wordstat-ui-collector.mjs";
 import { withWordstatProfileSession } from "./wordstat-profile-session.mjs";
+import { hasWordstatChallenge } from "./wordstat-auth-state.mjs";
 
 const CHROME_EXECUTABLE = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const WORDSTAT_ORIGIN = "https://wordstat.yandex.com";
@@ -112,7 +113,7 @@ async function closeTour(page) {
 }
 
 async function assertAuthenticated(page) {
-  const challenge = await page.getByText(/captcha|робот|подтвердите, что вы не робот|проверка безопасности/iu).count();
+  const challenge = await hasWordstatChallenge(page);
   if (challenge) throw Object.assign(new Error("Wordstat challenge requires manual resolution."), { code: "CAPTCHA_OR_CHALLENGE" });
   const login = page.getByText(/^Войти$/u);
   if (await login.count() && await login.isVisible().catch(() => false)) {

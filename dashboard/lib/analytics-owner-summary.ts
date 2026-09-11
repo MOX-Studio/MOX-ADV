@@ -257,7 +257,7 @@ function wordstatFinding(snapshot: AnalyticsEvidenceBundle) {
   const frequency = record(record(snapshot.market_evidence).frequency);
   const count = record(frequency.observed_unique_count).value;
   if (frequency.status === "AVAILABLE" || frequency.status === "PARTIAL") {
-    return `Наблюдаемая нижняя граница спроса — ${countLabel(count, "уникальная строка", "уникальные строки", "уникальных строк")} в выбранной области; недоступные формулировки не считаются нулевыми.`;
+    return `Сумма частот исследованных фраз — ${countLabel(count, "запрос", "запроса", "запросов")} в выбранной области. Фразы могут пересекаться; число уникальных покупателей не установлено.`;
   }
   return "Поисковый спрос в выбранной области не подтверждён и не подменён нулевым значением.";
 }

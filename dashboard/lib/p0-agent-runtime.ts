@@ -107,6 +107,7 @@ export type P0ValidatedObservation = {
 };
 
 export type P0ModelTurnRequest = {
+  execution?: { time_limit_ms: null; completion: "SUFFICIENT_EVIDENCE_OR_SOURCES_EXHAUSTED" };
   contract: {
     name: typeof P0_AGENT_RUNTIME_CONTRACT;
     version: typeof P0_AGENT_RUNTIME_VERSION;
@@ -142,7 +143,7 @@ export type P0ModelTurnResponse = {
 
 export interface P0ModelAdapter {
   readonly adapter_id: string;
-  turn(request: P0ModelTurnRequest): Promise<P0ModelTurnResponse>;
+  turn(request: P0ModelTurnRequest, options?: { signal?: AbortSignal }): Promise<P0ModelTurnResponse>;
 }
 
 export type P0AgentApplicationEvaluation = {

@@ -19,10 +19,11 @@ import {
   type DirectFieldApplicabilityProof,
 } from "./direct-projection-compiler.ts";
 import type { DirectProjection } from "./direct-write.ts";
+import { DIRECT_RESPONSIVE_TITLE_LIMIT } from "./direct-limits.ts";
+import { isLocalCampaignGenerationProjection, type LocalCampaignGenerationProjection } from "./campaign-generation-profile.ts";
 import { pipelineDigest, type PipelineRunStatus } from "./pipeline-orchestrator.ts";
 import {
   PIPELINE_CAMPAIGN_PAIR_EDIT_CONTEXT_SCHEMA,
-  PIPELINE_PUBLICATION_REVIEW_SCHEMA,
   type PipelineCurrentProducts,
   type PipelineCurrentProductStore,
   type PipelineJsonRecord,
@@ -53,13 +54,15 @@ function campaignPairEditContext(pair: PipelineJsonRecord) {
     throw new Error("Current Campaign pair has no exact compiler context; the edit was not saved.");
   }
   const context = pair.edit_context as PipelineJsonRecord;
-  const capabilitySnapshot = record(context.capability_snapshot) as DirectCapabilitySnapshot;
+  const localGeneration = isLocalCampaignGenerationProjection(record(pair.draft).publish_projection);
+  const capabilitySnapshot = context.capability_snapshot === null && localGeneration
+    ? null : record(context.capability_snapshot) as DirectCapabilitySnapshot;
   const allowedLandingHosts = list(context.allowed_landing_hosts).map((item) => String(item).trim().toLowerCase()).filter(Boolean);
   const applicabilityProofs = list(context.applicability_proofs).map((item) => record(item) as DirectFieldApplicabilityProof);
   if (context.schema_version !== PIPELINE_CAMPAIGN_PAIR_EDIT_CONTEXT_SCHEMA
-    || !String(capabilitySnapshot.snapshot_id ?? "").trim()
+    || (!localGeneration && !String(capabilitySnapshot?.snapshot_id ?? "").trim())
     || !allowedLandingHosts.length
-    || !applicabilityProofs.length) {
+    || (!localGeneration && !applicabilityProofs.length)) {
     throw new Error("Current Campaign pair has no exact compiler context; the edit was not saved.");
   }
   return { capabilitySnapshot, allowedLandingHosts, applicabilityProofs };
@@ -196,8 +199,56 @@ function providerTextValues(current: unknown, values: string[]) {
   return values;
 }
 
-function applyTechnicalChanges(draft: PipelineJsonRecord, changes: Record<string, unknown>) {
+function applyLocalTechnicalChanges(projection: LocalCampaignGenerationProjection, changes: Record<string, unknown>, groupRef?: string) {
+  const supported = ["campaign_name", "group_name", "keywords", "negative_keywords", "ad_title", "ad_text", "landing_page"];
+  if (Object.keys(changes).some((field) => !supported.includes(field))) throw new Error("This local profile accepts only explicit campaign and group content edits.");
+  const selected = groupRef ? projection.direct.ad_groups.find((group) => group.local_ref === groupRef) : undefined;
+  if ((groupRef && !selected) || (!selected && Object.keys(changes).some((field) => field !== "campaign_name"))) {
+    throw new Error("Select one exact current group before editing its content; no sibling merge was attempted.");
+  }
+  if (Object.hasOwn(changes, "campaign_name")) projection.direct.campaign.Name = text(changes.campaign_name, 255);
+  if (!selected) return projection;
+  const ad = projection.direct.ads.find((item) => item.ad_group_ref === selected.local_ref);
+  if (!ad || projection.direct.ads.filter((item) => item.ad_group_ref === selected.local_ref).length !== 1) throw new Error("The selected group has no exact complete responsive ad.");
+  if (Object.hasOwn(changes, "group_name")) selected.provider_fields.Name = text(changes.group_name, 255);
+  if (Object.hasOwn(changes, "negative_keywords")) {
+    const raw = String(changes.negative_keywords ?? "").trim();
+    const values = raw ? multilineValues(raw.replaceAll(",", "\n"), 200, 4_096) : [];
+    selected.provider_fields.NegativeKeywords = { Items: values };
+  }
+  if (Object.hasOwn(changes, "keywords")) {
+    const values = multilineValues(changes.keywords, 200, 4_096);
+    const old = projection.direct.keywords.filter((item) => item.ad_group_ref === selected.local_ref && item.kind === "EXPLICIT_KEYWORD");
+    const refs = new Set(projection.direct.keywords.map((item) => item.local_ref));
+    let sequence = 1;
+    const next = values.map((keyword) => {
+      const existing = old.find((item) => String(item.provider_fields.Keyword) === keyword);
+      if (existing) return existing;
+      let localRef = `${selected.local_ref}:keyword:edit:${sequence++}`;
+      while (refs.has(localRef)) localRef = `${selected.local_ref}:keyword:edit:${sequence++}`;
+      refs.add(localRef);
+      return { local_ref: localRef, ad_group_ref: selected.local_ref, kind: "EXPLICIT_KEYWORD" as const, provider_fields: { Keyword: keyword } };
+    });
+    const first = projection.direct.keywords.findIndex((item) => item.ad_group_ref === selected.local_ref && item.kind === "EXPLICIT_KEYWORD");
+    const others = projection.direct.keywords.filter((item) => item.ad_group_ref !== selected.local_ref || item.kind !== "EXPLICIT_KEYWORD");
+    others.splice(first < 0 ? others.length : first, 0, ...next);
+    projection.direct.keywords = others;
+  }
+  const responsive = record(ad.provider_fields.ResponsiveAd);
+  if (Object.hasOwn(changes, "ad_title")) responsive.Titles = multilineValues(changes.ad_title, DIRECT_RESPONSIVE_TITLE_LIMIT, 56);
+  if (Object.hasOwn(changes, "ad_text")) responsive.Texts = multilineValues(changes.ad_text, 3, 81);
+  if (Object.hasOwn(changes, "landing_page")) responsive.Href = text(changes.landing_page, 4_096);
+  ad.provider_fields.ResponsiveAd = responsive;
+  return projection;
+}
+
+function applyTechnicalChanges(draft: PipelineJsonRecord, changes: Record<string, unknown>, groupRef?: string) {
   const projection = clone(record(draft.publish_projection));
+  if (isLocalCampaignGenerationProjection(projection)) return {
+    projection: applyLocalTechnicalChanges(projection, changes, groupRef) as unknown as PipelineJsonRecord,
+    protocol: clone(record(draft.auction_protocol ?? {})),
+  };
+  if (groupRef || Object.hasOwn(changes, "keywords") || Object.hasOwn(changes, "landing_page")) throw new Error("Group-scoped edits require the local generation profile.");
   const scalarPointers: Record<string, [string, number]> = {
     campaign_name: ["/direct/campaign/Name", 255],
     group_name: ["/direct/ad_group/Name", 255],
@@ -208,7 +259,7 @@ function applyTechnicalChanges(draft: PipelineJsonRecord, changes: Record<string
     setProjectionValue(projection, pointer, text(changes[field], maximum));
   }
   for (const [field, pointer, maximumItems, maximumLength] of [
-    ["ad_title", "/direct/ad/ResponsiveAd/Titles", 15, 56],
+    ["ad_title", "/direct/ad/ResponsiveAd/Titles", DIRECT_RESPONSIVE_TITLE_LIMIT, 56],
     ["ad_text", "/direct/ad/ResponsiveAd/Texts", 3, 81],
   ] as const) {
     if (!Object.hasOwn(changes, field)) continue;
@@ -275,6 +326,14 @@ function bindEditedProjection(input: {
   lineage.draft_revision_id = input.draftRevisionId;
   projection.lineage = lineage;
   if (input.rebuildClaims) {
+    if (isLocalCampaignGenerationProjection(projection)) {
+      projection.brand_claims_contract = {
+        ...projection.brand_claims_contract,
+        status: "OWNER_EDIT_REQUIRES_FACT_CHECK",
+        owner_edit_revision: input.draftRevisionId,
+      };
+      return projection;
+    }
     const responsive = record(record(record(projection.direct).ad).ResponsiveAd);
     const copy = (value: unknown, maximum: number) => list(value).map((item) => text(
       item && typeof item === "object" && !Array.isArray(item) ? record(item).Text : item,
@@ -311,9 +370,11 @@ export async function saveCurrentPipelineCampaignPairEdit(input: {
   }
   const semantic = clone(input.edit.semantic_changes ?? {});
   const technical = clone(input.edit.technical_changes ?? {});
+  const localGeneration = isLocalCampaignGenerationProjection(identity.draft.publish_projection);
+  if (localGeneration && plan.classification === "SEMANTIC") throw new Error("Edit the current Campaign Strategy to change business semantics, then regenerate the full local campaign design.");
   const rebuilt = plan.classification === "SEMANTIC"
     ? applySemanticChanges(identity.hypothesis, identity.draft, semantic, technical)
-    : { hypothesis: clone(identity.hypothesis), ...applyTechnicalChanges(identity.draft, technical) };
+    : { hypothesis: clone(identity.hypothesis), ...applyTechnicalChanges(identity.draft, technical, input.edit.group_ref) };
   const material = {
     hypothesis: rebuilt.hypothesis,
     publish_projection: rebuilt.projection,
@@ -343,8 +404,10 @@ export async function saveCurrentPipelineCampaignPairEdit(input: {
   const strategyRevisionId = text(sourcePair.strategy_revision_id ?? hypothesis.strategy_revision_id, 255);
   const previousProjection = record(identity.draft.publish_projection);
   const creativePointers = ["/direct/ad/ResponsiveAd/Titles", "/direct/ad/ResponsiveAd/Texts"];
-  const creativeChanged = creativePointers.some((pointer) => JSON.stringify(currentProjectionValue(previousProjection, pointer))
-    !== JSON.stringify(currentProjectionValue(rebuilt.projection, pointer)));
+  const creativeChanged = localGeneration
+    ? JSON.stringify(record(previousProjection.direct).ads) !== JSON.stringify(record(rebuilt.projection.direct).ads)
+    : creativePointers.some((pointer) => JSON.stringify(currentProjectionValue(previousProjection, pointer))
+      !== JSON.stringify(currentProjectionValue(rebuilt.projection, pointer)));
   const projection = bindEditedProjection({
     projection: rebuilt.projection,
     strategyRevisionId,
@@ -384,24 +447,13 @@ export async function saveCurrentPipelineCampaignPairEdit(input: {
     publish_fingerprint: publishFingerprint,
   };
   const pairs = current.campaign_pairs.map((value, pairIndex) => pairIndex === index ? pair : clone(value));
-  const fingerprints = pairs.map((value, pairIndex) => pairIdentity(record(value), pairIndex).fingerprint).filter(Boolean);
   const next: PipelineCurrentProducts = {
     ...clone(current),
     state_revision: current.state_revision + 1,
     current_stage: "CAMPAIGNS",
     updated_at: editedAt,
     campaign_pairs: pairs,
-    publication_review: {
-      schema_version: PIPELINE_PUBLICATION_REVIEW_SCHEMA,
-      status: "REVIEW_ONLY",
-      run_id: current.run_id,
-      pair_count: pairs.length,
-      publish_fingerprints: fingerprints,
-      external_write: "DENIED",
-      publication: "NOT_AUTHORIZED",
-      impressions: 0,
-      spend_micros: 0,
-    },
+    publication_review: null,
   };
   if (!await input.store.compareAndSwap(input.ownerKey, current.state_revision, next)) {
     throw new Error("Campaign working set changed while the revision was prepared.");
